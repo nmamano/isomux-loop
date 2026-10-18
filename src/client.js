@@ -119,7 +119,7 @@ function renderStatus() {
   if (!s) return '<div class="empty">Loading.</div>';
   let h =
     '<div class="banner ' + (s.paused ? "paused" : "run") + '"><div><b>' +
-    (s.paused ? "Dispatch paused" : "Dispatch running") + "</b>" +
+    (s.paused ? "Paused: no dispatch, no tick" : "Running: dispatch and tick") + "</b>" +
     (s.paused && s.pausedSince ? '<div class="small">since ' + clock(s.pausedSince) + "</div>" : "") +
     '</div><button class="btn ghost" data-pause="' + (s.paused ? "resume" : "pause") + '">' +
     (s.paused ? "Resume" : "Pause") + "</button></div>";

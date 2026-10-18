@@ -35,8 +35,8 @@ POST /api/applied                 {"results":[{"taskId","decidedAt","ok":true|fa
 
 Loop (for Isomux PM):
 GET  /api/status                  pause state, last dispatch and tick, ready queue, holders, merging, parked
-POST /api/pause | /api/resume     pause stops dispatch only; the tick keeps running
-POST /api/dispatch | /api/tick    run one now (dispatch refuses while paused)
+POST /api/pause | /api/resume     pause stops dispatch and the tick; the first tick after a resume catches what stopped meanwhile
+POST /api/dispatch | /api/tick    run one now (both refuse while paused)
 
 Copy sign-off (for Isomux PM):
 POST /api/copy                    {"taskId","title","old","new"}; old is "" for new copy. Answers {"url"}: the page for an ask.
@@ -77,6 +77,7 @@ async function runDispatch(): Promise<Run<DispatchResult> | null> {
 }
 
 async function runTick(): Promise<Run<TickResult> | null> {
+  if (pause.paused) return null;
   const run = await exclusive(() => tick(office));
   if (run) lastTick = run;
   return run;
@@ -164,6 +165,7 @@ async function route(req: Request): Promise<Response> {
     return run ? json(run) : json({ error: "busy" }, 409);
   }
   if (m === "POST" && path === "/api/tick") {
+    if (pause.paused) return json({ error: "paused" }, 409);
     const run = await runTick();
     return run ? json(run) : json({ error: "busy" }, 409);
   }
@@ -225,4 +227,4 @@ Bun.serve({
     }
   },
 });
-console.log(`loop app listening on ${port}${pause.paused ? " (dispatch paused)" : ""}`);
+console.log(`loop app listening on ${port}${pause.paused ? " (paused)" : ""}`);

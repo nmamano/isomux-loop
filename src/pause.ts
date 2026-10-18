@@ -1,5 +1,6 @@
-// Pause stops dispatch only; the tick keeps running. Kept on disk so an app
-// restart does not resume a loop Isomux PM paused.
+// Pause stops dispatch and the tick: workers on a batch outside the loop must
+// not get loop messages. Kept on disk so an app restart does not resume a loop
+// Isomux PM paused.
 
 import { join } from "node:path";
 import { readJson, writeJson } from "./json-file";
