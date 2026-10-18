@@ -1,0 +1,110 @@
+import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Store, ValidationError, itemState } from "../src/store";
+
+function setup() {
+  let t = 1_000_000;
+  const clock = { now: () => t, advance: (ms: number) => (t += ms) };
+  const dir = mkdtempSync(join(tmpdir(), "loop-store-"));
+  return { store: new Store(dir, clock.now), clock, dir };
+}
+
+const proposal = (taskId: string, over: Record<string, unknown> = {}) => ({
+  taskId,
+  task: { title: `Task ${taskId}`, description: "d", priority: "P2", createdBy: "Isomux PM", createdAt: 5 },
+  proposal: { priority: "P1", class: "auto", outcome: "keep", why: "needed for the pilot", ...over },
+});
+const decision = { priority: "P1", class: "auto", outcome: "keep", note: "" };
+
+describe("store", () => {
+  test("proposal, decision and apply move an item through its states", () => {
+    const { store } = setup();
+    store.propose([proposal("a")]);
+    expect(itemState(store.get("a")!)).toBe("open");
+    store.decide("a", decision);
+    expect(store.pending().map((i) => i.taskId)).toEqual(["a"]);
+    const decidedAt = store.get("a")!.decision!.decidedAt;
+    expect(store.markApplied([{ taskId: "a", decidedAt, ok: true }])).toEqual({ recorded: ["a"], stale: [] });
+    expect(itemState(store.get("a")!)).toBe("applied");
+    expect(store.pending()).toEqual([]);
+  });
+
+  test("a decision changed after the curator read it stays pending", () => {
+    const { store, clock } = setup();
+    store.propose([proposal("a")]);
+    store.decide("a", decision);
+    const readAt = store.get("a")!.decision!.decidedAt;
+    clock.advance(1000);
+    store.decide("a", { ...decision, outcome: "obsolete" });
+    expect(store.markApplied([{ taskId: "a", decidedAt: readAt, ok: true }]).stale).toEqual(["a"]);
+    expect(itemState(store.get("a")!)).toBe("decided");
+  });
+
+  test("a new proposal never overwrites a decision that is not applied", () => {
+    const { store } = setup();
+    store.propose([proposal("a")]);
+    store.decide("a", decision);
+    expect(store.propose([proposal("a", { priority: "P3" })]).skipped).toEqual(["a"]);
+    expect(store.get("a")!.proposal.priority).toBe("P1");
+  });
+
+  test("a new proposal reopens an applied item", () => {
+    const { store } = setup();
+    store.propose([proposal("a")]);
+    store.decide("a", decision);
+    store.markApplied([{ taskId: "a", decidedAt: store.get("a")!.decision!.decidedAt }]);
+    expect(store.propose([proposal("a", { priority: "P3" })]).updated).toEqual(["a"]);
+    expect(itemState(store.get("a")!)).toBe("open");
+  });
+
+  test("a failed apply stays pending and shows as failed", () => {
+    const { store } = setup();
+    store.propose([proposal("a")]);
+    store.decide("a", decision);
+    const decidedAt = store.get("a")!.decision!.decidedAt;
+    store.markApplied([{ taskId: "a", decidedAt, ok: false, error: "409 stale version" }]);
+    expect(itemState(store.get("a")!)).toBe("failed");
+    expect(store.pending().map((i) => i.taskId)).toEqual(["a"]);
+  });
+
+  test("a rescope proposal needs a new title or scope", () => {
+    const { store } = setup();
+    expect(() => store.propose([proposal("a", { outcome: "rescope" })])).toThrow(ValidationError);
+    expect(store.propose([proposal("a", { outcome: "rescope", scope: "smaller" })]).created).toEqual(["a"]);
+  });
+
+  test("one notification per burst, after the quiet time", () => {
+    const { store, clock } = setup();
+    store.propose([proposal("a"), proposal("b")]);
+    store.decide("a", decision);
+    expect(store.shouldNotify(180_000)).toBe(false);
+    clock.advance(180_000);
+    expect(store.shouldNotify(180_000)).toBe(true);
+    store.markNotified();
+    expect(store.shouldNotify(180_000)).toBe(false);
+    clock.advance(1000);
+    store.decide("b", decision);
+    clock.advance(180_000);
+    expect(store.shouldNotify(180_000)).toBe(true);
+  });
+
+  test("state survives a reload", () => {
+    const { store, dir } = setup();
+    store.propose([proposal("a")]);
+    store.decide("a", decision);
+    const again = new Store(dir);
+    expect(itemState(again.get("a")!)).toBe("decided");
+  });
+
+  test("open items list by proposed priority, then task age", () => {
+    const { store } = setup();
+    store.propose([
+      { ...proposal("old-p2", { priority: "P2" }), task: { ...proposal("x").task, createdAt: 1 } },
+      { ...proposal("new-p1", { priority: "P1" }), task: { ...proposal("x").task, createdAt: 9 } },
+      { ...proposal("old-p1", { priority: "P1" }), task: { ...proposal("x").task, createdAt: 2 } },
+    ]);
+    expect(store.list("open").map((i) => i.taskId)).toEqual(["old-p1", "new-p1", "old-p2"]);
+  });
+});
