@@ -73,7 +73,7 @@ describe("dispatch", () => {
     const c = task({ title: "[auto | ready] C", priority: "P3" });
     const agents = [agent("Isomux Worker 1"), agent("Isomux Worker 2"), agent("Isomux Reviewer 1")];
     const { office, messages, patches } = stubOffice([a, b, c], agents);
-    const res = await dispatch(office);
+    const res = await dispatch(office, 2);
     expect(res.assigned).toEqual([
       { worker: "Isomux Worker 1", taskId: a.id, messaged: true },
       { worker: "Isomux Worker 2", taskId: b.id, messaged: true },
@@ -91,7 +91,7 @@ describe("dispatch", () => {
     const held = task({ title: "[auto | ready] held", status: "in_progress", assignee: "Isomux Worker 2" });
     const agents = [agent("Isomux Worker 2"), agent("Isomux Worker 3")];
     const { office, messages } = stubOffice([a, held], agents);
-    expect((await dispatch(office)).assigned).toEqual([]);
+    expect((await dispatch(office, 2)).assigned).toEqual([]);
     expect(messages).toEqual([]);
   });
 
@@ -99,7 +99,7 @@ describe("dispatch", () => {
     const a = task({ title: "[auto | ready] A", priority: "P1" });
     const b = task({ title: "[auto | ready] B", priority: "P2" });
     const { office, messages } = stubOffice([a, b], [agent("Isomux Worker 1")], [a.id]);
-    const res = await dispatch(office);
+    const res = await dispatch(office, 2);
     expect(res.conflicts).toEqual([a.id]);
     expect(res.assigned.map((x) => x.taskId)).toEqual([b.id]);
     expect(messages.map((m) => m.text.split("\n")[0])).toEqual([`/isomux-loop-worker ${b.id}`]);
@@ -108,13 +108,34 @@ describe("dispatch", () => {
   test("a worker missing from the agent list gets nothing", async () => {
     const a = task({ title: "[auto | ready] A" });
     const { office, messages } = stubOffice([a], [agent("Isomux Worker 7"), agent("Some Worker 1")]);
-    expect((await dispatch(office)).assigned).toEqual([]);
+    expect((await dispatch(office, 2)).assigned).toEqual([]);
     expect(messages).toEqual([]);
   });
 
   test("a merging task (in progress, no assignee) does not hold its worker", () => {
     const merging = task({ title: "[auto | merging] M", status: "in_progress" });
-    expect(freeWorkers([agent("Isomux Worker 1")], [merging]).map((a) => a.name)).toEqual(["Isomux Worker 1"]);
+    expect(freeWorkers([agent("Isomux Worker 1")], [merging], 2).map((a) => a.name)).toEqual(["Isomux Worker 1"]);
+  });
+});
+
+describe("worker count", () => {
+  test("only Workers 1..n take new tasks", async () => {
+    const a = task({ title: "[auto | ready] A", priority: "P1" });
+    const b = task({ title: "[auto | ready] B", priority: "P2" });
+    const { office } = stubOffice([a, b], [agent("Isomux Worker 1"), agent("Isomux Worker 2")]);
+    expect((await dispatch(office, 1)).assigned.map((x) => x.worker)).toEqual(["Isomux Worker 1"]);
+    expect(b.assignee).toBeUndefined();
+  });
+
+  test("after lowering n, a worker above it keeps its tick while it holds a loop task; batch work gets none", async () => {
+    const loopTask = task({ title: "[auto | ready] loop", status: "in_progress", assignee: "Isomux Worker 2" });
+    const batchTask = task({ title: "Batch task", status: "in_progress", assignee: "Isomux Worker 3" });
+    const inLoopBatch = task({ title: "Batch task in the loop range", status: "in_progress", assignee: "Isomux Worker 1" });
+    const agents = [agent("Isomux Worker 1"), agent("Isomux Worker 2"), agent("Isomux Worker 3")];
+    const { office, messages } = stubOffice([loopTask, batchTask, inLoopBatch], agents);
+    const res = await tick(office, 1);
+    expect(res.nudged.map((x) => x.worker)).toEqual(["Isomux Worker 1", "Isomux Worker 2"]);
+    expect(messages.some((m) => m.to === "id-Isomux Worker 3")).toBe(false);
   });
 });
 
@@ -125,7 +146,7 @@ describe("tick", () => {
     const m = task({ title: "[auto | merging] three", status: "in_progress" });
     const agents = [agent("Isomux Worker 1"), agent("Isomux Worker 2", true), agent("Isomux Worker 3"), agent("Isomux Main")];
     const { office, messages } = stubOffice([t1, t2, m], agents);
-    const res = await tick(office);
+    const res = await tick(office, 2);
     expect(res.nudged).toEqual([{ worker: "Isomux Worker 1", taskId: t1.id }]);
     expect(res.main).toBe(1);
     expect(messages.map((x) => x.to)).toEqual(["id-Isomux Worker 1", "id-Isomux Main"]);
@@ -137,7 +158,7 @@ describe("tick", () => {
     const m = task({ title: "[auto | merging] three", status: "in_progress" });
     for (const agents of [[agent("Isomux Main", true)], []]) {
       const { office, messages } = stubOffice([m], agents);
-      expect((await tick(office)).main).toBeNull();
+      expect((await tick(office, 2)).main).toBeNull();
       expect(messages).toEqual([]);
     }
   });
@@ -149,7 +170,7 @@ describe("status", () => {
     const h = task({ title: "[auto | ready] h", status: "in_progress", assignee: "Isomux Worker 1" });
     const m = task({ title: "[auto | merging] m", status: "in_progress" });
     const p = task({ title: "[decide | nil] p" });
-    const s = status([agent("Isomux Worker 1"), agent("Isomux Worker 2")], [r, h, m, p]);
+    const s = status([agent("Isomux Worker 1"), agent("Isomux Worker 2")], [r, h, m, p], 2);
     expect(s.ready.map((t) => t.id)).toEqual([r.id]);
     expect(s.holding.map((x) => [x.worker, x.task.id])).toEqual([["Isomux Worker 1", h.id]]);
     expect(s.freeWorkers).toEqual(["Isomux Worker 2"]);

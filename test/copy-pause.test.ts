@@ -23,6 +23,20 @@ describe("copy", () => {
   });
 });
 
+describe("worker count setting", () => {
+  test("defaults to 2, accepts 1 to 6, keeps the pause state, and survives a reload", () => {
+    const dir = tempDir();
+    const p = new PauseFlag(dir);
+    expect(p.workers).toBe(2);
+    p.set(true, 7);
+    p.setWorkers(4);
+    const again = new PauseFlag(dir);
+    expect([again.workers, again.paused, again.since]).toEqual([4, true, 7]);
+    for (const bad of [0, 7, 2.5, "x", null]) expect(() => again.setWorkers(bad)).toThrow(ValidationError);
+    expect(new PauseFlag(dir).workers).toBe(4);
+  });
+});
+
 describe("pause", () => {
   test("survives a reload and records since when", () => {
     const dir = tempDir();

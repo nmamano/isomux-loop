@@ -36,6 +36,8 @@ POST /api/applied                 {"results":[{"taskId","decidedAt","ok":true|fa
 Loop (for Isomux PM):
 GET  /api/status                  pause state, last dispatch and tick, ready queue, holders, merging, parked
 POST /api/pause | /api/resume     pause stops dispatch and the tick; the first tick after a resume catches what stopped meanwhile
+POST /api/settings                {"workers": 1-6}: the loop dispatches to Workers 1..N (also on the status page).
+                                  Lowering N takes no task away; a worker above N keeps its tick while it holds a loop task.
 POST /api/dispatch | /api/tick    run one now (both refuse while paused)
 
 Copy sign-off (for Isomux PM):
@@ -67,7 +69,7 @@ async function exclusive<T>(fn: () => Promise<T>): Promise<Run<T> | null> {
 
 async function runDispatch(): Promise<Run<DispatchResult> | null> {
   if (pause.paused) return null;
-  const run = await exclusive(() => dispatch(office));
+  const run = await exclusive(() => dispatch(office, pause.workers));
   if (run) {
     lastDispatch = run;
     statusCache = null;
@@ -78,7 +80,7 @@ async function runDispatch(): Promise<Run<DispatchResult> | null> {
 
 async function runTick(): Promise<Run<TickResult> | null> {
   if (pause.paused) return null;
-  const run = await exclusive(() => tick(office));
+  const run = await exclusive(() => tick(office, pause.workers));
   if (run) lastTick = run;
   return run;
 }
@@ -111,13 +113,13 @@ async function loopStatus(): Promise<Record<string, unknown>> {
   try {
     if (!statusCache || Date.now() - statusCache.at > STATUS_CACHE_MS) {
       const [agents, tasks] = await Promise.all([office.agents(), office.tasks()]);
-      statusCache = { at: Date.now(), value: status(agents, tasks) };
+      statusCache = { at: Date.now(), value: status(agents, tasks, pause.workers) };
     }
     board = statusCache.value;
   } catch (err) {
     error = String(err instanceof Error ? err.message : err);
   }
-  return { paused: pause.paused, pausedSince: pause.since, lastDispatch, lastTick, board, error };
+  return { paused: pause.paused, pausedSince: pause.since, workers: pause.workers, lastDispatch, lastTick, board, error };
 }
 
 // --- HTTP --------------------------------------------------------------------
@@ -158,6 +160,12 @@ async function route(req: Request): Promise<Response> {
   if (m === "POST" && path === "/api/resume") {
     pause.set(false);
     return json({ paused: false });
+  }
+  if (m === "POST" && path === "/api/settings") {
+    const b = await body(req);
+    pause.setWorkers(b.workers);
+    statusCache = null;
+    return json({ workers: pause.workers });
   }
   if (m === "POST" && path === "/api/dispatch") {
     if (pause.paused) return json({ error: "paused" }, 409);

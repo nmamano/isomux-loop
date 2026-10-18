@@ -123,6 +123,9 @@ function renderStatus() {
     (s.paused && s.pausedSince ? '<div class="small">since ' + clock(s.pausedSince) + "</div>" : "") +
     '</div><button class="btn ghost" data-pause="' + (s.paused ? "resume" : "pause") + '">' +
     (s.paused ? "Resume" : "Pause") + "</button></div>";
+  h += '<div class="row"><span class="label">Worker/reviewer pairs</span>' +
+    [1, 2, 3, 4, 5, 6].map((n) => '<button class="chip' + (n === s.workers ? " on" : "") + '" data-workers="' + n + '">' + n + "</button>").join("") +
+    '<div class="small">The loop dispatches to Workers 1 to ' + s.workers + ". Lowering it takes no task away.</div></div>";
   const d = s.lastDispatch;
   const t = s.lastTick;
   h += '<div class="small">Last dispatch: ' + (d ? clock(d.at) : "not yet");
@@ -297,6 +300,15 @@ document.addEventListener("click", async (e) => {
   if (d.later) {
     later.add(d.later);
     return render();
+  }
+  if (d.workers) {
+    try {
+      t.disabled = true;
+      await api("/api/settings", { method: "POST", body: { workers: Number(d.workers) } });
+    } finally {
+      await load();
+    }
+    return;
   }
   if (d.pause) {
     try {

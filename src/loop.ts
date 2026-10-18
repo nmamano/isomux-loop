@@ -38,8 +38,9 @@ export function readyQueue(tasks: Task[]): Task[] {
 
 export type Holding = { worker: Agent; task: Task };
 
-function workers(agents: Agent[]): Agent[] {
-  return WORKER_NAMES.map((name) => agents.find((a) => a.name === name)).filter(
+// Workers 1..n that exist; all of them when n is omitted.
+function workers(agents: Agent[], n = WORKER_NAMES.length): Agent[] {
+  return WORKER_NAMES.slice(0, n).map((name) => agents.find((a) => a.name === name)).filter(
     (a): a is Agent => a !== undefined,
   );
 }
@@ -54,8 +55,9 @@ export function holdings(agents: Agent[], tasks: Task[]): Holding[] {
   return workers(agents).flatMap((w) => heldBy(tasks, w.name).map((task) => ({ worker: w, task })));
 }
 
-export function freeWorkers(agents: Agent[], tasks: Task[]): Agent[] {
-  return workers(agents).filter((w) => heldBy(tasks, w.name).length === 0);
+// Only Workers 1..n take new tasks.
+export function freeWorkers(agents: Agent[], tasks: Task[], n: number): Agent[] {
+  return workers(agents, n).filter((w) => heldBy(tasks, w.name).length === 0);
 }
 
 export function withState(tasks: Task[], state: string): Task[] {
@@ -68,11 +70,11 @@ export type DispatchResult = {
   errors: string[];
 };
 
-export async function dispatch(office: Office): Promise<DispatchResult> {
+export async function dispatch(office: Office, n: number): Promise<DispatchResult> {
   const out: DispatchResult = { assigned: [], conflicts: [], errors: [] };
   const [tasks, agents] = await Promise.all([office.tasks(), office.agents()]);
   const queue = readyQueue(tasks);
-  for (const worker of freeWorkers(agents, tasks)) {
+  for (const worker of freeWorkers(agents, tasks, n)) {
     while (queue.length > 0) {
       const task = queue.shift()!;
       const res = await office.patchTask(task.id, {
@@ -104,11 +106,15 @@ export function workerTickText(taskId: string): string {
   );
 }
 
-export async function tick(office: Office): Promise<TickResult> {
+// Workers 1..n get the nudge for any task they hold. A worker above n (after
+// Nil lowered n) keeps it only while it holds a loop-tagged task, so it can
+// finish; batch work outside the loop is untagged and gets no nudge.
+export async function tick(office: Office, n: number): Promise<TickResult> {
   const out: TickResult = { nudged: [], main: null, errors: [] };
   const [tasks, agents] = await Promise.all([office.tasks(), office.agents()]);
   for (const w of workers(agents)) {
-    const held = heldBy(tasks, w.name);
+    const inLoop = WORKER_NAMES.indexOf(w.name) < n;
+    const held = heldBy(tasks, w.name).filter((t) => inLoop || DISPATCH_CLASSES.includes(parseTag(t.title)?.class ?? ""));
     if (held.length === 0 || w.inFlightTurn) continue;
     if (await office.message(workerTickText(held[0].id), w.id))
       out.nudged.push({ worker: w.name, taskId: held[0].id });
@@ -131,11 +137,11 @@ export type Status = {
   parked: Task[];
 };
 
-export function status(agents: Agent[], tasks: Task[]): Status {
+export function status(agents: Agent[], tasks: Task[], n: number): Status {
   return {
     ready: readyQueue(tasks),
     holding: holdings(agents, tasks).map((h) => ({ worker: h.worker.name, task: h.task })),
-    freeWorkers: freeWorkers(agents, tasks).map((w) => w.name),
+    freeWorkers: freeWorkers(agents, tasks, n).map((w) => w.name),
     merging: withState(tasks, "merging"),
     parked: withState(tasks, "nil"),
   };
