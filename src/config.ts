@@ -2,7 +2,7 @@
 
 export const OFFICE = "http://localhost:4000";
 export const ROOM_ID = "e6818e47";
-export const WORKER_NAMES = [1, 2, 3, 4, 5, 6].map((n) => `Isomux Worker ${n}`);
+export const WORKER_NAMES = [1, 2].map((n) => `Isomux Worker ${n}`);
 export const MAIN_NAME = "Isomux Main";
 
 export const DISPATCH_MS = 2 * 60_000;

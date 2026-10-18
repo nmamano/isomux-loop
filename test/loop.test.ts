@@ -71,20 +71,28 @@ describe("dispatch", () => {
     const a = task({ title: "[auto | ready] A", priority: "P1" });
     const b = task({ title: "[auto | ready] B", priority: "P2" });
     const c = task({ title: "[auto | ready] C", priority: "P3" });
-    const held = task({ title: "[auto | ready] held", status: "in_progress", assignee: "Isomux Worker 2" });
-    const agents = [agent("Isomux Worker 1"), agent("Isomux Worker 2"), agent("Isomux Worker 3"), agent("Isomux Reviewer 1")];
-    const { office, messages, patches } = stubOffice([a, b, c, held], agents);
+    const agents = [agent("Isomux Worker 1"), agent("Isomux Worker 2"), agent("Isomux Reviewer 1")];
+    const { office, messages, patches } = stubOffice([a, b, c], agents);
     const res = await dispatch(office);
     expect(res.assigned).toEqual([
       { worker: "Isomux Worker 1", taskId: a.id, messaged: true },
-      { worker: "Isomux Worker 3", taskId: b.id, messaged: true },
+      { worker: "Isomux Worker 2", taskId: b.id, messaged: true },
     ]);
     expect(patches[0]).toEqual({ id: a.id, body: { version: "v" + a.id.slice(1), assignee: "Isomux Worker 1", status: "in_progress" } });
     expect(messages).toEqual([
       { text: `/isomux-loop-worker ${a.id}\n${a.title}`, to: "id-Isomux Worker 1" },
-      { text: `/isomux-loop-worker ${b.id}\n${b.title}`, to: "id-Isomux Worker 3" },
+      { text: `/isomux-loop-worker ${b.id}\n${b.title}`, to: "id-Isomux Worker 2" },
     ]);
     expect(c.assignee).toBeUndefined();
+  });
+
+  test("a worker that holds a task, and a worker outside the loop's names, get nothing", async () => {
+    const a = task({ title: "[auto | ready] A", priority: "P1" });
+    const held = task({ title: "[auto | ready] held", status: "in_progress", assignee: "Isomux Worker 2" });
+    const agents = [agent("Isomux Worker 2"), agent("Isomux Worker 3")];
+    const { office, messages } = stubOffice([a, held], agents);
+    expect((await dispatch(office)).assigned).toEqual([]);
+    expect(messages).toEqual([]);
   });
 
   test("a 409 skips the task and the worker takes the next one", async () => {
