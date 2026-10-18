@@ -1,0 +1,66 @@
+  :root {
+    --bg: #f6f5f2; --card: #fff; --fg: #1d1d1f; --muted: #6b6b70; --line: #e3e1dc;
+    --accent: #2f6fde; --accent-fg: #fff; --chip: #efeee9; --warn: #b4441c; --ok: #2e7d4f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151517; --card: #1f1f22; --fg: #ececee; --muted: #9a9aa2; --line: #313136;
+      --accent: #5b8ef0; --accent-fg: #fff; --chip: #2a2a2f; --warn: #f08a5d; --ok: #6cc28f;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  header { position: sticky; top: 0; z-index: 2; background: var(--bg);
+    border-bottom: 1px solid var(--line); padding: 10px 14px 0; }
+  h1 { font-size: 17px; margin: 0 0 8px; }
+  nav { display: flex; gap: 4px; overflow-x: auto; }
+  nav button { border: 0; background: none; color: var(--muted); padding: 8px 10px;
+    font: inherit; border-bottom: 2px solid transparent; white-space: nowrap; cursor: pointer; }
+  nav button.on { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
+  main { max-width: 720px; margin: 0 auto; padding: 12px; }
+  .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px; margin-bottom: 12px; }
+  .meta { color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+  .title { font-weight: 600; margin: 6px 0; overflow-wrap: anywhere; }
+  .why { margin: 8px 0; }
+  .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .rescope { border-left: 3px solid var(--accent); padding-left: 10px; margin: 8px 0; }
+  details { margin: 6px 0; }
+  summary { color: var(--muted); cursor: pointer; font-size: 13px; }
+  .desc { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; margin-top: 6px;
+    max-height: 50vh; overflow: auto; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; align-items: center; }
+  .row .label { flex-basis: 100%; }
+  .chip { border: 1px solid var(--line); background: var(--chip); color: var(--fg); border-radius: 999px;
+    padding: 6px 11px; font: inherit; font-size: 14px; cursor: pointer; min-height: 34px; }
+  .chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+  .chip.proposed:not(.on) { border-color: var(--accent); }
+  textarea { width: 100%; font: inherit; font-size: 14px; color: var(--fg); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px; resize: vertical; min-height: 38px; }
+  .actions { display: flex; gap: 8px; margin-top: 10px; }
+  .btn { border: 0; border-radius: 10px; padding: 10px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+  .btn.primary { background: var(--accent); color: var(--accent-fg); flex: 1; }
+  .btn.ghost { background: var(--chip); color: var(--fg); }
+  .err { color: var(--warn); font-size: 13px; margin-top: 6px; }
+  .ok { color: var(--ok); }
+  .warn { color: var(--warn); }
+  .banner { border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; display: flex;
+    align-items: center; gap: 10px; justify-content: space-between; }
+  .banner.run { background: color-mix(in srgb, var(--ok) 15%, var(--card)); }
+  .banner.paused { background: color-mix(in srgb, var(--warn) 18%, var(--card)); }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 18px 0 6px; }
+  .line { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px;
+    margin-bottom: 6px; overflow-wrap: anywhere; }
+  .line .who { font-weight: 600; }
+  .tag { display: inline-block; font-size: 12px; color: var(--muted); border: 1px solid var(--line);
+    border-radius: 6px; padding: 0 6px; margin-right: 6px; }
+  .small { color: var(--muted); font-size: 13px; }
+  a { color: var(--accent); }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 700px) { .cols { grid-template-columns: 1fr; } }
+  .copytext { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px; font-size: 14px; }
+  del { background: color-mix(in srgb, var(--warn) 25%, transparent); text-decoration: line-through; }
+  ins { background: color-mix(in srgb, var(--ok) 25%, transparent); text-decoration: none; }

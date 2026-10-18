@@ -1,4 +1,9 @@
+import { DISPATCH_MS, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
+import { CopyStore } from "./copy";
+import { dispatch, status, tick, type DispatchResult, type Status, type TickResult } from "./loop";
+import { httpOffice } from "./office";
 import { page } from "./page";
+import { PauseFlag } from "./pause";
 import { Store, ValidationError } from "./store";
 
 const port = Number(process.env.PORT);
@@ -7,14 +12,17 @@ const appToken = process.env.ISOMUX_APP_TOKEN;
 if (!Number.isInteger(port) || !dataDir || !appToken)
   throw new Error("required_app_environment_missing");
 
-const OFFICE = "http://localhost:4000";
-// Nil decides in bursts; the curator hears once he has paused this long.
-const QUIET_MS = 3 * 60_000;
 const local = `http://127.0.0.1:${port}`;
+const publicUrl = (process.env.ISOMUX_APP_URL || local).replace(/\/$/, "");
 
+const office = httpOffice(appToken);
 const store = new Store(dataDir);
+const copy = new CopyStore(dataDir);
+const pause = new PauseFlag(dataDir);
 
-const HELP = `Loop app: triage API (for the curator). Base: ${local}
+const HELP = `Loop app API. Base: ${local}
+
+Triage (for the curator):
 GET  /api/summary                 counts per state
 GET  /api/items?state=open|decided|applied|failed|all
 POST /api/proposals               {"proposals":[{"taskId","task":{"title","description","priority","createdBy","createdAt"},"proposal":{"priority":"P0-P4","class":"auto|decide|taste|authority","outcome":"keep|rescope|obsolete","title?","scope?","why"}}]}
@@ -24,33 +32,94 @@ DELETE /api/items/:taskId         withdraw a proposal (the task closed meanwhile
 GET  /api/decisions               decisions to write to the board (decided, or failed earlier)
 POST /api/applied                 {"results":[{"taskId","decidedAt","ok":true|false,"error?"}]}
                                   decidedAt from /api/decisions; a decision Nil changed since then comes back as stale.
+
+Loop (for Isomux PM):
+GET  /api/status                  pause state, last dispatch and tick, ready queue, holders, merging, parked
+POST /api/pause | /api/resume     pause stops dispatch only; the tick keeps running
+POST /api/dispatch | /api/tick    run one now (dispatch refuses while paused)
+
+Copy sign-off (for Isomux PM):
+POST /api/copy                    {"taskId","title","old","new"}; old is "" for new copy. Answers {"url"}: the page for an ask.
+GET  /api/copy | /api/copy/:taskId
+DELETE /api/copy/:taskId          after Nil signed it off
 `;
 
-async function message(text: string): Promise<"delivered" | "rejected" | "ambiguous"> {
+// --- loop timers -----------------------------------------------------------
+
+type Run<T> = { at: number; result?: T; error?: string };
+let lastDispatch: Run<DispatchResult> | null = null;
+let lastTick: Run<TickResult> | null = null;
+let busy = false;
+
+async function exclusive<T>(fn: () => Promise<T>): Promise<Run<T> | null> {
+  if (busy) return null;
+  busy = true;
+  const at = Date.now();
   try {
-    const res = await fetch(`${OFFICE}/api/app/message`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${appToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    if (!res.ok) console.error(`message_rejected status=${res.status}`);
-    return res.ok ? "delivered" : "rejected";
-  } catch {
-    return "ambiguous";
+    return { at, result: await fn() };
+  } catch (err) {
+    console.error(err);
+    return { at, error: String(err instanceof Error ? err.message : err) };
+  } finally {
+    busy = false;
   }
 }
 
-async function notifyTick(): Promise<void> {
-  if (!store.shouldNotify(QUIET_MS)) return;
+async function runDispatch(): Promise<Run<DispatchResult> | null> {
+  if (pause.paused) return null;
+  const run = await exclusive(() => dispatch(office));
+  if (run) {
+    lastDispatch = run;
+    statusCache = null;
+    if (run.result?.assigned.length) console.log(`dispatch ${JSON.stringify(run.result.assigned)}`);
+  }
+  return run;
+}
+
+async function runTick(): Promise<Run<TickResult> | null> {
+  const run = await exclusive(() => tick(office));
+  if (run) lastTick = run;
+  return run;
+}
+
+setInterval(() => void runDispatch(), DISPATCH_MS);
+setInterval(() => void runTick(), TICK_MS);
+
+// --- triage notifications ------------------------------------------------------
+
+async function notifyTriage(): Promise<void> {
+  if (!store.shouldNotify(TRIAGE_QUIET_MS)) return;
   const n = store.pending().length;
-  const outcome = await message(
+  const delivered = await office.message(
     `${n} triage decision${n === 1 ? "" : "s"} from Nil wait to be written to the board. ` +
       `Read them with curl -s ${local}/api/decisions, apply each one, then report with POST ${local}/api/applied. API: curl -s ${local}/api/help`,
   );
-  // A rejection (no target, rate limit) is not retried until the next decision.
-  if (outcome !== "ambiguous") store.markNotified();
+  // A rejection is not retried until the next decision.
+  store.markNotified();
+  if (!delivered) console.error("triage notification not delivered");
 }
-setInterval(() => void notifyTick(), 30_000);
+setInterval(() => void notifyTriage(), 30_000);
+
+// --- status ------------------------------------------------------------------
+
+let statusCache: { at: number; value: Status } | null = null;
+
+async function loopStatus(): Promise<Record<string, unknown>> {
+  let board: Status | null = null;
+  let error: string | undefined;
+  try {
+    if (!statusCache || Date.now() - statusCache.at > STATUS_CACHE_MS) {
+      const [agents, tasks] = await Promise.all([office.agents(), office.tasks()]);
+      statusCache = { at: Date.now(), value: status(agents, tasks) };
+    }
+    board = statusCache.value;
+  } catch (err) {
+    error = String(err instanceof Error ? err.message : err);
+  }
+  return { paused: pause.paused, pausedSince: pause.since, lastDispatch, lastTick, board, error };
+}
+
+// --- HTTP --------------------------------------------------------------------
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -68,15 +137,51 @@ async function body(req: Request): Promise<Record<string, unknown>> {
   }
 }
 
+const html = () => new Response(page, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+
 async function route(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
   const m = req.method;
 
-  if (m === "GET" && path === "/")
-    return new Response(page, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+  if (m === "GET" && (path === "/" || path.startsWith("/copy/"))) return html();
   if (path === "/favicon.ico") return new Response(null, { status: 204 });
   if (m === "GET" && path === "/api/help") return new Response(HELP);
+
+  // Loop
+  if (m === "GET" && path === "/api/status") return json(await loopStatus());
+  if (m === "POST" && path === "/api/pause") {
+    pause.set(true);
+    return json({ paused: true });
+  }
+  if (m === "POST" && path === "/api/resume") {
+    pause.set(false);
+    return json({ paused: false });
+  }
+  if (m === "POST" && path === "/api/dispatch") {
+    if (pause.paused) return json({ error: "paused" }, 409);
+    const run = await runDispatch();
+    return run ? json(run) : json({ error: "busy" }, 409);
+  }
+  if (m === "POST" && path === "/api/tick") {
+    const run = await runTick();
+    return run ? json(run) : json({ error: "busy" }, 409);
+  }
+
+  // Copy
+  if (m === "POST" && path === "/api/copy") {
+    const item = copy.put(await body(req));
+    return json({ ...item, url: `${publicUrl}/copy/${item.taskId}` });
+  }
+  if (m === "GET" && path === "/api/copy") return json(copy.list());
+  const c = path.match(/^\/api\/copy\/([^/]+)$/);
+  if (c) {
+    const taskId = decodeURIComponent(c[1]);
+    if (m === "GET") return copy.get(taskId) ? json(copy.get(taskId)) : json({ error: "not_found" }, 404);
+    if (m === "DELETE") return copy.remove(taskId) ? new Response(null, { status: 204 }) : json({ error: "not_found" }, 404);
+  }
+
+  // Triage
   if (m === "GET" && path === "/api/summary") return json(store.counts());
   if (m === "GET" && path === "/api/items") {
     const state = url.searchParams.get("state") ?? "all";
@@ -95,7 +200,6 @@ async function route(req: Request): Promise<Response> {
     if (!Array.isArray(b.results)) throw new ValidationError("results must be an array");
     return json(store.markApplied(b.results));
   }
-
   const item = path.match(/^\/api\/items\/([^/]+)(?:\/(decide|undo))?$/);
   if (item) {
     const taskId = decodeURIComponent(item[1]);
@@ -121,4 +225,4 @@ Bun.serve({
     }
   },
 });
-console.log(`loop app listening on ${port}`);
+console.log(`loop app listening on ${port}${pause.paused ? " (dispatch paused)" : ""}`);

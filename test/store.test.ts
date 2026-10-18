@@ -1,13 +1,19 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store, ValidationError, itemState } from "../src/store";
+
+const dirs: string[] = [];
+afterEach(() => {
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+});
 
 function setup() {
   let t = 1_000_000;
   const clock = { now: () => t, advance: (ms: number) => (t += ms) };
   const dir = mkdtempSync(join(tmpdir(), "loop-store-"));
+  dirs.push(dir);
   return { store: new Store(dir, clock.now), clock, dir };
 }
 

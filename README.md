@@ -2,10 +2,12 @@
 
 The Isomux app for the continuous loop (design: isomux `internal-docs/continuous-loop-design.md`, task 178dbb5a).
 
-Triage, the first view: the curator agent pushes one proposal per board task (priority, class, keep/rescope/obsolete, why). Nil decides on each card. The app messages its target agent (the curator) once per burst of decisions, and the curator writes them to the board and reports back. App tokens cannot touch the task board, so the app never does.
+- Dispatch, every 2 minutes unless paused: each free Isomux Worker gets the next ready board task (priority, then age), claimed with a versioned PATCH, and a `/isomux-loop-worker <task id>` message.
+- Tick, hourly (also while paused): idle workers that hold a task get a nudge; Isomux Main hears how many tasks wait to merge.
+- Triage: the curator (the app's owner and message target) pushes one proposal per task; Nil decides on each card; the app messages the curator once per burst of decisions.
+- Copy sign-off: Isomux PM pushes old and new copy per task; `/copy/<task id>` shows them side by side for an ask.
+- Status: ready queue, holders, tasks waiting to merge, tasks parked for Nil.
 
-Curator API: `curl -s http://127.0.0.1:$PORT/api/help`.
+The board is the loop's only state. The app keeps triage proposals, copy and the pause flag in `$ISOMUX_APP_DATA_DIR`. It reaches the board and other agents with the app token, which has its owner's reach since isomux task c0204eb6. Constants (room, worker names, intervals) are in `src/config.ts`.
 
-State: `$ISOMUX_APP_DATA_DIR/triage.json`. Run: `bun run start`. Tests: `bun test`.
-
-Later views (copy review, the hourly tick, loop status) follow the design doc.
+API: `curl -s http://127.0.0.1:$PORT/api/help`. Run: `bun run start`. Tests: `bun test`.

@@ -1,0 +1,151 @@
+import { describe, expect, test } from "bun:test";
+import { dispatch, freeWorkers, parseTag, readyQueue, status, tick } from "../src/loop";
+import type { Agent, Office, PatchResult, Task } from "../src/office";
+
+const ROOM = "e6818e47";
+let seq = 0;
+function task(over: Partial<Task> & { title: string }): Task {
+  seq++;
+  return { id: `t${seq}`, status: "open", priority: "P2", createdAt: seq, roomId: ROOM, version: `v${seq}`, ...over };
+}
+function agent(name: string, busy = false): Agent {
+  return { id: `id-${name}`, name, roomId: ROOM, inFlightTurn: busy ? { startedAt: 1 } : null };
+}
+
+// An office stub that applies PATCHes to its task list, with optional 409s.
+function stubOffice(tasks: Task[], agents: Agent[], conflict: string[] = []) {
+  const messages: { text: string; to?: string }[] = [];
+  const patches: { id: string; body: Record<string, unknown> }[] = [];
+  const office: Office = {
+    tasks: async () => tasks.map((t) => ({ ...t })),
+    agents: async () => agents,
+    async patchTask(id, body): Promise<PatchResult> {
+      patches.push({ id, body });
+      if (conflict.includes(id)) return { ok: false, status: 409 };
+      const t = tasks.find((x) => x.id === id)!;
+      if (body.version !== t.version) return { ok: false, status: 409 };
+      Object.assign(t, { assignee: body.assignee, status: body.status, version: t.version + "+" });
+      return { ok: true, task: t };
+    },
+    async message(text, to) {
+      messages.push({ text, to });
+      return true;
+    },
+  };
+  return { office, messages, patches };
+}
+
+describe("tags", () => {
+  test("parse class, state and the rest of the title", () => {
+    expect(parseTag("[auto | ready] Fix it")).toEqual({ class: "auto", state: "ready", rest: "Fix it" });
+    expect(parseTag("[decide|soak until 10-25] X")).toEqual({ class: "decide", state: "soak until 10-25", rest: "X" });
+    expect(parseTag("Fix it")).toBeNull();
+  });
+});
+
+describe("ready queue", () => {
+  test("only open, unassigned P0-P3 tasks tagged ready in a dispatch class, by priority then age", () => {
+    const tasks = [
+      task({ title: "[auto | ready] p2 old", priority: "P2" }),
+      task({ title: "[taste | ready] p1 newer", priority: "P1" }),
+      task({ title: "[decide | ready] p1 newest", priority: "P1" }),
+      task({ title: "[auto | ready] p4", priority: "P4" }),
+      task({ title: "[auto | nil] parked", priority: "P0" }),
+      task({ title: "[authority | ready] never", priority: "P0" }),
+      task({ title: "[auto | ready] taken", priority: "P0", assignee: "Isomux Worker 1" }),
+      task({ title: "[auto | ready] in progress", priority: "P0", status: "in_progress" }),
+      task({ title: "untagged", priority: "P0" }),
+      task({ title: "[auto | ready] other room", priority: "P0", roomId: "other" }),
+      task({ title: "[auto | ready] no priority", priority: null }),
+    ];
+    expect(readyQueue(tasks).map((t) => t.title)).toEqual([
+      "[taste | ready] p1 newer",
+      "[decide | ready] p1 newest",
+      "[auto | ready] p2 old",
+    ]);
+  });
+});
+
+describe("dispatch", () => {
+  test("each free worker gets the next ready task, claimed with the read version, and a message", async () => {
+    const a = task({ title: "[auto | ready] A", priority: "P1" });
+    const b = task({ title: "[auto | ready] B", priority: "P2" });
+    const c = task({ title: "[auto | ready] C", priority: "P3" });
+    const held = task({ title: "[auto | ready] held", status: "in_progress", assignee: "Isomux Worker 2" });
+    const agents = [agent("Isomux Worker 1"), agent("Isomux Worker 2"), agent("Isomux Worker 3"), agent("Isomux Reviewer 1")];
+    const { office, messages, patches } = stubOffice([a, b, c, held], agents);
+    const res = await dispatch(office);
+    expect(res.assigned).toEqual([
+      { worker: "Isomux Worker 1", taskId: a.id, messaged: true },
+      { worker: "Isomux Worker 3", taskId: b.id, messaged: true },
+    ]);
+    expect(patches[0]).toEqual({ id: a.id, body: { version: "v" + a.id.slice(1), assignee: "Isomux Worker 1", status: "in_progress" } });
+    expect(messages).toEqual([
+      { text: `/isomux-loop-worker ${a.id}\n${a.title}`, to: "id-Isomux Worker 1" },
+      { text: `/isomux-loop-worker ${b.id}\n${b.title}`, to: "id-Isomux Worker 3" },
+    ]);
+    expect(c.assignee).toBeUndefined();
+  });
+
+  test("a 409 skips the task and the worker takes the next one", async () => {
+    const a = task({ title: "[auto | ready] A", priority: "P1" });
+    const b = task({ title: "[auto | ready] B", priority: "P2" });
+    const { office, messages } = stubOffice([a, b], [agent("Isomux Worker 1")], [a.id]);
+    const res = await dispatch(office);
+    expect(res.conflicts).toEqual([a.id]);
+    expect(res.assigned.map((x) => x.taskId)).toEqual([b.id]);
+    expect(messages.map((m) => m.text.split("\n")[0])).toEqual([`/isomux-loop-worker ${b.id}`]);
+  });
+
+  test("a worker missing from the agent list gets nothing", async () => {
+    const a = task({ title: "[auto | ready] A" });
+    const { office, messages } = stubOffice([a], [agent("Isomux Worker 7"), agent("Some Worker 1")]);
+    expect((await dispatch(office)).assigned).toEqual([]);
+    expect(messages).toEqual([]);
+  });
+
+  test("a merging task (in progress, no assignee) does not hold its worker", () => {
+    const merging = task({ title: "[auto | merging] M", status: "in_progress" });
+    expect(freeWorkers([agent("Isomux Worker 1")], [merging]).map((a) => a.name)).toEqual(["Isomux Worker 1"]);
+  });
+});
+
+describe("tick", () => {
+  test("nudges idle workers that hold a task and Isomux Main when tasks wait to merge", async () => {
+    const t1 = task({ title: "[auto | ready] one", status: "in_progress", assignee: "Isomux Worker 1" });
+    const t2 = task({ title: "[auto | ready] two", status: "in_progress", assignee: "Isomux Worker 2" });
+    const m = task({ title: "[auto | merging] three", status: "in_progress" });
+    const agents = [agent("Isomux Worker 1"), agent("Isomux Worker 2", true), agent("Isomux Worker 3"), agent("Isomux Main")];
+    const { office, messages } = stubOffice([t1, t2, m], agents);
+    const res = await tick(office);
+    expect(res.nudged).toEqual([{ worker: "Isomux Worker 1", taskId: t1.id }]);
+    expect(res.main).toBe(1);
+    expect(messages.map((x) => x.to)).toEqual(["id-Isomux Worker 1", "id-Isomux Main"]);
+    expect(messages[0].text.startsWith(`/isomux-loop-worker tick ${t1.id}:`)).toBe(true);
+    expect(messages[1].text).toBe("/isomux-main tick: 1 tasks wait to merge.");
+  });
+
+  test("skips Isomux Main when it is busy or absent", async () => {
+    const m = task({ title: "[auto | merging] three", status: "in_progress" });
+    for (const agents of [[agent("Isomux Main", true)], []]) {
+      const { office, messages } = stubOffice([m], agents);
+      expect((await tick(office)).main).toBeNull();
+      expect(messages).toEqual([]);
+    }
+  });
+});
+
+describe("status", () => {
+  test("ready queue, holders, free workers, merging and parked", () => {
+    const r = task({ title: "[auto | ready] r" });
+    const h = task({ title: "[auto | ready] h", status: "in_progress", assignee: "Isomux Worker 1" });
+    const m = task({ title: "[auto | merging] m", status: "in_progress" });
+    const p = task({ title: "[decide | nil] p" });
+    const s = status([agent("Isomux Worker 1"), agent("Isomux Worker 2")], [r, h, m, p]);
+    expect(s.ready.map((t) => t.id)).toEqual([r.id]);
+    expect(s.holding.map((x) => [x.worker, x.task.id])).toEqual([["Isomux Worker 1", h.id]]);
+    expect(s.freeWorkers).toEqual(["Isomux Worker 2"]);
+    expect(s.merging.map((t) => t.id)).toEqual([m.id]);
+    expect(s.parked.map((t) => t.id)).toEqual([p.id]);
+  });
+});

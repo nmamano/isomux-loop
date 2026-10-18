@@ -1,0 +1,142 @@
+// Dispatch and tick. The board is the loop's only state: every run reads it
+// fresh and keeps nothing between runs.
+
+import { MAIN_NAME, ROOM_ID, WORKER_NAMES } from "./config";
+import type { Agent, Office, Task } from "./office";
+
+const DISPATCH_CLASSES = ["auto", "decide", "taste"];
+const LOOP_PRIORITIES = ["P0", "P1", "P2", "P3"];
+
+export type Tag = { class: string; state: string; rest: string };
+
+// `[auto | ready] Title` -> {class: "auto", state: "ready", rest: "Title"}
+export function parseTag(title: string): Tag | null {
+  const m = title.match(/^\[\s*([a-z]+)\s*\|\s*([^\]]*?)\s*\]\s*(.*)$/s);
+  return m ? { class: m[1], state: m[2], rest: m[3] } : null;
+}
+
+function inRoom(t: Task): boolean {
+  return t.roomId === undefined || t.roomId === ROOM_ID;
+}
+
+export function readyQueue(tasks: Task[]): Task[] {
+  return tasks
+    .filter((t) => {
+      const tag = parseTag(t.title);
+      return (
+        inRoom(t) &&
+        t.status === "open" &&
+        !t.assignee &&
+        LOOP_PRIORITIES.includes(t.priority ?? "") &&
+        tag !== null &&
+        tag.state === "ready" &&
+        DISPATCH_CLASSES.includes(tag.class)
+      );
+    })
+    .sort((a, b) => (a.priority ?? "").localeCompare(b.priority ?? "") || a.createdAt - b.createdAt);
+}
+
+export type Holding = { worker: Agent; task: Task };
+
+function workers(agents: Agent[]): Agent[] {
+  return WORKER_NAMES.map((name) => agents.find((a) => a.name === name)).filter(
+    (a): a is Agent => a !== undefined,
+  );
+}
+
+function heldBy(tasks: Task[], name: string): Task[] {
+  return tasks
+    .filter((t) => inRoom(t) && t.status === "in_progress" && t.assignee === name)
+    .sort((a, b) => (a.priority ?? "").localeCompare(b.priority ?? "") || a.createdAt - b.createdAt);
+}
+
+export function holdings(agents: Agent[], tasks: Task[]): Holding[] {
+  return workers(agents).flatMap((w) => heldBy(tasks, w.name).map((task) => ({ worker: w, task })));
+}
+
+export function freeWorkers(agents: Agent[], tasks: Task[]): Agent[] {
+  return workers(agents).filter((w) => heldBy(tasks, w.name).length === 0);
+}
+
+export function withState(tasks: Task[], state: string): Task[] {
+  return tasks.filter((t) => inRoom(t) && parseTag(t.title)?.state === state);
+}
+
+export type DispatchResult = {
+  assigned: { worker: string; taskId: string; messaged: boolean }[];
+  conflicts: string[];
+  errors: string[];
+};
+
+export async function dispatch(office: Office): Promise<DispatchResult> {
+  const out: DispatchResult = { assigned: [], conflicts: [], errors: [] };
+  const [tasks, agents] = await Promise.all([office.tasks(), office.agents()]);
+  const queue = readyQueue(tasks);
+  for (const worker of freeWorkers(agents, tasks)) {
+    while (queue.length > 0) {
+      const task = queue.shift()!;
+      const res = await office.patchTask(task.id, {
+        version: task.version,
+        assignee: worker.name,
+        status: "in_progress",
+      });
+      if (!res.ok) {
+        // 409: someone changed the task since our read; it is not ours to take.
+        if (res.status === 409) out.conflicts.push(task.id);
+        else out.errors.push(`PATCH ${task.id} answered ${res.status}`);
+        continue;
+      }
+      const messaged = await office.message(`/isomux-loop-worker ${task.id}\n${task.title}`, worker.id);
+      if (!messaged) out.errors.push(`message to ${worker.name} about ${task.id} failed; the tick retries it`);
+      out.assigned.push({ worker: worker.name, taskId: task.id, messaged });
+      break;
+    }
+  }
+  return out;
+}
+
+export type TickResult = { nudged: { worker: string; taskId: string }[]; main: number | null; errors: string[] };
+
+export function workerTickText(taskId: string): string {
+  return (
+    `/isomux-loop-worker tick ${taskId}: if your work on it stopped short of its next hand-off, continue it. ` +
+    "If you wait on your reviewer, check that it is working and nudge it if it stopped. Otherwise end the turn."
+  );
+}
+
+export async function tick(office: Office): Promise<TickResult> {
+  const out: TickResult = { nudged: [], main: null, errors: [] };
+  const [tasks, agents] = await Promise.all([office.tasks(), office.agents()]);
+  for (const w of workers(agents)) {
+    const held = heldBy(tasks, w.name);
+    if (held.length === 0 || w.inFlightTurn) continue;
+    if (await office.message(workerTickText(held[0].id), w.id))
+      out.nudged.push({ worker: w.name, taskId: held[0].id });
+    else out.errors.push(`tick message to ${w.name} failed`);
+  }
+  const merging = withState(tasks, "merging").length;
+  const main = agents.find((a) => a.name === MAIN_NAME);
+  if (merging > 0 && main && !main.inFlightTurn) {
+    if (await office.message(`/isomux-main tick: ${merging} tasks wait to merge.`, main.id)) out.main = merging;
+    else out.errors.push("tick message to Isomux Main failed");
+  }
+  return out;
+}
+
+export type Status = {
+  ready: Task[];
+  holding: { worker: string; task: Task }[];
+  freeWorkers: string[];
+  merging: Task[];
+  parked: Task[];
+};
+
+export function status(agents: Agent[], tasks: Task[]): Status {
+  return {
+    ready: readyQueue(tasks),
+    holding: holdings(agents, tasks).map((h) => ({ worker: h.worker.name, task: h.task })),
+    freeWorkers: freeWorkers(agents, tasks).map((w) => w.name),
+    merging: withState(tasks, "merging"),
+    parked: withState(tasks, "nil"),
+  };
+}
