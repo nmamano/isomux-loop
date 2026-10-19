@@ -20,6 +20,9 @@ function stubOffice(tasks: Task[], agents: Agent[], conflict: string[] = []) {
     tasks: async () => tasks.map((t) => ({ ...t })),
     allTasks: async () => tasks.map((t) => ({ ...t })),
     task: async (id) => ({ ...tasks.find((t) => t.id === id)! }),
+    createTask: async () => {
+      throw new Error("not used");
+    },
     closedAt: async () => null,
     agents: async () => agents,
     async patchTask(id, body): Promise<PatchResult> {

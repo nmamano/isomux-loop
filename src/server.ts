@@ -1,4 +1,4 @@
-import { DISPATCH_MS, MAIN_NAME, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
+import { DISPATCH_MS, MAIN_NAME, ROOM_ID, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
 import { ClosedTimes } from "./closed-times";
 import { type ImageDir } from "./images";
 import { dispatch, status, tick, type DispatchResult, type Status, type TickResult } from "./loop";
@@ -62,8 +62,12 @@ POST /api/signoff/:taskId/images  raw PNG/JPEG/WebP bytes, ?caption=..., as for 
 POST /api/signoff/:taskId/merged  Isomux Main after EVERY merge, item or not: {"commit"}. The sha is what a push go names.
 POST /api/signoff/:taskId/reverted  Isomux Main after a revert Nil asked for: {"commit"}. The item leaves the list.
 GET  /api/signoff                 merged items, the main sha, and whether a push go is possible
-Nil's buttons on the Sign-off tab: approve, reject (a note; messages Main "/isomux-main revert ..."), and
-"Approve and push" (messages Main "/isomux-main push go ..."). The app cannot tell which member pressed them.
+Nil's buttons on the Sign-off tab: approve; request edits (needs a comment on at least one entry: the app files a P0
+"[auto | ready] Copy edits: <title>" task with the comments, and the item blocks the push until that task's own
+sign-off item is merged and decided); reject (a note, plus any comments; messages Main "/isomux-main revert ...");
+and "Approve and push" (messages Main "/isomux-main push go ..."). Comments are saved as Nil types
+(POST /api/signoff/:taskId/comments {"copy":{"0":"..."},"images":{"0":"..."}}).
+The app cannot tell which member pressed them.
 `;
 
 // --- loop timers -----------------------------------------------------------
@@ -267,7 +271,11 @@ async function route(req: Request): Promise<Response> {
 
   // Sign-off
   if (m === "GET" && path === "/api/signoff")
-    return json({ items: signoff.visible().map((i) => ({ ...i, state: signoffState(i) })), ...signoff.meta(), push: signoff.pushCheck() });
+    return json({
+      items: signoff.visible().map((i) => ({ ...i, state: signoffState(i), editsSettled: signoff.editsSettled(i) })),
+      ...signoff.meta(),
+      push: signoff.pushCheck(),
+    });
   if (m === "POST" && path === "/api/signoff") return json(signoff.put(await body(req)));
   if (m === "POST" && path === "/api/signoff/push") {
     const check = signoff.pushCheck();
@@ -279,7 +287,7 @@ async function route(req: Request): Promise<Response> {
     signoff.recordPushGo(check.sha!);
     return json({ sent: text });
   }
-  const so = path.match(/^\/api\/signoff\/([^/]+)\/(images|merged|reverted|approve|reject|undo)$/);
+  const so = path.match(/^\/api\/signoff\/([^/]+)\/(images|merged|reverted|approve|reject|undo|comments|edits)$/);
   if (so && m === "POST") {
     const taskId = decodeURIComponent(so[1]);
     switch (so[2]) {
@@ -293,6 +301,28 @@ async function route(req: Request): Promise<Response> {
         return json(signoff.approve(taskId));
       case "undo":
         return json(signoff.undo(taskId));
+      case "comments":
+        return json(signoff.setComments(taskId, await body(req)));
+      case "edits": {
+        const item = signoff.checkEdits(taskId);
+        const title = item.title.replace(/^\[[^\]]*\]\s*/, "");
+        const description = [
+          `Copy edits Nil requested at sign-off in the loop app (${new Date().toISOString().slice(0, 10)}).`,
+          `Source task: ${item.taskId}. Merged commit: ${item.merged!.commit}.`,
+          "",
+          "Rule: Nil's quoted text goes in verbatim; for a note, write the edit and create a sign-off item for it.",
+          "",
+          ...signoff.commentLines(item, true),
+        ].join("\n");
+        let created;
+        try {
+          created = await office.createTask({ title: `[auto | ready] Copy edits: ${title}`, description, priority: "P0", roomId: ROOM_ID });
+        } catch (err) {
+          return json({ error: `the board refused the edits task (${String(err instanceof Error ? err.message : err)}); nothing changed` }, 502);
+        }
+        statusCache = null;
+        return json(signoff.recordEdits(taskId, created.id));
+      }
       case "reject": {
         const { item, note } = signoff.checkReject(taskId, await body(req));
         const text = `/isomux-main revert ${taskId} (${item.merged!.commit}): Nil rejected it at sign-off: ${note}`;

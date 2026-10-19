@@ -115,4 +115,41 @@ describe("sign-off", () => {
     expect(() => s.undo("t1")).toThrow(ValidationError);
     expect(() => s.approve("t1")).toThrow(ValidationError);
   });
+
+  test("comments: per entry, validated, and only while the item waits", () => {
+    const s = new SignoffStore(tempDir());
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    expect(() => s.setComments("t1", { copy: { "3": "x" } })).toThrow(ValidationError);
+    expect(s.setComments("t1", { copy: { "0": " shorter " }, images: {} }).comments).toEqual({ copy: { "0": "shorter" }, images: {} });
+    expect(s.commentLines(s.get("t1")!, false)).toEqual(["docs/features.md: shorter"]);
+    s.approve("t1");
+    expect(() => s.setComments("t1", { copy: { "0": "y" } })).toThrow(ValidationError);
+  });
+
+  test("request edits needs a comment and blocks the push until the edits task's item is merged and decided", () => {
+    const s = new SignoffStore(tempDir());
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    expect(() => s.checkEdits("t1")).toThrow(ValidationError);
+    s.setComments("t1", { copy: { "0": '"Agents ask on the Asks page."' } });
+    s.checkEdits("t1");
+    expect(signoffState(s.recordEdits("t1", "ed1"))).toBe("edits");
+    expect(s.pushCheck().ok).toBe(false);
+    s.put({ ...item, taskId: "ed1", title: "Copy edits" });
+    s.merged("ed1", { commit: "bbbbbbb2" });
+    expect(s.pushCheck().ok).toBe(false);
+    s.approve("ed1");
+    expect(s.pushCheck()).toEqual({ ok: true, reason: "", sha: "bbbbbbb2", approved: ["t1", "ed1"] });
+    s.recordPushGo("bbbbbbb2");
+    expect(s.visible()).toEqual([]);
+  });
+
+  test("a rejection note carries the comments", () => {
+    const s = new SignoffStore(tempDir());
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.setComments("t1", { copy: { "0": "too long" } });
+    expect(s.checkReject("t1", { note: "Wrong page." }).note).toBe("Wrong page. Comments: docs/features.md: too long");
+  });
 });

@@ -104,3 +104,12 @@
   .mdbody pre.code { background: var(--chip); padding: 8px; border-radius: 8px; overflow-x: auto; white-space: pre; }
   .btn[disabled] { opacity: .45; cursor: not-allowed; }
   .card > .label { display: block; margin-top: 8px; }
+  .signoff-card { margin-bottom: 24px; padding-top: 16px; }
+  .sotitle { font-weight: 700; font-size: 17px; margin: 0 0 4px; overflow-wrap: anywhere; }
+  .entry { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--line); }
+  .entry .where { font-weight: 600; font-size: 13px; margin: 0 0 2px; overflow-wrap: anywhere; }
+  .entry .cols h2 { margin: 6px 0 4px; }
+  .comment { margin-top: 8px; }
+  .shots { display: flex; flex-wrap: wrap; gap: 12px; }
+  .shot { width: 200px; }
+  .shot img { width: 200px; height: 130px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); display: block; }

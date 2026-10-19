@@ -84,7 +84,10 @@ const HELP = {
   links: "The branch with the work, and the diff when there is one.",
   packetConfirm: "Confirm saves your choice. The curator writes it to the task a few minutes after your last decision; until then you can undo it in Decided.",
   approve: "Approve: this copy or change may go out with the next push.",
-  reject: "Reject: Isomux Main reverts the commit at once and the task goes back to ready with your note. Needs a note.",
+  reject: "Reject: Isomux Main reverts the commit at once and the task goes back to ready with your note (and your comments). Needs a note.",
+  requestEdits: "Request edits: keeps the merge and files a P0 task to fix the copy as a commit on top, with your comments. Needs a comment on at least one entry. The push waits until that task's own sign-off.",
+  comment: "Optional. A note (\"shorter\"), or the exact new text in quotes. Saved as you type; used by Request edits and Reject.",
+  editsSign: "Edits requested: a copy-edits task is on the board. The push waits until that task's own sign-off item is merged and decided.",
   rejectNote: "Why you reject it, and what to do instead. The worker reads it when the task comes back.",
   undoApprove: "Undo the approval while the push go has not been given.",
   push: "Approve and push: tells Isomux Main to push main at the sha below. Enabled when every item is approved or rejected and every rejection is reverted.",
@@ -553,6 +556,21 @@ function diff(a, b) {
 }
 // --- sign-off -----------------------------------------------------------------
 
+// Nil's comments per sign-off item, kept here while he types and saved to the app.
+const soComments = {};
+const commentTimers = {};
+function commentsOf(it) {
+  return soComments[it.taskId] || (soComments[it.taskId] = JSON.parse(JSON.stringify(it.comments || { copy: {}, images: {} })));
+}
+function hasComments(taskId) {
+  const c = soComments[taskId];
+  return Boolean(c && [...Object.values(c.copy), ...Object.values(c.images)].some((v) => v && v.trim()));
+}
+function commentBox(it, kind, n) {
+  const v = commentsOf(it)[kind][String(n)] || "";
+  return '<textarea rows="1" class="comment" placeholder="Comment: a note, or new text in quotes" data-comment="' +
+    esc(it.taskId) + ":" + kind + ":" + n + '"' + tip("comment") + ">" + esc(v) + "</textarea>";
+}
 function renderSignoff() {
   const so = signoffData;
   const sha = so.lastSha ? so.lastSha.commit : null;
@@ -564,26 +582,39 @@ function renderSignoff() {
     helpBox(["push", "sha"], "push") + '<div class="err" data-err="push"></div>';
   if (!so.items.length) return h + '<div class="empty">No merged copy or visible change waits for sign-off.</div>';
   for (const it of so.items) {
+    const waiting = it.state === "waiting";
     const stateText =
       it.state === "approved" ? '<span class="ok"' + tip("approvedSign") + ">Approved</span>"
       : it.state === "rejected" ? '<span class="warn"' + tip("rejected") + ">Rejected, waiting for revert: " + esc(it.decision.note) + "</span>"
+      : it.state === "edits" ? '<span class="warn"' + tip("editsSign") + ">Edits requested: task " + esc(it.decision.edits) + (it.editsSettled ? " (signed off)" : " (waiting for its sign-off)") + "</span>"
       : "<span" + tip("waitingSign") + ">Waiting for you</span>";
-    h += '<div class="card"><div class="meta"><span>Task ' + esc(it.taskId) + "</span><span" + tip("sha") + ">commit <code>" + esc(it.merged.commit.slice(0, 10)) + "</code></span><span>merged " +
-      clock(it.merged.at) + "</span>" + stateText + "</div>" + '<div class="title">' + esc(it.title) + "</div>";
+    h += '<div class="card signoff-card"><div class="sotitle">' + esc(it.title) + "</div>" +
+      '<div class="meta"><span>Task ' + esc(it.taskId) + "</span><span" + tip("sha") + ">commit <code>" + esc(it.merged.commit.slice(0, 10)) + "</code></span><span>merged " +
+      clock(it.merged.at) + "</span>" + stateText + "</div>";
     if (it.summary) h += '<div class="mdbody"' + tip("summary") + ">" + md(it.summary) + "</div>";
-    for (const c of it.copy) {
-      const [o, n] = diff(c.old || "", c.new);
-      h += '<div class="label"' + tip("where") + ">" + esc(c.where) + "</div>" +
+    it.copy.forEach((c, n) => {
+      const [o, nw] = diff(c.old || "", c.new);
+      h += '<div class="entry"><div class="where"' + tip("where") + ">" + esc(c.where) + "</div>" +
         '<div class="cols"><div><h2' + tip("old") + '>Old</h2><div class="copytext">' + (c.old ? o : '<span class="small">New copy</span>') +
-        '</div></div><div><h2' + tip("new") + '>New</h2><div class="copytext">' + n + "</div></div></div>";
+        '</div></div><div><h2' + tip("new") + '>New</h2><div class="copytext">' + nw + "</div></div></div>" +
+        (waiting ? commentBox(it, "copy", n) : "") + "</div>";
+    });
+    if (it.images.length) {
+      h += '<div class="entry"><div class="where"' + tip("images") + ">Screenshots " + q("images", "signoff" + it.taskId) + "</div>" + helpBox(["images"], "images", "signoff" + it.taskId) + '<div class="shots">';
+      it.images.forEach((im, n) => {
+        const url = "/img/signoff/" + encodeURIComponent(it.taskId) + "/" + im.file;
+        h += '<div class="shot"><a href="' + url + '" target="_blank" rel="noopener" title="' + esc(im.caption || "Open full size") + '"><img src="' + url + '" alt="' + esc(im.caption) + '"></a>' +
+          (im.caption ? '<div class="small">' + esc(im.caption) + "</div>" : "") + (waiting ? commentBox(it, "images", n) : "") + "</div>";
+      });
+      h += "</div></div>";
     }
-    h += imagesHtml("signoff", it.taskId, it.images);
     h += '<div class="err" data-err="' + esc(it.taskId) + '"></div>';
-    if (it.state === "waiting")
-      h += '<textarea rows="1" placeholder="Why you reject it (needed to reject)" data-rnote="' + esc(it.taskId) + '"' + tip("rejectNote") + ">" + esc(rejectNotes[it.taskId] || "") + "</textarea>" +
+    if (waiting)
+      h += '<div class="entry"><textarea rows="1" placeholder="Why you reject it (needed to reject)" data-rnote="' + esc(it.taskId) + '"' + tip("rejectNote") + ">" + esc(rejectNotes[it.taskId] || "") + "</textarea>" +
         '<div class="actions"><button class="btn primary" data-approve="' + esc(it.taskId) + '"' + tip("approve") + ">Approve</button>" +
+        '<button class="btn ghost" data-edits="' + esc(it.taskId) + '"' + (hasComments(it.taskId) ? "" : " disabled") + tip("requestEdits") + ">Request edits</button>" +
         '<button class="btn ghost" data-reject="' + esc(it.taskId) + '"' + tip("reject") + ">Reject</button>" + q("sactions", it.taskId) + "</div>" +
-        helpBox(["approve", "reject", "rejectNote"], "sactions", it.taskId);
+        helpBox(["approve", "requestEdits", "reject", "comment", "rejectNote"], "sactions", it.taskId) + "</div>";
     if (it.state === "approved")
       h += '<div class="actions"><button class="btn ghost" data-sundo="' + esc(it.taskId) + '"' + tip("undoApprove") + ">Undo</button></div>";
     h += "</div>";
@@ -653,10 +684,18 @@ document.addEventListener("click", async (e) => {
   if (d.pundo) return act(d.pundo, () => api("/api/packets/" + encodeURIComponent(d.pundo) + "/undo", { method: "POST" }));
   if (d.approve) return act(d.approve, () => api("/api/signoff/" + encodeURIComponent(d.approve) + "/approve", { method: "POST" }));
   if (d.sundo) return act(d.sundo, () => api("/api/signoff/" + encodeURIComponent(d.sundo) + "/undo", { method: "POST" }));
+  if (d.edits)
+    return act(d.edits, async () => {
+      clearTimeout(commentTimers[d.edits]);
+      await api("/api/signoff/" + encodeURIComponent(d.edits) + "/comments", { method: "POST", body: soComments[d.edits] });
+      await api("/api/signoff/" + encodeURIComponent(d.edits) + "/edits", { method: "POST" });
+    });
   if (d.reject) {
     const note = (rejectNotes[d.reject] || "").trim();
     if (!note) return showErr(d.reject, "Write why you reject it first.");
     return act(d.reject, async () => {
+      clearTimeout(commentTimers[d.reject]);
+      if (soComments[d.reject]) await api("/api/signoff/" + encodeURIComponent(d.reject) + "/comments", { method: "POST", body: soComments[d.reject] });
       await api("/api/signoff/" + encodeURIComponent(d.reject) + "/reject", { method: "POST", body: { note } });
       delete rejectNotes[d.reject];
     });
@@ -719,6 +758,18 @@ document.addEventListener("input", (e) => {
   if (ds.note !== undefined && picks[ds.note]) picks[ds.note].note = e.target.value;
   if (ds.pnote !== undefined && packetPicks[ds.pnote]) packetPicks[ds.pnote].note = e.target.value;
   if (ds.rnote !== undefined) rejectNotes[ds.rnote] = e.target.value;
+  if (ds.comment !== undefined) {
+    const [taskId, kind, n] = ds.comment.split(":");
+    const c = soComments[taskId];
+    if (!c) return;
+    c[kind][n] = e.target.value;
+    const btn = document.querySelector('[data-edits="' + CSS.escape(taskId) + '"]');
+    if (btn) btn.disabled = !hasComments(taskId);
+    clearTimeout(commentTimers[taskId]);
+    commentTimers[taskId] = setTimeout(() => {
+      api("/api/signoff/" + encodeURIComponent(taskId) + "/comments", { method: "POST", body: c }).catch((err) => showErr(taskId, err.message));
+    }, 600);
+  }
 });
 readLocation();
 // Open on triage while proposals wait for Nil, else on the status.

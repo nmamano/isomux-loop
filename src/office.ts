@@ -30,6 +30,7 @@ export interface Office {
   // Open and in-progress tasks of the loop's room (the board's default listing).
   tasks(): Promise<Task[]>;
   task(id: string): Promise<Task>;
+  createTask(body: { title: string; description: string; priority: string; roomId: string }): Promise<Task>;
   // Every task of the room, done, obsolete and P4 included.
   allTasks(): Promise<Task[]>;
   // When the task last moved to done or obsolete, from its history; null if unknown.
@@ -50,6 +51,15 @@ export function httpOffice(token: string, base = OFFICE): Office {
   return {
     tasks: () => getJson<Task[]>(`/api/tasks?roomId=${ROOM_ID}`),
     task: (id) => getJson<Task>(`/api/tasks/${encodeURIComponent(id)}`),
+    async createTask(body) {
+      const res = await fetch(`${base}/api/tasks`, {
+        method: "POST",
+        headers: { ...auth, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`POST /api/tasks answered ${res.status}`);
+      return (await res.json()) as Task;
+    },
     allTasks: () => getJson<Task[]>(`/api/tasks?roomId=${ROOM_ID}&status=all`),
     async closedAt(id) {
       type Item = { time: number; taskChanges?: { status?: { new?: string } } };
