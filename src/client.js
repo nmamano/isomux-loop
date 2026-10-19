@@ -83,6 +83,7 @@ const HELP = {
   tabApplied: "Decisions the curator wrote to the board.",
   tabBacklog: "The Backlog state: P4 tasks with no card. The loop never picks them. Bring one in as go, design or on hold, with a priority.",
   copyId: "Copy the task id.",
+  keys: "Keyboard shortcuts for triage: j/k move between cards, g d h b o pick, 0-3 set the priority, Enter confirms. Press ? to show the list.",
   toggleAll: "Expand or collapse every description and packet in this list at once.",
   splitView: "Show the task-state diagram beside Triage. It updates after each decision and every 15 s. Drag the line between them to change the widths. A narrow screen shows Triage only.",
   divider: "Drag to change the widths of the diagram and Triage.",
@@ -213,6 +214,146 @@ function helpBox(keys, key, id) {
   return '<div class="helpbox">' + keys.map((k) => "<div>" + esc(HELP[k]) + "</div>").join("") + "</div>";
 }
 
+// --- keyboard (Nil, 2026-10-19) -------------------------------------------------
+// On Triage and Backlog one card is current. Keys press the same buttons a
+// click does, so the same checks and errors apply.
+let currentId = null;
+let currentIndex = 0;
+const KEY_CHOICE = { g: "go", d: "design", h: "hold", b: "backlog", o: "obsolete" };
+const KEY_HELP = [
+  ["j / ↓, k / ↑", "next / previous card"],
+  ["g d h b o", "go, design, on hold, backlog, obsolete"],
+  ["0 1 2 3", "priority P0-P3 (go, design, on hold)"],
+  ["a", "accept the curator's proposal as is (confirms)"],
+  ["1-4, o, r, s", "packet: an option, obsolete, research more, none: see note"],
+  ["e", "expand or collapse the description"],
+  ["n", "write in the note; Esc leaves it"],
+  ["Enter, or Shift+Enter in the note", "confirm (Backlog: bring in); the next card becomes current"],
+  ["?", "show or hide this list"],
+];
+let keysOpen = false;
+function cardOpen(id, extra) {
+  return '<div class="card' + (extra ? " " + extra : "") + '" data-card="' + esc(id) + '">';
+}
+function keyTabs() {
+  return tab === "open" || tab === "decided" || tab === "applied" || tab === "backlog";
+}
+function cardEls() {
+  return [...document.querySelectorAll("#list [data-card]")];
+}
+function currentEl() {
+  return cardEls().find((el) => el.dataset.card === currentId) || null;
+}
+// After a render: the same card stays current; when it left the list (a
+// confirm), the card now at its place does.
+function syncCurrent() {
+  const els = keyTabs() ? cardEls() : [];
+  if (!els.length) return;
+  let i = els.findIndex((el) => el.dataset.card === currentId);
+  if (i < 0) i = Math.min(currentIndex, els.length - 1);
+  currentIndex = i;
+  currentId = els[i].dataset.card;
+  els[i].classList.add("current");
+}
+function setCurrent(i) {
+  const els = cardEls();
+  if (!els.length) return;
+  currentIndex = Math.max(0, Math.min(i, els.length - 1));
+  currentId = els[currentIndex].dataset.card;
+  for (const el of els) el.classList.toggle("current", el === els[currentIndex]);
+  els[currentIndex].scrollIntoView({ block: "nearest" });
+}
+function keysBox() {
+  return (
+    '<div class="keys" id="keys"' + (keysOpen ? "" : " hidden") + '><b>Keys</b><table>' +
+    KEY_HELP.map(([k, v]) => "<tr><td><kbd>" + esc(k) + "</kbd></td><td>" + esc(v) + "</td></tr>").join("") +
+    "</table></div>"
+  );
+}
+function press(sel) {
+  const el = currentEl();
+  const btn = el && el.querySelector(sel);
+  if (!btn || btn.disabled) return false;
+  btn.click();
+  return true;
+}
+function onKey(e) {
+  const k = e.key;
+  if (k === "?") {
+    keysOpen = !keysOpen;
+    document.getElementById("keys").hidden = !keysOpen;
+    return true;
+  }
+  if (k === "Escape" && keysOpen) {
+    keysOpen = false;
+    document.getElementById("keys").hidden = true;
+    return true;
+  }
+  if (!keyTabs()) return false;
+  if (k === "j" || k === "ArrowDown") return setCurrent(currentIndex + 1), true;
+  if (k === "k" || k === "ArrowUp") return setCurrent(currentIndex - 1), true;
+  const el = currentEl();
+  if (!el) return false;
+  const id = el.dataset.card;
+  if (k === "e") {
+    const d = el.querySelector("details");
+    if (d) d.open = !d.open;
+    return Boolean(d);
+  }
+  if (tab === "backlog") {
+    const cls = { g: "go", d: "design", h: "hold" }[k];
+    const pri = /^[0-3]$/.test(k) ? "P" + k : null;
+    if (cls || pri || k === "n") {
+      if (!backlogPicks[id]) press("[data-bring]");
+      if (cls) press('[data-bpick=choice][data-v="' + cls + '"]');
+      if (pri) press('[data-bpick=priority][data-v="' + pri + '"]');
+      if (k === "n") currentEl()?.querySelector("textarea")?.focus();
+      return true;
+    }
+    if (k === "Enter") return press("[data-bconfirm]");
+    if (k === "Escape") return press("[data-bcancel]");
+    return false;
+  }
+  if (tab !== "open") return false;
+  if (k === "n") {
+    const ta = el.querySelector("textarea");
+    if (ta) ta.focus();
+    return Boolean(ta);
+  }
+  if (k === "Enter") return press("[data-decide], [data-pdecide]");
+  if (el.classList.contains("packet")) {
+    if (/^[1-4]$/.test(k)) return press(".options [data-pchoice]:nth-child(" + k + ")");
+    const extra = { o: "obsolete", r: "research more", s: NOTE_ONLY }[k];
+    return extra ? press('[data-pchoice="' + extra + '"]') : false;
+  }
+  if (KEY_CHOICE[k]) return press('[data-pick=choice][data-v="' + KEY_CHOICE[k] + '"]');
+  if (/^[0-3]$/.test(k)) return press('[data-pick=priority][data-v="P' + k + '"]');
+  if (k === "a") {
+    const i = items.find((x) => x.taskId === id);
+    if (!i) return false;
+    const p = i.proposal;
+    const board = PRIORITIES.includes(i.task.priority) ? i.task.priority : null;
+    picks[id] = { choice: p.choice, priority: p.priority || board, note: picks[id] ? picks[id].note : "" };
+    return press("[data-decide]");
+  }
+  return false;
+}
+// While a note has the cursor, only Shift+Enter (above) and Esc count.
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+  const t = e.target;
+  if (t.tagName === "TEXTAREA" || t.tagName === "INPUT") {
+    if (e.key === "Escape") {
+      t.blur();
+      e.preventDefault();
+    }
+    return;
+  }
+  // Enter on a focused button keeps its own click.
+  if (e.key === "Enter" && t.tagName === "BUTTON") return;
+  if (onKey(e)) e.preventDefault();
+});
+
 // Chip and summary text for a value: a class may read differently from its tag.
 function label(v) {
   return CLASS_LABEL[v] || v;
@@ -225,7 +366,8 @@ function toggleAll(withSplit) {
   const sp = withSplit
     ? ' <span class="split-toggle"><button class="btn ghost" data-split="1"' + tip("splitView") + ">" + (split.on ? "Hide diagram" : "Diagram beside") + "</button> " + q("splitView") + "</span>"
     : "";
-  return '<div class="small toolbar"><button class="btn ghost" data-dall="1"' + tip("toggleAll") + ">Expand all</button> " + q("toggleAll") + sp + "</div>" +
+  return '<div class="small toolbar"><button class="btn ghost" data-dall="1"' + tip("toggleAll") + ">Expand all</button> " + q("toggleAll") +
+    ' <button class="btn ghost" data-keys="1"' + tip("keys") + ">Keys</button>" + sp + "</div>" +
     helpBox(["toggleAll"], "toggleAll") + helpBox(["splitView"], "splitView");
 }
 function syncToggleAll() {
@@ -283,6 +425,11 @@ function readLocation() {
   if (location.pathname.startsWith("/signoff")) tab = "signoff";
 }
 function go(nextTab) {
+  // A new tab starts at its first card.
+  if (nextTab !== tab) {
+    currentId = null;
+    currentIndex = 0;
+  }
   tab = nextTab;
   const path = tab === "signoff" ? "/signoff/" : "/";
   if (location.pathname !== path) history.pushState(null, "", path);
@@ -460,7 +607,7 @@ function openCard(i) {
   const board = PRIORITIES.includes(i.task.priority) ? i.task.priority : null;
   const k = picks[i.taskId] || (picks[i.taskId] = { choice: p.choice, priority: p.priority || board, note: "" });
   return (
-    '<div class="card">' + head(i, k, false) + body(i) +
+    cardOpen(i.taskId) + head(i, k, false) + body(i) +
     row("Choice", "choice", CHOICES, k, p, i.taskId) +
     (tagged(k.choice) ? row("Priority", "priority", PRIORITIES, k, p, i.taskId) : "") +
     '<textarea rows="1" placeholder="Note for the curator (optional)" data-note="' + esc(i.taskId) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
@@ -479,7 +626,7 @@ function decidedCard(i) {
     : "<span" + tip("pending") + ">Decided: waiting for the curator</span>";
   const stateKey = s === "applied" ? "applied" : s === "failed" ? "failed" : "pending";
   let h =
-    '<div class="card">' + head(i, d, true) +
+    cardOpen(i.taskId) + head(i, d, true) +
     '<div class="why"><span class="label"' + tip("decision") + ">Your decision</span><br><b>" + esc(summary(d)) + "</b>" +
     (d.note ? "<br>" + esc(d.note) : "") + "</div>" + '<div class="meta">' + status + q("state", i.taskId) + "</div>" +
     helpBox(s === "applied" ? [stateKey] : [stateKey, "undo"], "state", i.taskId);
@@ -576,7 +723,7 @@ function packetCard(p) {
   if (p.branch) links += "<span>Branch <code>" + esc(p.branch) + "</code></span>";
   if (p.diffUrl) links += '<a href="' + esc(p.diffUrl) + '" target="_blank" rel="noopener">Diff</a>';
   return (
-    '<div class="card packet">' + packetHead(p) +
+    cardOpen(p.taskId, "packet") + packetHead(p) +
     '<div class="question"' + tip("question") + ">" + esc(p.question) + "</div>" +
     (p.body ? details("packet:" + p.taskId, "packetBody", "The packet", '<div class="mdbody">' + md(p.body) + "</div>") : "") +
     imagesHtml("packets", p.taskId, p.images) +
@@ -601,7 +748,7 @@ function decidedPacketCard(p) {
     : "<span" + tip("pending") + ">Decided: waiting for the curator</span>";
   const rec = p.options.find((o) => o.recommended);
   let h =
-    '<div class="card packet">' + packetHead(p) + '<div class="question">' + esc(p.question) + "</div>" +
+    cardOpen(p.taskId, "packet") + packetHead(p) + '<div class="question">' + esc(p.question) + "</div>" +
     '<div class="why"><span class="label"' + tip("decision") + ">Your decision</span><br><b>" + esc(d.choice) + "</b>" +
     (rec ? ' <span class="small">(worker recommended ' + esc(rec.label) + ")</span>" : "") + (d.note ? "<br>" + esc(d.note) : "") + "</div>" +
     '<div class="meta">' + status + "</div>";
@@ -649,7 +796,7 @@ function renderBacklog() {
   if (!backlogTasks.length) return h + '<div class="empty">The backlog is empty.</div>';
   for (const t of backlogTasks) {
     const k = backlogPicks[t.id];
-    h += '<div class="card"><div class="meta"><span>Filed by ' + esc(t.createdBy || "unknown") + "</span><span>" + filed(t.createdAt) + "</span><span>Task " + idCopy(t.id) + "</span></div>" +
+    h += cardOpen(t.id) + '<div class="meta"><span>Filed by ' + esc(t.createdBy || "unknown") + "</span><span>" + filed(t.createdAt) + "</span><span>Task " + idCopy(t.id) + "</span></div>" +
       '<div class="title">' + esc(t.title) + "</div>" +
       (t.description ? details("bdesc:" + t.id, "description", "Description", '<div class="desc">' + esc(t.description) + "</div>") : "");
     if (!k) {
@@ -797,6 +944,8 @@ function render() {
       '<div class="divider" role="separator" aria-orientation="vertical"' + tip("divider") + "></div>" +
       '<div class="pane">' + renderTriage() + "</div></div>"
     : tab === "status" ? renderStatus() : tab === "signoff" ? renderSignoff() : tab === "backlog" ? renderBacklog() : renderTriage();
+  syncCurrent();
+  document.body.insertAdjacentHTML("beforeend", document.getElementById("keys") ? "" : keysBox());
   if (splitOn)
     [".split .side", ".split .pane"].forEach((sel, n) => {
       const pane = document.querySelector(sel);
@@ -870,6 +1019,13 @@ function showErr(id, msg) {
   if (el) el.textContent = msg;
 }
 document.addEventListener("click", async (e) => {
+  // A click on a card makes it current, as for the keys.
+  const cardEl = e.target.closest("#list [data-card]");
+  if (cardEl) {
+    currentId = cardEl.dataset.card;
+    currentIndex = cardEls().indexOf(cardEl);
+    for (const el of cardEls()) el.classList.toggle("current", el === cardEl);
+  }
   const cp = e.target.closest("[data-copy]");
   if (cp) {
     e.preventDefault();
@@ -882,6 +1038,11 @@ document.addEventListener("click", async (e) => {
         cp.classList.remove("done");
       }, 1200);
     }
+    return;
+  }
+  if (e.target.closest("[data-keys]")) {
+    keysOpen = !keysOpen;
+    document.getElementById("keys").hidden = !keysOpen;
     return;
   }
   if (e.target.closest("[data-split]")) {
