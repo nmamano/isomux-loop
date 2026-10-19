@@ -12,5 +12,9 @@ export const DISPATCH_MS = 2 * 60_000;
 export const TICK_MS = 60 * 60_000;
 // Nil decides in bursts; the curator hears once he has paused this long.
 export const TRIAGE_QUIET_MS = 3 * 60_000;
+// How often the app looks for open tasks the curator has not proposed yet.
+export const CLASSIFY_MS = 10 * 60_000;
+// An unproposed task is announced again after this long.
+export const CLASSIFY_REMIND_MS = 60 * 60_000;
 // The status view reads the board at most this often.
 export const STATUS_CACHE_MS = 20_000;

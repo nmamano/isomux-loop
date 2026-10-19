@@ -57,6 +57,7 @@ const HELP = {
   resume: "Resume starts dispatch (every 2 minutes) and the hourly tick again.",
   pairs: "How many worker/reviewer pairs the loop uses: it gives new tasks to Workers 1 to N. Lowering it takes no task away.",
   runs: "Dispatch gives free workers the next ready task every 2 minutes. The tick nudges idle workers once an hour.",
+  classify: "Every 10 minutes, also while paused, the app looks for open tasks with no tag and no card and wakes the curator to propose them.",
   working: "Workers that hold a task now.",
   free: "Loop workers without a task. They get the next ready task at the next dispatch.",
   ready: "Tasks the loop can take now, in the order it takes them.",
@@ -305,7 +306,9 @@ function renderStatus() {
   else if (d && d.result) h += " · " + d.result.assigned.length + " assigned" + (d.result.errors.length ? ' · <span class="warn">' + esc(d.result.errors.join("; ")) + "</span>" : "");
   h += "<br>Last tick: " + (t ? clock(t.at) : "not yet");
   if (t && t.error) h += ' · <span class="warn">' + esc(t.error) + "</span>";
-  h += q("runs") + "</div>" + helpBox(["runs"], "runs");
+  const c = s.lastClassify;
+  h += "<br><span" + tip("classify") + ">Curator wake: " + (c ? clock(c.at) + " · " + (c.error ? '<span class="warn">' + esc(c.error) + "</span>" : c.found.length + " to classify") : "not yet") + "</span>";
+  h += q("runs") + "</div>" + helpBox(["runs", "classify"], "runs");
   const sw = s.signoffWaiting || 0;
   h += '<div class="small"' + tip("signoffLine") + '>Sign-off: <a href="/signoff/" data-go="signoff">' + sw + " waiting</a> " + q("signoffLine") + "</div>" + helpBox(["signoffLine"], "signoffLine");
   if (s.error) return h + '<div class="err">Board unreadable: ' + esc(s.error) + "</div>";

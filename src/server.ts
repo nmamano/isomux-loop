@@ -1,7 +1,7 @@
-import { DISPATCH_MS, MAIN_NAME, ROOM_ID, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
+import { CLASSIFY_MS, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
 import { ClosedTimes } from "./closed-times";
 import { type ImageDir } from "./images";
-import { dispatch, status, tick, type DispatchResult, type Status, type TickResult } from "./loop";
+import { dispatch, status, tick, unclassified, type DispatchResult, type Status, type TickResult } from "./loop";
 import { httpOffice } from "./office";
 import { page } from "./page";
 import { PacketStore, packetState } from "./packets";
@@ -54,6 +54,8 @@ POST /api/pause | /api/resume     pause stops dispatch and the tick; the first t
 POST /api/settings                {"workers": 1-6}: the loop dispatches to Workers 1..N (also on the status page).
                                   Lowering N takes no task away; a worker above N keeps its tick while it holds a loop task.
 POST /api/dispatch | /api/tick    run one now (both refuse while paused)
+POST /api/classify                run the curator wake now: every 10 minutes, also while paused, open tasks with no tag
+                                  and no card go to the curator (a task is announced again after an hour)
 
 Sign-off before the push:
 POST /api/signoff                 worker at hand-off: {"taskId","title","summary?","copy":[{"where","old","new"}]}
@@ -110,6 +112,47 @@ async function runTick(): Promise<Run<TickResult> | null> {
   return run;
 }
 
+// --- curator wake (Nil, 2026-10-19) ----------------------------------------------
+// Every 10 minutes, also while dispatch is paused (triage is Nil's work, not
+// the loop's): open tasks without a tag or a card go to the curator. A task is
+// announced again only after CLASSIFY_REMIND_MS, so a busy curator is not
+// messaged every 10 minutes about the same tasks.
+
+type ClassifyRun = { at: number; found: string[]; sent: string | null; error?: string };
+let lastClassify: ClassifyRun | null = null;
+const announced = new Map<string, number>();
+
+function cardIds(): Set<string> {
+  const ids = new Set(store.list("all").filter((i) => itemState(i) !== "applied").map((i) => i.taskId));
+  for (const id of packets.unapplied()) ids.add(id);
+  return ids;
+}
+
+async function runClassify(): Promise<ClassifyRun> {
+  const at = Date.now();
+  try {
+    const found = unclassified(await office.allTasks(), cardIds());
+    const due = found.filter((t) => at - (announced.get(t.id) ?? 0) >= CLASSIFY_REMIND_MS);
+    let sent: string | null = null;
+    if (due.length > 0) {
+      const text =
+        `/isomux-curator ${found.length} open task${found.length === 1 ? "" : "s"} in the Isomux room ha${found.length === 1 ? "s" : "ve"} no tag and no card in the loop app; propose ${found.length === 1 ? "it" : "them"}: ` +
+        found.map((t) => t.id).join(", ") + `. API: curl -s ${local}/api/help`;
+      if (await office.message(text)) {
+        sent = text;
+        for (const t of found) announced.set(t.id, at);
+      } else throw new Error("the message to the curator failed");
+    }
+    lastClassify = { at, found: found.map((t) => t.id), sent };
+  } catch (err) {
+    lastClassify = { at, found: [], sent: null, error: String(err instanceof Error ? err.message : err) };
+  }
+  if (lastClassify.sent) console.log(`curator wake: ${lastClassify.found.join(", ")}`);
+  return lastClassify;
+}
+setTimeout(() => void runClassify(), 30_000);
+setInterval(() => void runClassify(), CLASSIFY_MS);
+
 setInterval(() => void runDispatch(), DISPATCH_MS);
 setInterval(() => void runTick(), TICK_MS);
 
@@ -141,8 +184,7 @@ async function loopStatus(): Promise<Record<string, unknown>> {
       const [agents, all] = await Promise.all([office.agents(), office.allTasks()]);
       // The dispatch view sees what dispatch sees: the board's default listing.
       const live = all.filter((t) => (t.status === "open" || t.status === "in_progress") && t.priority !== "P4");
-      const cards = new Set(store.list("all").filter((i) => itemState(i) !== "applied").map((i) => i.taskId));
-      for (const id of packets.unapplied()) cards.add(id);
+      const cards = cardIds();
       statusCache = {
         at: Date.now(),
         value: {
@@ -166,7 +208,7 @@ async function loopStatus(): Promise<Record<string, unknown>> {
     error = String(err instanceof Error ? err.message : err);
   }
   const signoffWaiting = signoff.visible().filter((i) => signoffState(i) === "waiting").length;
-  return { paused: pause.paused, pausedSince: pause.since, workers: pause.workers, lastDispatch, lastTick, board, error, signoffWaiting };
+  return { paused: pause.paused, pausedSince: pause.since, workers: pause.workers, lastDispatch, lastTick, lastClassify, board, error, signoffWaiting };
 }
 
 // --- HTTP --------------------------------------------------------------------
@@ -243,6 +285,7 @@ async function route(req: Request): Promise<Response> {
     const run = await runDispatch();
     return run ? json(run) : json({ error: "busy" }, 409);
   }
+  if (m === "POST" && path === "/api/classify") return json(await runClassify());
   if (m === "POST" && path === "/api/tick") {
     if (pause.paused) return json({ error: "paused" }, 409);
     const run = await runTick();

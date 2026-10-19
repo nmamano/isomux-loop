@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dispatch, freeWorkers, parseTag, readyQueue, status, tick } from "../src/loop";
+import { dispatch, freeWorkers, parseTag, readyQueue, status, tick, unclassified } from "../src/loop";
 import type { Agent, Office, PatchResult, Task } from "../src/office";
 
 const ROOM = "e6818e47";
@@ -182,5 +182,25 @@ describe("status", () => {
     expect(s.holding.map((x) => [x.worker, x.task.id])).toEqual([["Isomux Worker 1", h.id]]);
     expect(s.freeWorkers).toEqual(["Isomux Worker 2"]);
     expect(s.merging.map((t) => t.id)).toEqual([m.id]);
+  });
+});
+
+describe("curator wake", () => {
+  test("open, untagged tasks without a card, oldest first; P4 included", () => {
+    const a = task({ title: "new idea" });
+    const b = task({ title: "backlog idea", priority: "P4" });
+    const tasks = [
+      b,
+      a,
+      task({ title: "[auto | ready] tagged" }),
+      task({ title: "has a card" }),
+      task({ title: "batch work", status: "in_progress", assignee: "Isomux Worker 3" }),
+      task({ title: "closed", status: "done" }),
+      task({ title: "elsewhere", roomId: "other" }),
+    ];
+    const card = tasks[3].id;
+    expect(unclassified(tasks, new Set([card])).map((t) => t.title)).toEqual(
+      [a, b].sort((x, y) => x.createdAt - y.createdAt).map((t) => t.title),
+    );
   });
 });

@@ -144,3 +144,12 @@ export function status(agents: Agent[], tasks: Task[], n: number): Status {
     merging: withState(tasks, "merging"),
   };
 }
+
+// Open tasks with no [<class> | <state>] tag and no card in the app (a
+// proposal or packet not written to the board yet): the curator has not
+// proposed them. P4 included; the curator proposes those too.
+export function unclassified(tasks: Task[], cards: Set<string>): Task[] {
+  return tasks
+    .filter((t) => inRoom(t) && t.status === "open" && parseTag(t.title) === null && !cards.has(t.id))
+    .sort((a, b) => a.createdAt - b.createdAt);
+}
