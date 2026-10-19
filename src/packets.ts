@@ -1,19 +1,19 @@
 // Design packets: a worker's question to Nil with 2-4 options. A packet shows
 // as a card in Triage; Nil's choice goes to the curator in the same burst as
 // triage decisions, and the curator writes it to the board.
+//
+// Nil, 2026-10-20: a packet is decided like a triage card, with the same
+// choice (go, design, hold, backlog, obsolete), priority and note. The
+// worker's options are presets: each sets a choice and fills the note.
 
 import { join } from "node:path";
 import { checkTaskId, ImageDir, type Image } from "./images";
 import { readJson, writeJson } from "./json-file";
-import { ValidationError } from "./store";
+import { type Choice, CHOICES, choiceAndPriority, type LoopPriority, LOOP_PRIORITIES, ValidationError } from "./store";
 
-// Nil, 2026-10-19: no rescope. "none: see note" picks no option; the curator
-// applies the note with its judgement. A stored rescope choice migrates to it.
-export const NOTE_ONLY = "none: see note";
-export const EXTRA_CHOICES = ["obsolete", "research more", NOTE_ONLY] as const;
-
-export type Option = { label: string; cost: string; recommended: boolean };
-export type PacketDecision = { choice: string; note: string; decidedAt: number };
+export type Option = { label: string; cost: string; recommended: boolean; decision: Choice; note: string };
+// preset: the option Nil picked to fill the choice and the note, if any.
+export type PacketDecision = { choice: Choice; priority: LoopPriority | null; note: string; preset?: string; decidedAt: number };
 export type Packet = {
   taskId: string;
   title: string;
@@ -50,6 +50,39 @@ function text(v: unknown, field: string, max: number, required = true): string {
   return v;
 }
 
+function oneOf<T extends string>(v: unknown, list: readonly T[], field: string): T {
+  if (!(list as readonly unknown[]).includes(v)) throw new ValidationError(`${field} must be one of ${list.join(", ")}`);
+  return v as T;
+}
+
+// Before 2026-10-20 an option had no choice and a decision named an option,
+// "obsolete", "research more", "none: see note" or "rescope". An option reads
+// as go, or obsolete when its label says close; its label is its note.
+const CLOSE_LABEL = /^(?:[A-D][.:)]\s*)?(?:close|obsolete|do not build|don't build|don't ship|do nothing|leave as is)\b/i;
+function migrate(p: Packet): boolean {
+  let changed = false;
+  for (const o of p.options) {
+    if (o.decision) continue;
+    o.decision = CLOSE_LABEL.test(o.label) ? "obsolete" : "go";
+    o.note = o.label;
+    changed = true;
+  }
+  const priority = (LOOP_PRIORITIES as readonly unknown[]).includes(p.priority) ? (p.priority as LoopPriority) : null;
+  for (const d of [p.decision, p.undone]) {
+    if (!d || (CHOICES as readonly string[]).includes(d.choice)) continue;
+    const old = d.choice as string;
+    const o = p.options.find((x) => x.label === old);
+    if (o) {
+      d.choice = o.decision;
+      d.note = d.note ? o.note + "\n\n" + d.note : o.note;
+      d.preset = o.label;
+    } else d.choice = old === "obsolete" ? "obsolete" : "design";
+    d.priority = d.choice === "go" || d.choice === "design" || d.choice === "hold" ? priority : null;
+    changed = true;
+  }
+  return changed;
+}
+
 export class PacketStore {
   private file: string;
   private items: Record<string, Packet>;
@@ -61,9 +94,7 @@ export class PacketStore {
   ) {
     this.file = join(dataDir, "packets.json");
     this.items = readJson<Record<string, Packet>>(this.file, {});
-    const old = Object.values(this.items).filter((p) => p.decision?.choice === "rescope");
-    for (const p of old) p.decision!.choice = NOTE_ONLY;
-    if (old.length) this.save();
+    if (Object.values(this.items).map(migrate).some(Boolean)) this.save();
     this.images = new ImageDir(join(dataDir, "images", "packets"));
   }
 
@@ -83,12 +114,12 @@ export class PacketStore {
         label: text(x.label, `options[${n}].label`, 200),
         cost: text(x.cost, `options[${n}].cost`, 1000, false),
         recommended: x.recommended === true,
+        decision: oneOf(x.decision, CHOICES, `options[${n}].decision`),
+        note: text(x.note, `options[${n}].note`, 4000, false) || text(x.label, `options[${n}].label`, 200),
       };
     });
     const labels = options.map((o) => o.label);
     if (new Set(labels).size !== labels.length) throw new ValidationError("option labels must differ");
-    if (labels.some((l) => (EXTRA_CHOICES as readonly string[]).includes(l)))
-      throw new ValidationError(`an option label may not be ${EXTRA_CHOICES.join(", ")}`);
     if (options.filter((o) => o.recommended).length > 1) throw new ValidationError("at most one option is recommended");
     const diffUrl = text(r.diffUrl, "diffUrl", 1000, false);
     if (diffUrl && !/^https?:\/\//.test(diffUrl)) throw new ValidationError("diffUrl must be an http(s) URL");
@@ -145,12 +176,12 @@ export class PacketStore {
     if (!p) throw new ValidationError("unknown packet");
     if (packetState(p) === "applied") throw new ValidationError("already applied");
     const r = (raw ?? {}) as Record<string, unknown>;
-    const choice = text(r.choice, "choice", 200);
+    const { choice, priority } = choiceAndPriority(r, CHOICES);
     const note = text(r.note, "note", 4000, false);
-    if (!p.options.some((o) => o.label === choice) && !(EXTRA_CHOICES as readonly string[]).includes(choice))
-      throw new ValidationError(`choice must be one of the options, ${EXTRA_CHOICES.join(", ")}`);
-    if (choice === NOTE_ONLY && !note.trim()) throw new ValidationError(`"${NOTE_ONLY}" needs a note`);
-    p.decision = { choice, note, decidedAt: this.now() };
+    // A go on a packet without a note names no design.
+    if (choice === "go" && !note.trim()) throw new ValidationError("go needs a note: the design to build (pick an option to fill it)");
+    const preset = p.options.find((o) => o.label === r.preset)?.label;
+    p.decision = { choice, priority, note, ...(preset ? { preset } : {}), decidedAt: this.now() };
     p.applied = null;
     this.save();
     return p;

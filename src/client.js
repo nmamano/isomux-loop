@@ -5,8 +5,6 @@ const PRIORITIES = ["P0", "P1", "P2", "P3"];
 const CHOICES = ["go", "design", "hold", "backlog", "obsolete"];
 const TAGGED = ["go", "design", "hold"];
 const tagged = (c) => TAGGED.includes(c);
-const NOTE_ONLY = "none: see note";
-const EXTRA_CHOICES = ["obsolete", "research more", NOTE_ONLY];
 const CLASS_LABEL = { hold: "on hold" };
 const TABS = [
   ["status", "Status"],
@@ -45,7 +43,7 @@ const HELP = {
   P2: "P2: normal.",
   P3: "P3: low. Taken when nothing above it waits.",
   go: "go: the loop does it from start to finish (tag [go | ready]).",
-  design: "design: needs your design go/no-go. The loop may research it and write a design packet first (tag [design | ready]).",
+  design: "design: needs your design go/no-go. The loop may research it and write a design packet first (tag [design | ready]). On a design packet: research more; a worker looks again, with your note.",
   hold: "On hold (tag [hold | ...]): the loop never touches it. Also for work run outside the loop.",
   backlog: "backlog: the task goes to P4 with no tag. The loop never picks it; the Backlog tab lists it.",
   obsolete: "obsolete: the task is closed, with the reason. Reversible: it can be reopened.",
@@ -87,7 +85,7 @@ const HELP = {
   tabBacklog: "The Backlog state: P4 tasks with no card. The loop never picks them. Bring one in as go, design or on hold, with a priority.",
   copyId: "Copy the task id.",
   idLink: "Go to this task's card: it opens the tab that holds it and flashes the card.",
-  keys: "Keyboard shortcuts for triage: j/k move between cards, g d h b o pick, 0-3 set the priority, Enter confirms. Press ? to show the list.",
+  keys: "Keyboard shortcuts for triage: j/k move between cards, g d h b o pick, 0-3 set the priority, Ctrl+Enter (Cmd+Enter) confirms. Press ? to show the list.",
   viewbar: "Sort and filter the cards. The tab count and the diagram stay the full total; the keys follow the order shown. Your browser keeps these until Clear.",
   search: "Matches the title, the description, the task id and the curator's reason. / puts the cursor here; Esc leaves.",
   filters: "Combine any chips: in one row a card matches any chip, across rows it must match each row. A filter on the proposal hides design packets. Change compares the proposal with the board's priority.",
@@ -107,12 +105,11 @@ const HELP = {
   before: "The screen before the change.",
   after: "The screen after the change.",
   new: "The text after the change. Marked words are new.",
-  packet: "A design packet: a worker hit a decision that needs you. Pick an option (the dot marks the worker's recommendation), or obsolete, research more, or none: see note.",
+  packet: "A design packet: a worker hit a decision that needs you. You decide it like a triage card: a choice, a priority and a note. An option fills the choice and the note for you.",
   question: "The question the worker needs you to answer.",
-  options: "The options the worker found, with what each costs. The dot marks its recommendation.",
-  extras: "obsolete: close it. research more: the worker looks further (your note says what). none: see note: no option; your note says what to do.",
-  [NOTE_ONLY]: "none: see note: you pick no option; the curator applies your note to the task.",
-  "research more": "research more: the worker researches further before you decide; your note says what to look at.",
+  options: "The options the worker found, with what each costs. Tapping one sets its choice and fills the note with it; you can still change both. The dot marks the worker's recommendation.",
+  presetDot: "The dot marks the worker's recommendation.",
+  packetNote: "Your note goes to the curator. With go it is the design to build: the curator writes it at the top of the task. go needs one. Ctrl+Enter (Cmd+Enter on a Mac) confirms; Enter adds a line.",
   packetBody: "The worker's full packet: findings, details and trade-offs.",
   images: "Screenshots from the worker. Tap one to open it in the viewer: a tap on the image zooms to 100%, arrows or a swipe go to the next, Esc or a tap outside closes.",
   links: "The branch with the work, and the diff when there is one.",
@@ -158,7 +155,7 @@ const BOX = {
 // [path, label x, label y, anchor, label, help, label runs up the lane, dashed]
 const EDGES = [
   ["M200,56 V88", 206, 76, "start", "curator", "Filed to Triage: the curator proposes a review."],
-  ["M200,136 V168", 206, 156, "start", "you decided", "Triage to Decided: you confirmed the card, or picked a packet option. Undo takes it back."],
+  ["M200,136 V168", 206, 156, "start", "you decided", "Triage to Decided: you confirmed a card or a design packet. Undo takes it back."],
   ["M200,216 V248", 206, 236, "start", "curator applied", "Decided to Ready: the curator wrote your go or design to the board."],
   ["M140,180 L102,66", 121, 196, "middle", "applied", "Decided to On hold, Backlog or Obsolete: the curator wrote your decision to the board."],
   ["M140,188 L102,134", null],
@@ -243,8 +240,8 @@ const KEY_HELP = [
   ["j / ↓, k / ↑", "next / previous card"],
   ["g d h b o", "go, design, on hold, backlog, obsolete"],
   ["0 1 2 3", "priority P0-P3 (go, design, on hold)"],
-  ["a", "fill in the curator's proposal (does not confirm)"],
-  ["1-4, o, r, s", "packet: an option, obsolete, research more, none: see note"],
+  ["a", "fill in the curator's proposal, or the worker's recommended option (does not confirm)"],
+  ["p", "packet: fill in the next option (choice and note)"],
   ["e", "expand or collapse the description"],
   ["n", "write in the note; Esc leaves it"],
   ["Ctrl+Enter / Cmd+Enter", "confirm (Backlog: bring in), in the note or not; the next card becomes current. Enter and Shift+Enter never confirm"],
@@ -348,7 +345,7 @@ async function undoPacket(id) {
   const d = p && p.decision;
   try {
     await api("/api/packets/" + encodeURIComponent(id) + "/undo", { method: "POST" });
-    if (d) packetPicks[id] = { choice: d.choice, note: d.note };
+    if (d) packetPicks[id] = { choice: d.choice, priority: d.priority, note: d.note, preset: d.preset || null };
   } catch (err) {
     showErr(id, err.message);
   }
@@ -452,9 +449,16 @@ function onKey(e) {
     return Boolean(ta);
   }
   if (el.classList.contains("packet")) {
-    if (/^[1-4]$/.test(k)) return press(".options [data-pchoice]:nth-child(" + k + ")");
-    const extra = { o: "obsolete", r: "research more", s: NOTE_ONLY }[k];
-    return extra ? press('[data-pchoice="' + extra + '"]') : false;
+    if (KEY_CHOICE[k]) return press('[data-ppick=choice][data-v="' + KEY_CHOICE[k] + '"]');
+    if (/^[0-3]$/.test(k)) return press('[data-ppick=priority][data-v="P' + k + '"]');
+    const btns = [...el.querySelectorAll("[data-preset]")];
+    if (k === "a") return press("[data-preset].rec");
+    if (k === "p" && btns.length) {
+      const at = btns.findIndex((b) => b.classList.contains("on"));
+      btns[(at + 1) % btns.length].click();
+      return true;
+    }
+    return false;
   }
   if (KEY_CHOICE[k]) return press('[data-pick=choice][data-v="' + KEY_CHOICE[k] + '"]');
   if (/^[0-3]$/.test(k)) return press('[data-pick=priority][data-v="P' + k + '"]');
@@ -755,12 +759,12 @@ function renderStatus() {
 
 // --- triage -----------------------------------------------------------------
 
-function chips(kind, list, chosen, proposed, id) {
+function chips(kind, list, chosen, proposed, id, attr = "pick") {
   return list
     .map(
       (v) =>
         '<button class="chip' + (v === chosen ? " on" : "") + (v === proposed ? " proposed" : "") +
-        '" data-pick="' + kind + '" data-id="' + esc(id) + '" data-v="' + v + '" title="' + esc(HELP[v] + (v === proposed ? " The curator proposes this." : "")) + '">' + label(v) +
+        '" data-' + attr + '="' + kind + '" data-id="' + esc(id) + '" data-v="' + v + '" title="' + esc(HELP[v] + (v === proposed ? " The curator proposes this." : "")) + '">' + label(v) +
         (v === proposed ? '<span class="dot" aria-label="curator\'s proposal"></span>' : "") + "</button>",
     )
     .join("");
@@ -1163,14 +1167,17 @@ function packetHead(p) {
   );
 }
 function packetCard(p) {
-  const rec = p.options.find((o) => o.recommended);
-  const k = packetPicks[p.taskId] || (packetPicks[p.taskId] = { choice: rec ? rec.label : null, note: "" });
+  // The recommended option is marked, not picked (Nil, 2026-10-20).
+  const board = PRIORITIES.includes(p.priority) ? p.priority : null;
+  const k = packetPicks[p.taskId] || (packetPicks[p.taskId] = { choice: null, priority: board, note: "", preset: null });
   const opt = (o) =>
-    '<button class="option' + (k.choice === o.label ? " on" : "") + '" data-pchoice="' + esc(o.label) + '" data-id="' + esc(p.taskId) + '"' +
-    ' title="' + esc(o.label + (o.cost ? ": " + o.cost : "") + (o.recommended ? " The worker recommends this." : "")) + '">' +
-    "<b>" + esc(o.label) + "</b>" + (o.recommended ? '<span class="dot"></span>' : "") + (o.cost ? '<span class="cost">' + esc(o.cost) + "</span>" : "") + "</button>";
-  const extra = (c) =>
-    '<button class="chip' + (k.choice === c ? " on" : "") + '" data-pchoice="' + c + '" data-id="' + esc(p.taskId) + '"' + tip(c) + ">" + c + "</button>";
+    '<button class="option' + (k.preset === o.label ? " on" : "") + (o.recommended ? " rec" : "") + '" data-preset="' + esc(o.label) + '" data-id="' + esc(p.taskId) + '"' +
+    ' title="' + esc(o.label + (o.cost ? ": " + o.cost : "") + ". Sets " + label(o.decision) + " and fills the note." + (o.recommended ? " The worker recommends this." : "")) + '">' +
+    "<b>" + esc(o.label) + "</b>" + (o.recommended ? '<span class="dot" aria-label="worker\'s recommendation"></span>' : "") +
+    '<span class="cost">→ ' + esc(label(o.decision)) + (o.cost ? " · " + esc(o.cost) : "") + "</span></button>";
+  const pickRow = (name, kind, list) =>
+    '<div class="row"><span class="label"' + tip(kind) + ">" + name + " " + q("p" + kind, p.taskId) + "</span>" +
+    helpBox([kind].concat(list), "p" + kind, p.taskId) + chips(kind, list, k[kind], undefined, p.taskId, "ppick") + "</div>";
   let links = "";
   if (p.branch) links += "<span>Branch <code>" + esc(p.branch) + "</code></span>";
   if (p.diffUrl) links += '<a href="' + esc(p.diffUrl) + '" target="_blank" rel="noopener">Diff</a>';
@@ -1180,15 +1187,15 @@ function packetCard(p) {
     (p.body ? details("packet:" + p.taskId, "packetBody", "The packet", '<div class="mdbody">' + md(p.body) + "</div>") : "") +
     imagesHtml("packets", p.taskId, p.images) +
     (links ? '<div class="links"' + tip("links") + ">" + links + "</div>" : "") +
-    '<div class="row"><span class="label"' + tip("options") + ">Options " + q("options", p.taskId) + "</span>" + helpBox(["options", "dot"], "options", p.taskId) +
+    '<div class="row"><span class="label"' + tip("options") + ">Options " + q("options", p.taskId) + "</span>" + helpBox(["options", "presetDot"], "options", p.taskId) +
     '<div class="options">' + p.options.map(opt).join("") + "</div></div>" +
-    '<div class="row"><span class="label"' + tip("extras") + ">Or " + q("extras", p.taskId) + "</span>" + helpBox(EXTRA_CHOICES, "extras", p.taskId) +
-    EXTRA_CHOICES.map(extra).join("") + "</div>" +
-    '<textarea rows="1" placeholder="Note (needed for none: see note)" data-pnote="' + esc(p.taskId) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
+    pickRow("Choice", "choice", CHOICES) +
+    (tagged(k.choice) ? pickRow("Priority", "priority", PRIORITIES) : "") +
+    '<textarea rows="1" placeholder="Note for the curator (go: the design to build)" data-pnote="' + esc(p.taskId) + '"' + tip("packetNote") + ">" + esc(k.note) + "</textarea>" +
     '<div class="err" data-err="' + esc(p.taskId) + '"></div>' +
     '<div class="actions"><button class="btn primary" data-pdecide="' + esc(p.taskId) + '"' + tip("packetConfirm") + ">Confirm</button>" +
     '<button class="btn ghost" data-later="' + esc(p.taskId) + '"' + tip("later") + ">Later</button>" + q("pactions", p.taskId) + "</div>" +
-    helpBox(["packetConfirm", "later", "note"], "pactions", p.taskId) + "</div>"
+    helpBox(["packetConfirm", "later", "packetNote"], "pactions", p.taskId) + "</div>"
   );
 }
 function decidedPacketCard(p) {
@@ -1201,7 +1208,8 @@ function decidedPacketCard(p) {
   const rec = p.options.find((o) => o.recommended);
   let h =
     cardOpen(p.taskId, "packet") + packetHead(p) + '<div class="question">' + esc(p.question) + "</div>" +
-    '<div class="why"><span class="label"' + tip("decision") + ">Your decision</span><br><b>" + esc(d.choice) + "</b>" +
+    '<div class="why"><span class="label"' + tip("decision") + ">Your decision</span><br><b>" + esc(summary(d)) + "</b>" +
+    (d.preset ? ' <span class="small">from option ' + esc(d.preset) + "</span>" : "") +
     (rec ? ' <span class="small">(worker recommended ' + esc(rec.label) + ")</span>" : "") + (d.note ? "<br>" + esc(d.note) : "") + "</div>" +
     '<div class="meta">' + status + "</div>";
   h += '<div class="err" data-err="' + esc(p.taskId) + '"></div><div class="actions"><button class="btn ghost" data-pundo="' + esc(p.taskId) + '"' + tip(s === "applied" ? "reopen" : "undo") + ">Undo</button></div>";
@@ -1668,14 +1676,20 @@ document.addEventListener("click", async (e) => {
       delete backlogPicks[id];
     }, "Brought in: " + id, () => undoTriage(id));
   }
-  if (d.pchoice) {
-    packetPicks[d.id].choice = d.pchoice;
+  if (d.preset) {
+    const o = packets.find((x) => x.taskId === d.id).options.find((x) => x.label === d.preset);
+    Object.assign(packetPicks[d.id], { choice: o.decision, note: o.note, preset: o.label });
+    return render();
+  }
+  if (d.ppick) {
+    packetPicks[d.id][d.ppick] = d.v;
     return render();
   }
   if (d.pdecide) {
     const k = packetPicks[d.pdecide];
-    if (!k.choice) return showErr(d.pdecide, "Pick an option first.");
-    if (k.choice === NOTE_ONLY && !k.note.trim()) return showErr(d.pdecide, "Write the note first.");
+    if (!k.choice) return showErr(d.pdecide, "Pick a choice or an option first.");
+    if (tagged(k.choice) && !k.priority) return showErr(d.pdecide, "Pick a priority first.");
+    if (k.choice === "go" && !k.note.trim()) return showErr(d.pdecide, "go needs a note: the design to build. An option fills it.");
     const id = d.pdecide;
     return sendOff(id, t, async () => {
       await api("/api/packets/" + encodeURIComponent(id) + "/decide", { method: "POST", body: k });

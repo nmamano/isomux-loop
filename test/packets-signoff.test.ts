@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { sniff } from "../src/images";
-import { NOTE_ONLY, PacketStore, packetState } from "../src/packets";
+import { PacketStore, packetState } from "../src/packets";
 import { guessAudience, SignoffStore, signoffState, withAudience } from "../src/signoff";
 import { ValidationError } from "../src/store";
 import { tempDir } from "./tmp";
@@ -13,56 +13,77 @@ const packet = (over: Record<string, unknown> = {}) => ({
   taskId: "abc12345",
   question: "Which layout?",
   options: [
-    { label: "Grid", cost: "1 day", recommended: true },
-    { label: "List", cost: "2 h" },
+    { label: "Grid", cost: "1 day", recommended: true, decision: "go", note: "Build the grid." },
+    { label: "List", cost: "2 h", decision: "design" },
   ],
   body: "## Findings\n- one",
   ...over,
 });
 
 describe("packets", () => {
-  test("a packet takes 2-4 options, at most one recommended, no reserved labels", () => {
+  test("a packet takes 2-4 options, at most one recommended, each with a choice; the note defaults to the label", () => {
     const s = new PacketStore(tempDir());
-    expect(() => s.put(packet({ options: [{ label: "A" }] }), task)).toThrow(ValidationError);
-    expect(() => s.put(packet({ options: [{ label: "A", recommended: true }, { label: "B", recommended: true }] }), task)).toThrow(ValidationError);
-    expect(() => s.put(packet({ options: [{ label: "A" }, { label: "obsolete" }] }), task)).toThrow(ValidationError);
+    const opt = (label: string, over = {}) => ({ label, decision: "go", ...over });
+    expect(() => s.put(packet({ options: [opt("A")] }), task)).toThrow(ValidationError);
+    expect(() => s.put(packet({ options: [opt("A", { recommended: true }), opt("B", { recommended: true })] }), task)).toThrow(ValidationError);
+    expect(() => s.put(packet({ options: [opt("A"), { label: "B" }] }), task)).toThrow(ValidationError);
+    expect(() => s.put(packet({ options: [opt("A"), opt("B", { decision: "research more" })] }), task)).toThrow(ValidationError);
     expect(() => s.put(packet({ diffUrl: "javascript:alert(1)" }), task)).toThrow(ValidationError);
-    expect(s.put(packet(), task).title).toBe("Pick a layout");
+    const p = s.put(packet(), task);
+    expect(p.options.map((o) => [o.decision, o.note])).toEqual([["go", "Build the grid."], ["design", "List"]]);
   });
 
-  test("a decision names an option, obsolete, research more, or no option with a note", () => {
-    const dir = tempDir();
-    const s = new PacketStore(dir, () => 7);
+  test("a packet is decided like a triage card; an option only fills it", () => {
+    const s = new PacketStore(tempDir(), () => 7);
     s.put(packet(), task);
-    expect(() => s.decide("abc12345", { choice: "Table" })).toThrow(ValidationError);
-    expect(() => s.decide("abc12345", { choice: "rescope", note: "smaller" })).toThrow(ValidationError);
-    expect(() => s.decide("abc12345", { choice: NOTE_ONLY, note: " " })).toThrow(ValidationError);
-    s.decide("abc12345", { choice: NOTE_ONLY, note: "smaller" });
-    // A decision stored as rescope before 2026-10-19 reads as no option, note kept.
-    const file = join(dir, "packets.json");
-    const raw = JSON.parse(readFileSync(file, "utf8"));
-    raw.abc12345.decision.choice = "rescope";
-    writeFileSync(file, JSON.stringify(raw));
-    expect(new PacketStore(dir).get("abc12345")!.decision).toMatchObject({ choice: NOTE_ONLY, note: "smaller" });
-    expect(s.decide("abc12345", { choice: "research more" }).decision!.choice).toBe("research more");
-    expect(s.decide("abc12345", { choice: "List", note: "cheaper" }).decision).toEqual({ choice: "List", note: "cheaper", decidedAt: 7 });
+    expect(() => s.decide("abc12345", { choice: "Grid", note: "x" })).toThrow(ValidationError);
+    expect(() => s.decide("abc12345", { choice: "design", note: "x" })).toThrow(ValidationError);
+    expect(() => s.decide("abc12345", { choice: "go", priority: "P1", note: " " })).toThrow(ValidationError);
+    expect(s.decide("abc12345", { choice: "obsolete", priority: "P1" }).decision).toEqual({ choice: "obsolete", priority: null, note: "", decidedAt: 7 });
+    expect(s.decide("abc12345", { choice: "design", priority: "P2", preset: "Table" }).decision).toEqual({ choice: "design", priority: "P2", note: "", decidedAt: 7 });
+    expect(s.decide("abc12345", { choice: "go", priority: "P0", note: "Grid, 3 columns", preset: "Grid" }).decision).toEqual({
+      choice: "go",
+      priority: "P0",
+      note: "Grid, 3 columns",
+      preset: "Grid",
+      decidedAt: 7,
+    });
     expect(s.pending().map((p) => p.taskId)).toEqual(["abc12345"]);
     expect(s.markApplied("abc12345", 6, true)).toBe(false);
     expect(s.markApplied("abc12345", 7, true)).toBe(true);
     expect(packetState(s.get("abc12345")!)).toBe("applied");
   });
 
+  test("a packet stored before 2026-10-20 reads in the new shape", () => {
+    const dir = tempDir();
+    const old = (decision: unknown, undone?: unknown) => ({
+      taskId: "abc12345", title: "t", priority: "P2", question: "q", body: "", images: [], createdAt: 1, applied: null, decision, undone,
+      options: [{ label: "A: grid", cost: "", recommended: true }, { label: "B. Close, no change", cost: "", recommended: false }],
+    });
+    writeFileSync(join(dir, "packets.json"), JSON.stringify({
+      abc12345: old({ choice: "A: grid", note: "3 columns", decidedAt: 5 }, { choice: "rescope", note: "smaller", decidedAt: 4 }),
+      def67890: { ...old({ choice: "research more", note: "", decidedAt: 6 }), taskId: "def67890", priority: "P4" },
+    }));
+    const s = new PacketStore(dir);
+    const a = s.get("abc12345")!;
+    expect(a.options.map((o) => [o.decision, o.note])).toEqual([["go", "A: grid"], ["obsolete", "B. Close, no change"]]);
+    expect(a.decision).toEqual({ choice: "go", priority: "P2", note: "A: grid\n\n3 columns", preset: "A: grid", decidedAt: 5 });
+    expect(a.undone).toEqual({ choice: "design", priority: "P2", note: "smaller", decidedAt: 4 });
+    expect(s.get("def67890")!.decision).toEqual({ choice: "design", priority: null, note: "", decidedAt: 6 });
+    expect(JSON.parse(readFileSync(join(dir, "packets.json"), "utf8")).abc12345.decision.choice).toBe("go");
+  });
+
   test("undo: before and after the apply; a report of an undone decision still counts", () => {
     let t = 1;
     const s = new PacketStore(tempDir(), () => t++);
     s.put(packet(), task);
-    s.decide("abc12345", { choice: "Grid" });
+    s.decide("abc12345", { choice: "obsolete" });
     const at = s.get("abc12345")!.decision!.decidedAt;
     s.undo("abc12345");
     expect(packetState(s.get("abc12345")!)).toBe("open");
     expect(s.markApplied("abc12345", at, true)).toBe(true);
     expect([packetState(s.get("abc12345")!), typeof s.get("abc12345")!.reopenedAt]).toEqual(["open", "number"]);
-    s.decide("abc12345", { choice: "List" });
+    s.decide("abc12345", { choice: "backlog" });
     s.markApplied("abc12345", s.get("abc12345")!.decision!.decidedAt, true);
     expect([packetState(s.get("abc12345")!), s.get("abc12345")!.reopenedAt]).toEqual(["applied", undefined]);
     s.undo("abc12345");
@@ -85,7 +106,7 @@ describe("packets", () => {
     const s = new PacketStore(dir);
     s.put(packet(), task);
     s.addImage("abc12345", PNG, "before");
-    s.decide("abc12345", { choice: "Grid" });
+    s.decide("abc12345", { choice: "obsolete" });
     expect(existsSync(join(dir, "images", "packets", "abc12345", "1.png"))).toBe(true);
     const again = s.put(packet({ question: "Which layout, now?" }), task);
     expect([again.decision, again.images.length]).toEqual([null, 0]);

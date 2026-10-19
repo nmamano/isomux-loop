@@ -42,8 +42,8 @@ POST /api/proposals               {"proposals":[{"taskId","task":{"title","descr
                                   back under "refused".
 DELETE /api/items/:taskId         withdraw a card (the task closed meanwhile)
 GET  /api/decisions               decisions to write to the board (decided, or failed earlier), triage and packets:
-                                  each has "kind": "triage" (decision: choice, priority, note) or
-                                  "packet" (decision: choice = an option label, "obsolete", "research more" or "none: see note"; note)
+                                  each has "kind": "triage" or "packet"; both carry decision: choice, priority, note
+                                  (a packet's decision may name the option, "preset", Nil picked to fill it)
                                   Nil's note can change anything; apply it with judgement (isomux-curator skill)
 POST /api/applied                 {"results":[{"taskId","decidedAt","kind?":"triage|packet","ok":true|false,"error?"}]}
                                   decidedAt from /api/decisions; a decision Nil changed since then comes back as stale.
@@ -52,8 +52,12 @@ POST /api/applied                 {"results":[{"taskId","decidedAt","kind?":"tri
                                   A decision he undid after you read it still counts when you report it.
 
 Packets (for workers; a card for Nil in Triage):
-POST /api/packets                 {"taskId","question","options":[{"label","cost","recommended":true|false}] (2-4, at most one
-                                  recommended),"body":"markdown","branch?","diffUrl?"}. A new packet replaces the task's old one.
+POST /api/packets                 {"taskId","question","options":[{"label","cost","recommended":true|false,
+                                  "decision":"go|design|hold|backlog|obsolete","note?"}] (2-4, at most one recommended),
+                                  "body":"markdown","branch?","diffUrl?"}. A new packet replaces the task's old one.
+                                  Nil decides a packet like a triage card (choice, priority, note); an option is a preset:
+                                  picking it sets its decision and fills the note with its note (default: the label).
+                                  obsolete is always a choice: no option needs to offer "close, no change".
 POST /api/packets/:taskId/images  raw PNG/JPEG/WebP bytes, ?caption=..., one per call, at most 5 MB, 20 per packet
 GET  /api/packets                 all packets with their state
 

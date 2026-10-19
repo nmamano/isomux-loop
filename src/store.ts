@@ -20,7 +20,7 @@ export const LOOP_PRIORITIES = ["P0", "P1", "P2", "P3"] as const;
 export type Priority = (typeof PRIORITIES)[number];
 export type LoopPriority = (typeof LOOP_PRIORITIES)[number];
 export type Choice = (typeof CHOICES)[number];
-const tagged = (c: Choice) => (TAGGED as readonly string[]).includes(c);
+export const tagged = (c: Choice) => (TAGGED as readonly string[]).includes(c);
 
 export type TaskSnapshot = {
   title: string;
@@ -145,7 +145,7 @@ function migrate(state: State): boolean {
 }
 
 // A decision from the page or the Backlog tab: go/design/hold need P0-P3.
-function choiceAndPriority(r: Record<string, unknown>, allowed: readonly Choice[]): { choice: Choice; priority: LoopPriority | null } {
+export function choiceAndPriority(r: Record<string, unknown>, allowed: readonly Choice[]): { choice: Choice; priority: LoopPriority | null } {
   const choice = oneOf(r.choice, allowed, "choice");
   return { choice, priority: tagged(choice) ? oneOf(r.priority, LOOP_PRIORITIES, "priority") : null };
 }
