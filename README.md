@@ -1,6 +1,6 @@
 # isomux-loop
 
-The Isomux app for the continuous loop (design: isomux `internal-docs/continuous-loop-design.md`, task 178dbb5a).
+An [isomux](https://github.com/nmamano/isomux) app (registered in the office's apps) for the continuous loop (design: isomux `internal-docs/continuous-loop-design.md`, task 178dbb5a).
 
 - Pause stops dispatch and the tick (Isomux PM pauses around restarts and while batch work holds workers).
 - Dispatch, every 2 minutes: each free Isomux Worker among Workers 1..N (N set on the status page, 1 to 6, default 2) gets the next ready board task (priority, then age), claimed with a versioned PATCH, and a `/isomux-loop-worker <task id>` message.
