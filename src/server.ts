@@ -64,8 +64,8 @@ POST /api/backlog/:taskId/bring   {"choice":"go|design|hold","priority":"P0-P3",
 
 Loop (for Isomux PM):
 GET  /api/status                  pause state, last dispatch and tick, ready queue, holders, merging, and the
-                                  ten task states (board.states) with counts and tasks; done/obsolete list the last 20;
-                                  board.states.triage is the open cards of the Triage tab
+                                  task states (board.states) with counts and tasks; done/obsolete list the last 20;
+                                  board.states.triage and .decided are the open and the decided cards (the Triage and Decided tabs)
 POST /api/pause | /api/resume     pause stops dispatch and the tick; the first tick after a resume (within a minute) catches what stopped
                                   meanwhile. The tick is due an hour after the last one, also across app restarts (timers.json).
 POST /api/settings                {"workers": 1-6}: the loop dispatches to Workers 1..N (also on the status page).

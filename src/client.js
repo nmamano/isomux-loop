@@ -12,7 +12,7 @@ const TABS = [
   ["status", "Status"],
   ["open", "Triage"],
   ["decided", "Decided"],
-  ["applied", "Applied"],
+  ["applied", "Past decisions"],
   ["backlog", "Backlog"],
   ["signoff", "Sign-off"],
 ];
@@ -56,13 +56,13 @@ const HELP = {
   scope: "The new title and description the curator proposes for this task. go, design or on hold accepts them; your note can change them.",
   description: "The task's description on the board today.",
   note: "Optional words for the curator. A note can change anything, for example the scope; the curator applies it when it writes your decision to the board. Shift+Enter confirms; Enter adds a line.",
-  confirm: "Confirm (or Shift+Enter) saves your choice in the rows above. The curator writes it to the board a few minutes after your last decision. Undo is in the notice that follows, on the Decided tab, and after it is applied on the Applied tab.",
+  confirm: "Confirm (or Shift+Enter) saves your choice in the rows above. The curator writes it to the board a few minutes after your last decision. Undo is in the notice that follows, on the Decided tab, and after it is applied on the Past decisions tab.",
   later: "Later moves this card to the end of the list. Nothing is saved; the notice that follows has Undo.",
   undo: "Undo puts the card back in Triage with your choice and note filled in. The curator has not written it to the board yet. A Bring in goes back to the Backlog.",
   reopen: "Undo reopens the card in Triage with your choice and note filled in. The board keeps this decision until you decide again; the curator writes your next decision over it, so no separate revert is needed.",
   toastUndo: "Undo this (or Ctrl+Z / Cmd+Z while this notice shows): the card comes back with your choice and note filled in.",
   decision: "What you chose for this task.",
-  applied: "Applied: the curator wrote your decision to the board.",
+  applied: "Past decision: the curator wrote it to the board.",
   pending: "Decided: saved here; the curator writes it to the board a few minutes after your last decision.",
   failed: "Failed: the curator could not write it to the board. It tries again with the next batch.",
   pause: "Pause stops dispatch and the hourly tick. Workers keep the tasks they hold.",
@@ -76,13 +76,13 @@ const HELP = {
   merging: "Approved work that Isomux Main merges after CI.",
   signoff: "Sign-off: merged work with copy or a visible change whose item on the Sign-off tab waits for your approve or reject, or for its revert.",
   diagram: "Every task of the room is in exactly one of these states, read from the board now. Tap a state to list its tasks. Arrows show who moves a task on.",
-  other: "Tasks that fit none of the states, for example a tag the loop does not know, a [<class> | nil] task without a card, a decision that waits for the curator (Decided tab), or batch work outside the loop.",
+  other: "Tasks that fit none of the states, for example a tag the loop does not know, a [<class> | nil] task without a card, or batch work outside the loop.",
   recentDone: "The last 20 tasks closed as done, newest first.",
   recentObsolete: "The last 20 tasks closed as obsolete, newest first.",
   tabStatus: "The loop now: pause, workers, queue, merges and what waits for you.",
   tabOpen: "Cards that wait for your decision: workers' design packets first, then the curator's proposals.",
   tabDecided: "Your decisions that the curator has not written to the board yet. You can undo them.",
-  tabApplied: "Decisions the curator wrote to the board.",
+  tabApplied: "Decisions already on the board, newest first. Not a stage: each task is in the diagram where the board puts it. Undo reopens one in Triage.",
   tabBacklog: "The Backlog state: P4 tasks with no card. The loop never picks them. Bring one in as go, design or on hold, with a priority.",
   copyId: "Copy the task id.",
   keys: "Keyboard shortcuts for triage: j/k move between cards, g d h b o pick, 0-3 set the priority, Enter confirms. Press ? to show the list.",
@@ -124,6 +124,7 @@ const HELP = {
 const STATE_INFO = {
   filed: ["Filed", "Open, no tag in the title, no card in the app yet. The loop never picks it."],
   triage: ["Triage", "An open card in the Triage tab: a curator proposal, or a worker's design packet. A task with an open card counts here whatever the board says."],
+  decided: ["Decided", "You confirmed the card; the curator has not written it to the board yet. The same cards as the Decided tab, whatever the board says."],
   ready: ["Ready", "Tag [go | ready] or [design | ready], open, no assignee, P0-P3. The loop picks these."],
   working: ["Working", "In progress, assigned to an Isomux Worker."],
   merging: ["Merging", "Tag [<class> | merging], in progress, no assignee. Isomux Main merges it after CI."],
@@ -135,27 +136,28 @@ const STATE_INFO = {
   obsolete: ["Obsolete", "Status obsolete: closed, and reversible."],
 };
 const BOX = {
-  filed: [140, 10, 120], triage: [140, 90, 120], ready: [140, 170, 120], working: [140, 250, 120],
-  merging: [140, 330, 120], signoff: [140, 410, 120], push: [140, 490, 120], done: [140, 570, 120],
-  hold: [0, 40, 100], backlog: [0, 110, 100], obsolete: [300, 90, 100],
+  filed: [140, 10, 120], triage: [140, 90, 120], decided: [140, 170, 120], ready: [140, 250, 120], working: [140, 330, 120],
+  merging: [140, 410, 120], signoff: [140, 490, 120], push: [140, 570, 120], done: [140, 650, 120],
+  hold: [0, 40, 100], backlog: [0, 110, 100], obsolete: [0, 180, 100],
 };
 // [path, label x, label y, anchor, label, help, label runs up the lane, dashed]
 const EDGES = [
   ["M200,56 V88", 206, 76, "start", "curator", "Filed to Triage: the curator proposes a review."],
-  ["M200,136 V168", 206, 156, "start", "Nil", "Triage to Ready: you confirm go or design with a priority, or pick a packet option."],
-  ["M200,216 V248", 206, 236, "start", "app", "Ready to Working: the app gives it to a free worker."],
-  ["M200,296 V328", 206, 316, "start", "approved", "Working to Merging: the reviewer approved the work."],
-  ["M200,376 V408", 206, 396, "start", "to sign off", "Merging to Sign-off: merged, and it has copy or a visible change."],
-  ["M260,352 H290 V512 H262", 295, 440, "start", "nothing to sign off", "Merging to Push: merged, with nothing to sign off."],
-  ["M200,456 V488", 206, 476, "start", "approved", "Sign-off to Push: approved; comments become a copy-edits task."],
-  ["M200,536 V568", 206, 556, "start", "pushed", "Push to Done: Isomux Main reported the push."],
-  ["M140,104 L102,68", 121, 115, "middle", "Nil", "Triage to On hold or Backlog: your decision."],
-  ["M140,120 L102,128", null],
-  ["M260,112 H298", 279, 106, "middle", "Nil", "Triage to Obsolete: you close it."],
-  ["M260,272 H284 V128 H262", 289, 200, "start", "packet", "Working to Triage: the worker hit a design decision and sent you a packet."],
-  ["M140,352 H120 V204 H138", 116, 280, "middle", "CI red", "Merging to Ready: CI failed because of the branch; it goes back to the queue.", true],
-  ["M140,432 H108 V190 H138", 104, 330, "middle", "rejected, reverted", "Sign-off to Ready: you rejected it, Isomux Main reverted it, and it goes back to the queue with your note.", true],
-  ["M140,444 H94 V176 H138", 90, 330, "middle", "files a task", "Approving with comments files a new copy-edits task, which enters Ready. The approved task itself goes on to Done.", true, true],
+  ["M200,136 V168", 206, 156, "start", "you decided", "Triage to Decided: you confirmed the card, or picked a packet option. Undo takes it back."],
+  ["M200,216 V248", 206, 236, "start", "curator applied", "Decided to Ready: the curator wrote your go or design to the board."],
+  ["M140,180 L102,66", 121, 196, "middle", "applied", "Decided to On hold, Backlog or Obsolete: the curator wrote your decision to the board."],
+  ["M140,188 L102,134", null],
+  ["M140,201 H102", null],
+  ["M200,296 V328", 206, 316, "start", "app", "Ready to Working: the app gives it to a free worker."],
+  ["M200,376 V408", 206, 396, "start", "approved", "Working to Merging: the reviewer approved the work."],
+  ["M200,456 V488", 206, 476, "start", "to sign off", "Merging to Sign-off: merged, and it has copy or a visible change."],
+  ["M260,432 H290 V592 H262", 295, 520, "start", "nothing to sign off", "Merging to Push: merged, with nothing to sign off."],
+  ["M200,536 V568", 206, 556, "start", "approved", "Sign-off to Push: approved; comments become a copy-edits task."],
+  ["M200,616 V648", 206, 636, "start", "pushed", "Push to Done: Isomux Main reported the push."],
+  ["M260,352 H284 V112 H262", 289, 230, "start", "packet", "Working to Triage: the worker hit a design decision and sent you a packet."],
+  ["M140,432 H120 V284 H138", 116, 360, "middle", "CI red", "Merging to Ready: CI failed because of the branch; it goes back to the queue.", true],
+  ["M140,512 H108 V270 H138", 104, 410, "middle", "rejected, reverted", "Sign-off to Ready: you rejected it, Isomux Main reverted it, and it goes back to the queue with your note.", true],
+  ["M140,524 H94 V256 H138", 90, 410, "middle", "files a task", "Approving with comments files a new copy-edits task, which enters Ready. The approved task itself goes on to Done.", true, true],
 ];
 let pickedState = null;
 
@@ -178,7 +180,7 @@ function diagram(states) {
       '<text x="' + (x + w / 2) + '" y="' + (y + 19) + '" text-anchor="middle" font-size="12" font-weight="600">' + esc(label) + "</text>" +
       '<text x="' + (x + w / 2) + '" y="' + (y + 36) + '" text-anchor="middle" font-size="13">' + n + "</text></g>";
   }).join("");
-  return '<svg class="diagram" viewBox="0 0 400 616" role="img" aria-label="Task states">' + marker + edges + boxes + "</svg>";
+  return '<svg class="diagram" viewBox="0 0 400 696" role="img" aria-label="Task states">' + marker + edges + boxes + "</svg>";
 }
 function briefLine(t) {
   const when = t.closedAt ? " · closed " + clock(t.closedAt) : "";
@@ -587,6 +589,11 @@ function triageCount() {
   for (const p of packets) if (p.state === "open") ids.add(p.taskId);
   return ids.size;
 }
+function decidedCount() {
+  const ids = new Set(items.filter((i) => ["decided", "failed"].includes(itemState(i))).map((i) => i.taskId));
+  for (const p of packets) if (p.state === "decided" || p.state === "failed") ids.add(p.taskId);
+  return ids.size;
+}
 function signoffCount() {
   return signoffData.items.filter((x) => x.state === "waiting" || x.state === "rejected").length;
 }
@@ -594,7 +601,7 @@ function renderTabs() {
   const pc = (st) => packets.filter((p) => st.includes(p.state)).length;
   const n = {
     open: triageCount(),
-    decided: (counts.decided || 0) + (counts.failed || 0) + pc(["decided", "failed"]),
+    decided: decidedCount(),
     applied: (counts.applied || 0) + pc(["applied"]),
     signoff: signoffCount(),
     backlog: backlogTasks.length,
@@ -735,7 +742,7 @@ function decidedCard(i) {
   const d = i.decision;
   const s = itemState(i);
   const status =
-    s === "applied" ? '<span class="ok"' + tip("applied") + ">Applied</span>"
+    s === "applied" ? '<span class="ok"' + tip("applied") + ">Past decision</span>"
     : s === "failed" ? '<span class="warn"' + tip("failed") + ">Failed: " + esc(i.applied.error || "no reason given") + "</span>"
     : "<span" + tip("pending") + ">Decided: waiting for the curator</span>";
   const stateKey = s === "applied" ? "applied" : s === "failed" ? "failed" : "pending";
@@ -856,7 +863,7 @@ function decidedPacketCard(p) {
   const d = p.decision;
   const s = p.state;
   const status =
-    s === "applied" ? '<span class="ok"' + tip("applied") + ">Applied</span>"
+    s === "applied" ? '<span class="ok"' + tip("applied") + ">Past decision</span>"
     : s === "failed" ? '<span class="warn"' + tip("failed") + ">Failed: " + esc(p.applied.error || "no reason given") + "</span>"
     : "<span" + tip("pending") + ">Decided: waiting for the curator</span>";
   const rec = p.options.find((o) => o.recommended);
@@ -1059,7 +1066,7 @@ function render() {
   syncCurrent();
   if (pulsing) {
     pulsing = false;
-    for (const sel of ["#side g.st-triage", '#tabs button[data-tab="open"]', '#tabs button[data-tab="decided"]', '#tabs button[data-tab="backlog"]'])
+    for (const sel of ["#side g.st-triage", "#side g.st-decided", '#tabs button[data-tab="open"]', '#tabs button[data-tab="decided"]', '#tabs button[data-tab="backlog"]'])
       document.querySelector(sel)?.classList.add("pulse");
   }
   document.body.insertAdjacentHTML("beforeend", document.getElementById("keys") ? "" : keysBox());

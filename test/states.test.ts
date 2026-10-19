@@ -15,7 +15,8 @@ describe("classify", () => {
     const cases: [Partial<Task> & { title: string }, Card, string][] = [
       [{ title: "untagged" }, null, "filed"],
       [{ title: "untagged" }, "open", "triage"],
-      [{ title: "untagged" }, "decided", "other"],
+      [{ title: "untagged" }, "decided", "decided"],
+      [{ title: "[go | ready] x", status: "in_progress", assignee: "Isomux Worker 1" }, "decided", "decided"],
       [{ title: "[go | ready] x" }, null, "ready"],
       [{ title: "[auto | ready] x" }, null, "ready"],
       [{ title: "[design | ready] x", priority: "P0" }, null, "ready"],
@@ -31,7 +32,7 @@ describe("classify", () => {
       [{ title: "[go | ready] x", priority: "P4" }, null, "backlog"],
       [{ title: "untagged", priority: "P4" }, null, "backlog"],
       [{ title: "untagged", priority: "P4" }, "open", "triage"],
-      [{ title: "untagged", priority: "P4" }, "decided", "other"],
+      [{ title: "untagged", priority: "P4" }, "decided", "decided"],
       [{ title: "[go | merging] x", status: "done" }, null, "done"],
       [{ title: "x", status: "obsolete" }, null, "obsolete"],
       [{ title: "[go | soak until 10-25] x" }, null, "other"],
@@ -73,7 +74,7 @@ describe("state views", () => {
       task({ title: "untagged", priority: "P4" }),
       task({ title: "[go | merging] x", status: "done" }),
     ];
-    const decided = task({ title: "untagged" });
+    const decided = task({ title: "untagged", status: "in_progress", assignee: "Isomux Worker 1" });
     const plain = task({ title: "[go | ready] y", status: "in_progress", assignee: "Isomux Worker 1" });
     const cards = new Map<string, Card>([...withCard.map((t) => [t.id, "open"] as [string, Card]), [decided.id, "decided"]]);
     const v = stateViews([...withCard, decided, plain], cards, () => undefined, new Set([withCard[5].id]));
@@ -81,6 +82,8 @@ describe("state views", () => {
     expect(v.triage.count).toBe(openCards.length);
     expect(v.triage.tasks.map((t) => t.id).sort()).toEqual(openCards.sort());
     expect(v.working.tasks.map((t) => t.id)).toEqual([plain.id]);
+    // The Decided state is exactly the decided cards, the same way.
+    expect(v.decided.tasks.map((t) => t.id)).toEqual([decided.id]);
   });
 });
 
