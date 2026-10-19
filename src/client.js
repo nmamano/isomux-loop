@@ -3,12 +3,14 @@ const PRIORITIES = ["P0", "P1", "P2", "P3", "P4"];
 // Nil, 2026-10-18: no taste class; an old taste proposal shows as decide.
 const CLASSES = ["auto", "decide", "authority"];
 const EXTRA_CHOICES = ["rescope", "obsolete", "research more"];
+const CLASS_LABEL = {};
 const OUTCOMES = ["keep", "rescope", "obsolete"];
 const TABS = [
   ["status", "Status"],
   ["open", "To review"],
   ["decided", "Decided"],
   ["applied", "Applied"],
+  ["backlog", "Backlog"],
   ["signoff", "Sign-off"],
 ];
 let tab = "status";
@@ -16,6 +18,8 @@ let items = [];
 let counts = {};
 let loopState = null;
 let packets = [];
+let backlogTasks = [];
+const backlogPicks = {};
 let signoffData = { items: [], push: { ok: false, reason: "" } };
 const later = new Set();
 const picks = {};
@@ -73,6 +77,8 @@ const HELP = {
   tabOpen: "Cards that wait for your decision: workers' design packets first, then the curator's proposals.",
   tabDecided: "Your decisions that the curator has not written to the board yet. You can undo them.",
   tabApplied: "Decisions the curator wrote to the board.",
+  tabBacklog: "Open P4 tasks: the loop never picks them. Bring one in to give it a priority and a class.",
+  bringIn: "Bring in: give this backlog task a priority (P0-P3) and a class. It goes to the curator like any triage decision, and you can undo it in Decided until then.",
   tabSignoff: "Merged copy and visible changes: approve or reject each before the push, then give the push go.",
   old: "The text before the change. Struck words went away.",
   pairImages: "The same screen before and after the change. Tap an image to open it full size. One comment covers the pair.",
@@ -179,7 +185,7 @@ function renderStates(b) {
   return h;
 }
 
-const TAB_HELP = { status: "tabStatus", open: "tabOpen", decided: "tabDecided", applied: "tabApplied", signoff: "tabSignoff" };
+const TAB_HELP = { status: "tabStatus", open: "tabOpen", decided: "tabDecided", applied: "tabApplied", backlog: "tabBacklog", signoff: "tabSignoff" };
 
 // title="" for hover.
 function tip(key) {
@@ -232,18 +238,20 @@ window.addEventListener("popstate", () => {
 });
 
 async function load() {
-  const [c, i, s, pk, so] = await Promise.allSettled([
+  const [c, i, s, pk, so, bl] = await Promise.allSettled([
     api("/api/summary"),
     api("/api/items?state=all"),
     api("/api/status"),
     api("/api/packets"),
     api("/api/signoff"),
+    api("/api/backlog"),
   ]);
   if (c.status === "fulfilled") counts = c.value;
   if (i.status === "fulfilled") items = i.value;
   if (s.status === "fulfilled") loopState = s.value;
   if (pk.status === "fulfilled") packets = pk.value;
   if (so.status === "fulfilled") signoffData = so.value;
+  if (bl.status === "fulfilled") backlogTasks = bl.value;
   render();
 }
 
@@ -261,6 +269,7 @@ function renderTabs() {
     decided: (counts.decided || 0) + (counts.failed || 0) + pc(["decided", "failed"]),
     applied: (counts.applied || 0) + pc(["applied"]),
     signoff: signoffData.items.filter((x) => x.state === "waiting").length,
+    backlog: backlogTasks.length,
   };
   document.getElementById("tabs").innerHTML = TABS.map(
     ([k, label]) =>
@@ -564,6 +573,33 @@ function diff(a, b) {
   }
   return [oldH, newH];
 }
+// --- backlog ------------------------------------------------------------------
+
+function renderBacklog() {
+  let h = '<div class="small"' + tip("tabBacklog") + ">" + backlogTasks.length + " open P4 tasks, oldest first. The loop never picks them. " + q("tabBacklog") + "</div>" + helpBox(["tabBacklog", "bringIn"], "tabBacklog");
+  if (!backlogTasks.length) return h + '<div class="empty">The backlog is empty.</div>';
+  for (const t of backlogTasks) {
+    const k = backlogPicks[t.id];
+    h += '<div class="card"><div class="meta"><span>Filed by ' + esc(t.createdBy || "unknown") + "</span><span>" + filed(t.createdAt) + "</span><span>Task " + esc(t.id) + "</span></div>" +
+      '<div class="title">' + esc(t.title) + "</div>" +
+      (t.description ? '<details><summary' + tip("description") + '>Description</summary><div class="desc">' + esc(t.description) + "</div></details>" : "");
+    if (!k) {
+      h += '<div class="actions"><button class="btn ghost" data-bring="' + esc(t.id) + '"' + tip("bringIn") + ">Bring in</button></div>";
+    } else {
+      const chipRow = (kind, list) =>
+        list.map((v) => '<button class="chip' + (k[kind] === v ? " on" : "") + '" data-bpick="' + kind + '" data-id="' + esc(t.id) + '" data-v="' + v + '"' + tip(v) + ">" + (CLASS_LABEL[v] || v) + "</button>").join("");
+      h += '<div class="row"><span class="label"' + tip("priority") + ">Priority</span>" + chipRow("priority", ["P0", "P1", "P2", "P3"]) + "</div>" +
+        '<div class="row"><span class="label"' + tip("class") + ">Class</span>" + chipRow("class", CLASSES) + "</div>" +
+        '<textarea rows="1" placeholder="Note for the curator (optional)" data-bnote="' + esc(t.id) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
+        '<div class="err" data-err="' + esc(t.id) + '"></div>' +
+        '<div class="actions"><button class="btn primary" data-bconfirm="' + esc(t.id) + '"' + tip("bringIn") + ">Bring in</button>" +
+        '<button class="btn ghost" data-bcancel="' + esc(t.id) + '">Cancel</button></div>';
+    }
+    h += "</div>";
+  }
+  return h;
+}
+
 // --- sign-off -----------------------------------------------------------------
 
 // Source files wrap prose at a fixed width; a single line break inside a
@@ -682,7 +718,8 @@ function render() {
   const el = document.getElementById("list");
   // Sign-off and Triage use a wide screen; the status page keeps its column.
   el.className = tab === "signoff" ? "wide" : tab === "status" ? "" : "medium";
-  el.innerHTML = tab === "status" ? renderStatus() : tab === "signoff" ? renderSignoff() : renderTriage();
+  el.innerHTML =
+    tab === "status" ? renderStatus() : tab === "signoff" ? renderSignoff() : tab === "backlog" ? renderBacklog() : renderTriage();
 }
 function showErr(id, msg) {
   const el = document.querySelector('[data-err="' + CSS.escape(id) + '"]');
@@ -723,6 +760,26 @@ document.addEventListener("click", async (e) => {
       showErr(id, err.message);
     }
   };
+  if (d.bring) {
+    backlogPicks[d.bring] = { priority: null, class: null, note: "" };
+    return render();
+  }
+  if (d.bcancel) {
+    delete backlogPicks[d.bcancel];
+    return render();
+  }
+  if (d.bpick) {
+    backlogPicks[d.id][d.bpick] = d.v;
+    return render();
+  }
+  if (d.bconfirm) {
+    const k = backlogPicks[d.bconfirm];
+    if (!k.priority || !k.class) return showErr(d.bconfirm, "Pick a priority and a class first.");
+    return act(d.bconfirm, async () => {
+      await api("/api/backlog/" + encodeURIComponent(d.bconfirm) + "/bring", { method: "POST", body: k });
+      delete backlogPicks[d.bconfirm];
+    });
+  }
   if (d.pchoice) {
     packetPicks[d.id].choice = d.pchoice;
     return render();
@@ -812,6 +869,7 @@ document.addEventListener("input", (e) => {
   if (ds.note !== undefined && picks[ds.note]) picks[ds.note].note = e.target.value;
   if (ds.pnote !== undefined && packetPicks[ds.pnote]) packetPicks[ds.pnote].note = e.target.value;
   if (ds.rnote !== undefined) rejectNotes[ds.rnote] = e.target.value;
+  if (ds.bnote !== undefined && backlogPicks[ds.bnote]) backlogPicks[ds.bnote].note = e.target.value;
   if (ds.comment !== undefined) {
     const [taskId, kind, n] = ds.comment.split(":");
     const c = soComments[taskId];

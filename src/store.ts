@@ -180,6 +180,29 @@ export class Store {
     return out;
   }
 
+  // Nil brings a P4 task in from the Backlog tab: a decided card, sent to the
+  // curator like any other triage decision.
+  bringIn(task: TaskSnapshot, taskId: string, raw: unknown): Item {
+    const existing = this.state.items[taskId];
+    if (existing && itemState(existing) !== "applied") throw new ValidationError("this task already has a card in Triage");
+    const r = (raw ?? {}) as Record<string, unknown>;
+    const priority = oneOf(r.priority, PRIORITIES, "priority");
+    if (priority === "P4") throw new ValidationError("bring it in at P0 to P3");
+    const cls = oneOf(r.class, CLASSES, "class");
+    const at = this.now();
+    this.state.items[taskId] = {
+      taskId,
+      task,
+      proposal: { priority, class: cls, outcome: "keep", why: "Nil brought it in from the backlog." },
+      proposedAt: at,
+      decision: { priority, class: cls, outcome: "keep", note: str(r.note, "note", 4000, true) ?? "", decidedAt: at },
+      applied: null,
+    };
+    this.state.notify.lastDecisionAt = at;
+    this.save();
+    return this.state.items[taskId];
+  }
+
   withdraw(taskId: string): boolean {
     if (!this.state.items[taskId]) return false;
     delete this.state.items[taskId];

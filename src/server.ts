@@ -48,6 +48,11 @@ POST /api/packets                 {"taskId","question","options":[{"label","cost
 POST /api/packets/:taskId/images  raw PNG/JPEG/WebP bytes, ?caption=..., one per call, at most 5 MB, 20 per packet
 GET  /api/packets                 all packets with their state
 
+Backlog (Nil's tab):
+GET  /api/backlog                 open P4 tasks with no card, oldest first
+POST /api/backlog/:taskId/bring   {"priority":"P0-P3","class","note?"}: a decided triage card that goes to the curator
+                                  with the next burst, like any triage decision
+
 Loop (for Isomux PM):
 GET  /api/status                  pause state, last dispatch and tick, ready queue, holders, merging, and the
                                   ten task states (board.states) with counts and tasks; done/obsolete list the last 20
@@ -221,6 +226,21 @@ async function loopStatus(): Promise<Record<string, unknown>> {
   return { paused: pause.paused, pausedSince: pause.since, workers: pause.workers, lastDispatch, lastTick, lastClassify, board, error, signoffWaiting };
 }
 
+// --- backlog -------------------------------------------------------------------
+// Open P4 tasks with no card, oldest first; Nil can bring one in from here.
+
+let backlogCache: { at: number; value: unknown[] } | null = null;
+async function backlog(): Promise<unknown[]> {
+  if (backlogCache && Date.now() - backlogCache.at < STATUS_CACHE_MS) return backlogCache.value;
+  const cards = cardIds();
+  const value = (await office.allTasks())
+    .filter((t) => t.status === "open" && t.priority === "P4" && (t.roomId ?? ROOM_ID) === ROOM_ID && !cards.has(t.id))
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .map((t) => ({ id: t.id, title: t.title, description: t.description ?? "", createdBy: (t as { createdBy?: string }).createdBy ?? "", createdAt: t.createdAt }));
+  backlogCache = { at: Date.now(), value };
+  return value;
+}
+
 // --- HTTP --------------------------------------------------------------------
 
 function json(data: unknown, status = 200): Response {
@@ -392,6 +412,23 @@ async function route(req: Request): Promise<Response> {
         return json(signoff.recordReject(taskId, note));
       }
     }
+  }
+
+  // Backlog
+  if (m === "GET" && path === "/api/backlog") return json(await backlog());
+  const bl = path.match(/^\/api\/backlog\/([^/]+)\/bring$/);
+  if (bl && m === "POST") {
+    const taskId = decodeURIComponent(bl[1]);
+    const t = await office.task(taskId).catch(() => null);
+    if (!t || t.status !== "open" || t.priority !== "P4") throw new ValidationError("this task is no longer an open P4 task");
+    const item = store.bringIn(
+      { title: t.title, description: t.description ?? "", priority: "P4", createdBy: (t as { createdBy?: string }).createdBy ?? "", createdAt: t.createdAt },
+      taskId,
+      await body(req),
+    );
+    backlogCache = null;
+    statusCache = null;
+    return json(item);
   }
 
   // Triage
