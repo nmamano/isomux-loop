@@ -86,6 +86,7 @@ const HELP = {
   tabApplied: "Decisions already on the board, newest first. Not a stage: each task is in the diagram where the board puts it. Undo reopens one in Triage.",
   tabBacklog: "The Backlog state: P4 tasks with no card. The loop never picks them. Bring one in as go, design or on hold, with a priority.",
   copyId: "Copy the task id.",
+  idLink: "Go to this task's card: it opens the tab that holds it and flashes the card.",
   keys: "Keyboard shortcuts for triage: j/k move between cards, g d h b o pick, 0-3 set the priority, Enter confirms. Press ? to show the list.",
   viewbar: "Sort and filter the cards. The tab count and the diagram stay the full total; the keys follow the order shown. Your browser keeps these until Clear.",
   search: "Matches the title, the description, the task id and the curator's reason. / puts the cursor here; Esc leaves.",
@@ -312,7 +313,7 @@ function showToast(text, undo) {
     document.body.insertAdjacentHTML("beforeend", '<div class="toast" id="toast" role="status" hidden></div>');
     el = document.getElementById("toast");
   }
-  el.innerHTML = "<span>" + esc(text) + "</span>" + (undo ? '<button class="btn ghost" data-toastundo="1"' + tip("toastUndo") + ">Undo</button>" : "");
+  el.innerHTML = "<span>" + linkIds(text) + "</span>" + (undo ? '<button class="btn ghost" data-toastundo="1"' + tip("toastUndo") + ">Undo</button>" : "");
   el.hidden = false;
   toast = { undo, timer: setTimeout(hideToast, 8000) };
 }
@@ -525,6 +526,52 @@ function syncToggleAll() {
 // glyphs as emoji.
 const COPY_ICON = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M11 3.5V3a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
 const DONE_ICON = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>';
+// --- task id links (Nil, 2026-10-20) ---------------------------------------------
+// A task id mentioned as a reference is a link to its card: a click opens the
+// tab that holds the card, scrolls to it and flashes it.
+function cardTab(id) {
+  const it = signoffData.items.find((x) => x.taskId === id);
+  if (it && (it.state === "waiting" || it.state === "rejected")) return "signoff";
+  if (pushTasks().some((x) => x.t.id === id)) return "push";
+  const i = items.find((x) => x.taskId === id);
+  const p = packets.find((x) => x.taskId === id);
+  const st = i ? itemState(i) : p ? p.state : null;
+  if (st === "open") return "open";
+  if (st === "decided" || st === "failed") return "decided";
+  if (st === "applied") return "applied";
+  if (backlogTasks.some((t) => t.id === id)) return "backlog";
+  return null;
+}
+function idLink(id) {
+  return cardTab(id)
+    ? '<a href="#" class="idlink" data-goto="' + esc(id) + '"' + tip("idLink") + ">" + esc(id) + "</a>" + copyButton(id)
+    : idCopy(id);
+}
+// Escaped text with every task id that has a card turned into a link.
+function linkIds(text) {
+  return esc(text).replace(/\b[0-9a-f]{8}\b/g, (id) => (cardTab(id) ? idLink(id) : id));
+}
+function gotoCard(id) {
+  const t = cardTab(id);
+  if (!t) return;
+  hideToast();
+  if (t !== tab) go(t);
+  const el = cardById(id);
+  if (!el) return showToast(id + " is hidden by the filters on this tab", null);
+  if (keyTabs()) {
+    const els = cardEls();
+    currentIndex = els.indexOf(el);
+    currentId = id;
+    for (const c of els) c.classList.toggle("current", c === el);
+  }
+  el.scrollIntoView({ block: "center" });
+  el.classList.remove("arrived");
+  void el.offsetWidth;
+  el.classList.add("arrived");
+}
+function copyButton(id) {
+  return '<button class="copyid" data-copy="' + esc(id) + '"' + tip("copyId") + ' aria-label="Copy the task id">' + COPY_ICON + "</button>";
+}
 function idCopy(id) {
   return esc(id) + '<button class="copyid" data-copy="' + esc(id) + '"' + tip("copyId") + ' aria-label="Copy the task id">' + COPY_ICON + "</button>";
 }
@@ -1182,7 +1229,7 @@ function pushBanner(goes) {
     '<div class="banner ' + (pt.ok ? "run" : "paused") + '"><div><b' + tip("push") + ">" +
     (pt.sha ? "Push up to <code>" + esc(sha8) + "</code>: " + goes + (goes === 1 ? " task" : " tasks") : "Push (" + pushTasks().length + ")") + "</b>" +
     '<div class="small"' + tip("sha") + ">main " + (last ? "<code>" + esc(last.slice(0, 10)) + "</code> · " + clock(so.lastSha.at) : "not reported yet") + "</div>" +
-    (pt.ok ? "" : '<div class="small">' + esc(pt.reason) + "</div>") +
+    (pt.ok ? "" : '<div class="small">' + linkIds(pt.reason) + "</div>") +
     '</div><span><button class="btn primary" data-push="1"' + (pt.ok ? "" : " disabled") + tip("push") + ">" + (pt.sha ? "Push up to " + esc(sha8) : "Push") + "</button> " + q("push") + "</span></div>" +
     helpBox(["push", "pushPoint", "sha"], "push") + '<div class="err" data-err="push"></div>'
   );
@@ -1191,11 +1238,11 @@ function pushCard({ t, u, it }, waitsFor) {
   const approved = it && it.state === "approved";
   const status = approved
     ? it.decision.edits
-      ? '<span class="ok"' + tip("editsFiled") + ">Approved, edits filed: task " + esc(it.decision.edits) + "</span>"
+      ? '<span class="ok"' + tip("editsFiled") + ">Approved, edits filed: task " + idLink(it.decision.edits) + "</span>"
       : '<span class="ok"' + tip("approvedSign") + ">Approved</span>"
     : u && u.sent ? "<span" + tip("sentPush") + ">Push sent, waiting for Isomux Main</span>"
     : "<span" + tip("nothingToSign") + ">Nothing to sign off</span>";
-  const wait = waitsFor ? ' <span class="warn"' + tip("waitsFor") + ">waits for " + esc(waitsFor) + "</span>" : "";
+  const wait = waitsFor ? ' <span class="warn"' + tip("waitsFor") + ">waits for " + idLink(waitsFor) + "</span>" : "";
   return cardOpen(t.id, "signoff-card") + '<div class="sotitle">' + esc(t.title) + "</div>" +
     '<div class="meta"><span>Task ' + idCopy(t.id) + "</span>" +
     (u ? "<span" + tip("sha") + ">commit <code>" + esc(u.commit.slice(0, 10)) + "</code></span><span>merged " + clock(u.at) + "</span>" : "") + status + wait + "</div>" +
@@ -1230,7 +1277,7 @@ function renderSignoff() {
     const stateText =
       it.state === "approved"
         ? it.decision.edits
-          ? '<span class="ok"' + tip("editsFiled") + ">Approved, edits filed: task " + esc(it.decision.edits) + "</span>"
+          ? '<span class="ok"' + tip("editsFiled") + ">Approved, edits filed: task " + idLink(it.decision.edits) + "</span>"
           : '<span class="ok"' + tip("approvedSign") + ">Approved</span>"
       : it.state === "rejected" ? '<span class="warn"' + tip("rejected") + ">Rejected, waiting for revert: " + esc(it.decision.note) + "</span>"
       : "<span" + tip("waitingSign") + ">Waiting for you</span>";
@@ -1399,6 +1446,11 @@ document.addEventListener("click", async (e) => {
     currentId = cardEl.dataset.card;
     currentIndex = cardEls().indexOf(cardEl);
     for (const el of cardEls()) el.classList.toggle("current", el === cardEl);
+  }
+  const gl = e.target.closest("[data-goto]");
+  if (gl) {
+    e.preventDefault();
+    return gotoCard(gl.dataset.goto);
   }
   const cp = e.target.closest("[data-copy]");
   if (cp) {

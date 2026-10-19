@@ -49,6 +49,8 @@
     body.split-on main.split-main { flex: 1; min-height: 0; width: 100%; padding: 0 12px; }
     body.split-on .split { height: 100%; }
   }
+  .idlink { color: var(--accent); text-decoration: none; border-bottom: 1px dotted currentColor; }
+  .idlink:hover { border-bottom-style: solid; }
   .copyid { border: 0; background: none; color: var(--muted); padding: 2px 3px; margin-left: 2px; cursor: pointer; vertical-align: -2px; border-radius: 4px; }
   .copyid:hover { color: var(--fg); background: var(--chip); }
   .copyid.done { color: var(--accent); }
