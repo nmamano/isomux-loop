@@ -57,7 +57,7 @@ const HELP = {
   resume: "Resume starts dispatch (every 2 minutes) and the hourly tick again.",
   pairs: "How many worker/reviewer pairs the loop uses: it gives new tasks to Workers 1 to N. Lowering it takes no task away.",
   runs: "Dispatch gives free workers the next ready task every 2 minutes. The tick nudges idle workers once an hour.",
-  classify: "Every 10 minutes, also while paused, the app looks for open tasks with no tag and no card and wakes the curator to propose them.",
+  classify: "Every 10 minutes, also while paused, the app looks for open tasks with no tag and no card and wakes the curator to propose them. It also withdraws undecided cards whose task closed meanwhile.",
   working: "Workers that hold a task now.",
   free: "Loop workers without a task. They get the next ready task at the next dispatch.",
   ready: "Tasks the loop can take now, in the order it takes them.",

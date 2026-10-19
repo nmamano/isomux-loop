@@ -153,3 +153,13 @@ export function unclassified(tasks: Task[], cards: Set<string>): Task[] {
     .filter((t) => inRoom(t) && t.status === "open" && parseTag(t.title) === null && !cards.has(t.id))
     .sort((a, b) => a.createdAt - b.createdAt);
 }
+
+// Undecided triage cards whose task closed (done or obsolete) or left the
+// board: Nil should not triage them. A decided card stays: it is his.
+export function staleCards(openCardIds: string[], tasks: Task[]): string[] {
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  return openCardIds.filter((id) => {
+    const t = byId.get(id);
+    return !t || t.status === "done" || t.status === "obsolete";
+  });
+}

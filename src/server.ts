@@ -1,7 +1,7 @@
 import { CLASSIFY_MS, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
 import { ClosedTimes } from "./closed-times";
 import { type ImageDir } from "./images";
-import { dispatch, status, tick, unclassified, type DispatchResult, type Status, type TickResult } from "./loop";
+import { dispatch, staleCards, status, tick, unclassified, type DispatchResult, type Status, type TickResult } from "./loop";
 import { httpOffice } from "./office";
 import { page } from "./page";
 import { PacketStore, packetState } from "./packets";
@@ -55,7 +55,8 @@ POST /api/settings                {"workers": 1-6}: the loop dispatches to Worke
                                   Lowering N takes no task away; a worker above N keeps its tick while it holds a loop task.
 POST /api/dispatch | /api/tick    run one now (both refuse while paused)
 POST /api/classify                run the curator wake now: every 10 minutes, also while paused, open tasks with no tag
-                                  and no card go to the curator (a task is announced again after an hour)
+                                  and no card go to the curator (a task is announced again after an hour); the same run
+                                  withdraws undecided triage cards whose task is done, obsolete or gone
 
 Sign-off before the push:
 POST /api/signoff                 worker at hand-off: {"taskId","title","summary?","copy":[{"where","old","new"}]}
@@ -118,7 +119,7 @@ async function runTick(): Promise<Run<TickResult> | null> {
 // announced again only after CLASSIFY_REMIND_MS, so a busy curator is not
 // messaged every 10 minutes about the same tasks.
 
-type ClassifyRun = { at: number; found: string[]; sent: string | null; error?: string };
+type ClassifyRun = { at: number; found: string[]; sent: string | null; withdrawn: string[]; error?: string };
 let lastClassify: ClassifyRun | null = null;
 const announced = new Map<string, number>();
 
@@ -131,7 +132,15 @@ function cardIds(): Set<string> {
 async function runClassify(): Promise<ClassifyRun> {
   const at = Date.now();
   try {
-    const found = unclassified(await office.allTasks(), cardIds());
+    const all = await office.allTasks();
+    // The same run withdraws undecided cards whose task closed meanwhile.
+    const withdrawn = staleCards(store.list("open").map((i) => i.taskId), all);
+    for (const id of withdrawn) store.withdraw(id);
+    if (withdrawn.length) {
+      statusCache = null;
+      console.log(`withdrew cards of closed tasks: ${withdrawn.join(", ")}`);
+    }
+    const found = unclassified(all, cardIds());
     const due = found.filter((t) => at - (announced.get(t.id) ?? 0) >= CLASSIFY_REMIND_MS);
     let sent: string | null = null;
     if (due.length > 0) {
@@ -143,9 +152,9 @@ async function runClassify(): Promise<ClassifyRun> {
         for (const t of found) announced.set(t.id, at);
       } else throw new Error("the message to the curator failed");
     }
-    lastClassify = { at, found: found.map((t) => t.id), sent };
+    lastClassify = { at, found: found.map((t) => t.id), sent, withdrawn };
   } catch (err) {
-    lastClassify = { at, found: [], sent: null, error: String(err instanceof Error ? err.message : err) };
+    lastClassify = { at, found: [], sent: null, withdrawn: [], error: String(err instanceof Error ? err.message : err) };
   }
   if (lastClassify.sent) console.log(`curator wake: ${lastClassify.found.join(", ")}`);
   return lastClassify;

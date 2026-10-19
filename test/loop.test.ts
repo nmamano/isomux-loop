@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dispatch, freeWorkers, parseTag, readyQueue, status, tick, unclassified } from "../src/loop";
+import { dispatch, freeWorkers, parseTag, readyQueue, staleCards, status, tick, unclassified } from "../src/loop";
 import type { Agent, Office, PatchResult, Task } from "../src/office";
 
 const ROOM = "e6818e47";
@@ -202,5 +202,16 @@ describe("curator wake", () => {
     expect(unclassified(tasks, new Set([card])).map((t) => t.title)).toEqual(
       [a, b].sort((x, y) => x.createdAt - y.createdAt).map((t) => t.title),
     );
+  });
+});
+
+describe("stale cards", () => {
+  test("cards whose task is done, obsolete or gone; open and in-progress tasks keep theirs", () => {
+    const open = task({ title: "a" });
+    const done = task({ title: "b", status: "done" });
+    const obsolete = task({ title: "c", status: "obsolete" });
+    const working = task({ title: "d", status: "in_progress" });
+    const ids = [open.id, done.id, obsolete.id, working.id, "gone1"];
+    expect(staleCards(ids, [open, done, obsolete, working])).toEqual([done.id, obsolete.id, "gone1"]);
   });
 });
