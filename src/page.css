@@ -28,7 +28,7 @@
   .title { font-weight: 600; margin: 6px 0; overflow-wrap: anywhere; }
   .why { margin: 8px 0; }
   .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
-  .rescope { border-left: 3px solid var(--accent); padding-left: 10px; margin: 8px 0; }
+  .proposed-scope { border-left: 3px solid var(--accent); padding-left: 10px; margin: 8px 0; }
   details { margin: 6px 0; }
   summary { color: var(--muted); cursor: pointer; font-size: 13px; }
   .desc { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; margin-top: 6px;

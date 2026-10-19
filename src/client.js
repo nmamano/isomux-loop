@@ -2,9 +2,10 @@
 const PRIORITIES = ["P0", "P1", "P2", "P3", "P4"];
 // Nil, 2026-10-18: no taste class; an old taste proposal shows as decide.
 const CLASSES = ["auto", "decide", "hold"];
-const EXTRA_CHOICES = ["rescope", "obsolete", "research more"];
+const NOTE_ONLY = "none: see note";
+const EXTRA_CHOICES = ["obsolete", "research more", NOTE_ONLY];
 const CLASS_LABEL = { hold: "on hold" };
-const OUTCOMES = ["keep", "rescope", "obsolete"];
+const OUTCOMES = ["keep", "obsolete"];
 const TABS = [
   ["status", "Status"],
   ["open", "Triage"],
@@ -40,8 +41,7 @@ const HELP = {
   decide: "decide: needs your design go/no-go. The loop may research it and write a decision packet first.",
   wasTaste: "The curator proposed taste, a class that no longer exists. It shows as decide; the curator will propose it again.",
   hold: "On hold (tag [hold | ...]): the loop never touches it. Also for work run outside the loop.",
-  keep: "keep: the task stays as it is, with the priority and class above.",
-  rescope: "rescope: the task is rewritten to the proposed scope, or to the scope in your note.",
+  keep: "keep: the task stays, with the priority and class above, and with the proposed title and scope when the card has them.",
   obsolete: "obsolete: the task is closed, with the reason. Reversible: it can be reopened.",
   priority: "Which priority the task gets. The loop takes P0 first, then P1 to P3, oldest first within one. P4 is backlog: never picked.",
   class: "What kind of work it is, which decides how far the loop goes alone.",
@@ -49,9 +49,9 @@ const HELP = {
   head: "Board: the task's priority and tag on the board now. Yours: what is selected in the rows below; it changes as you tap. The dot on a chip marks the curator's proposal. Nothing in these lines needs you: you decide with the rows below.",
   dot: "The dot marks the curator's proposal.",
   why: "The curator's reason for its proposal.",
-  scope: "The new title and description the curator proposes for this task.",
+  scope: "The new title and description the curator proposes for this task. Keep accepts them; your note can change them.",
   description: "The task's description on the board today.",
-  note: "Optional words for the curator, for example a different scope. It reads them when it writes your decision to the board.",
+  note: "Optional words for the curator. A note can change anything, for example the scope; the curator applies it when it writes your decision to the board.",
   confirm: "Confirm saves your choice in the rows above. The curator writes it to the board a few minutes after your last decision; until then you can undo it in Decided.",
   later: "Later moves this card to the end of the list. Nothing is saved.",
   undo: "Undo takes the decision back while the curator has not written it to the board yet.",
@@ -86,10 +86,11 @@ const HELP = {
   before: "The screen before the change.",
   after: "The screen after the change.",
   new: "The text after the change. Marked words are new.",
-  packet: "A design packet: a worker hit a decision that needs you. Pick an option (the dot marks the worker's recommendation), or rescope, obsolete, or research more.",
+  packet: "A design packet: a worker hit a decision that needs you. Pick an option (the dot marks the worker's recommendation), or obsolete, research more, or none: see note.",
   question: "The question the worker needs you to answer.",
   options: "The options the worker found, with what each costs. The dot marks its recommendation.",
-  extras: "rescope: rewrite the task (your note says how). obsolete: close it. research more: the worker looks further (your note says what).",
+  extras: "obsolete: close it. research more: the worker looks further (your note says what). none: see note: no option; your note says what to do.",
+  [NOTE_ONLY]: "none: see note: you pick no option; the curator applies your note to the task.",
   "research more": "research more: the worker researches further before you decide; your note says what to look at.",
   packetBody: "The worker's full packet: findings, details and trade-offs.",
   images: "Screenshots from the worker. Tap one to open it full size.",
@@ -398,8 +399,8 @@ function head(i, sel, showProposal) {
 function body(i) {
   const p = i.proposal;
   let h = '<div class="why"><span class="label"' + tip("why") + ">Why</span><br>" + esc(p.why) + "</div>";
-  if (p.outcome === "rescope" || p.title || p.scope) {
-    h += '<div class="rescope"><span class="label"' + tip("scope") + ">Proposed scope</span>";
+  if (p.title || p.scope) {
+    h += '<div class="proposed-scope"><span class="label"' + tip("scope") + ">Proposed scope</span>";
     if (p.title) h += '<div class="title">' + esc(p.title) + "</div>";
     if (p.scope) h += '<div class="desc">' + esc(p.scope) + "</div>";
     h += "</div>";
@@ -544,9 +545,9 @@ function packetCard(p) {
     (links ? '<div class="links"' + tip("links") + ">" + links + "</div>" : "") +
     '<div class="row"><span class="label"' + tip("options") + ">Options " + q("options", p.taskId) + "</span>" + helpBox(["options", "dot"], "options", p.taskId) +
     '<div class="options">' + p.options.map(opt).join("") + "</div></div>" +
-    '<div class="row"><span class="label"' + tip("extras") + ">Or " + q("extras", p.taskId) + "</span>" + helpBox(["rescope", "obsolete", "research more"], "extras", p.taskId) +
+    '<div class="row"><span class="label"' + tip("extras") + ">Or " + q("extras", p.taskId) + "</span>" + helpBox(EXTRA_CHOICES, "extras", p.taskId) +
     EXTRA_CHOICES.map(extra).join("") + "</div>" +
-    '<textarea rows="1" placeholder="Note (needed for rescope)" data-pnote="' + esc(p.taskId) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
+    '<textarea rows="1" placeholder="Note (needed for none: see note)" data-pnote="' + esc(p.taskId) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
     '<div class="err" data-err="' + esc(p.taskId) + '"></div>' +
     '<div class="actions"><button class="btn primary" data-pdecide="' + esc(p.taskId) + '"' + tip("packetConfirm") + ">Confirm</button>" +
     '<button class="btn ghost" data-later="' + esc(p.taskId) + '"' + tip("later") + ">Later</button>" + q("pactions", p.taskId) + "</div>" +
@@ -841,7 +842,7 @@ document.addEventListener("click", async (e) => {
   if (d.pdecide) {
     const k = packetPicks[d.pdecide];
     if (!k.choice) return showErr(d.pdecide, "Pick an option first.");
-    if (k.choice === "rescope" && !k.note.trim()) return showErr(d.pdecide, "A rescope needs a note with the new scope.");
+    if (k.choice === NOTE_ONLY && !k.note.trim()) return showErr(d.pdecide, "Write the note first.");
     return act(d.pdecide, async () => {
       await api("/api/packets/" + encodeURIComponent(d.pdecide) + "/decide", { method: "POST", body: k });
       later.delete(d.pdecide);
@@ -894,10 +895,6 @@ document.addEventListener("click", async (e) => {
   }
   if (d.decide) {
     const k = picks[d.decide];
-    if (k.outcome === "rescope") {
-      const i = items.find((x) => x.taskId === d.decide);
-      if (!i.proposal.title && !i.proposal.scope && !k.note.trim()) return showErr(d.decide, "A rescope needs a note with the new scope.");
-    }
     try {
       t.disabled = true;
       await api("/api/items/" + encodeURIComponent(d.decide) + "/decide", { method: "POST", body: k });

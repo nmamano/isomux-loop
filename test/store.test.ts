@@ -75,10 +75,19 @@ describe("store", () => {
     expect(store.pending().map((i) => i.taskId)).toEqual(["a"]);
   });
 
-  test("a rescope proposal needs a new title or scope", () => {
-    const { store } = setup();
-    expect(() => store.propose([proposal("a", { outcome: "rescope" })])).toThrow(ValidationError);
-    expect(store.propose([proposal("a", { outcome: "rescope", scope: "smaller" })]).created).toEqual(["a"]);
+  test("no rescope outcome: a keep carries the new title and scope; stored rescope cards migrate to keep", () => {
+    const { store, dir } = setup();
+    expect(() => store.propose([proposal("a", { outcome: "rescope", scope: "smaller" })])).toThrow(ValidationError);
+    store.propose([proposal("a", { scope: "smaller" }), proposal("b")]);
+    store.decide("b", decision);
+    expect(store.get("a")!.proposal.scope).toBe("smaller");
+    const file = join(dir, "triage.json");
+    const raw = JSON.parse(readFileSync(file, "utf8"));
+    raw.items.a.proposal.outcome = "rescope";
+    raw.items.b.decision.outcome = "rescope";
+    writeFileSync(file, JSON.stringify(raw));
+    const again = new Store(dir);
+    expect([again.get("a")!.proposal.outcome, again.get("a")!.proposal.scope, again.get("b")!.decision!.outcome]).toEqual(["keep", "smaller", "keep"]);
   });
 
   test("one notification per burst, after the quiet time", () => {

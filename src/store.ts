@@ -10,7 +10,10 @@ export const PRIORITIES = ["P0", "P1", "P2", "P3", "P4"] as const;
 // taste; the page shows it as decide. Nil, 2026-10-19: "authority" is now
 // "hold" (the loop never touches it); stored cards are migrated on load.
 export const CLASSES = ["auto", "decide", "hold"] as const;
-export const OUTCOMES = ["keep", "rescope", "obsolete"] as const;
+// Nil, 2026-10-19: no rescope outcome. A keep may carry a new title and/or
+// scope, and Nil's note can change anything; the curator applies both with
+// its judgement. Stored rescope cards are migrated to keep on load.
+export const OUTCOMES = ["keep", "obsolete"] as const;
 
 export type Priority = (typeof PRIORITIES)[number];
 export type TaskClass = (typeof CLASSES)[number] | "taste";
@@ -28,7 +31,7 @@ export type ProposalBody = {
   priority: Priority;
   class: TaskClass;
   outcome: Outcome;
-  // For a rescope: the new title (without the tag) and the new description.
+  // Optional, on keep: the new title (without the tag) and the new description.
   title?: string;
   scope?: string;
   why: string;
@@ -108,19 +111,23 @@ export function parseProposal(raw: unknown): Pick<Item, "taskId" | "task" | "pro
     scope: str(p.scope, "proposal.scope", 20000, true),
     why: str(p.why, "proposal.why", 2000)!,
   };
-  if (outcome === "rescope" && !proposal.title && !proposal.scope)
-    throw new ValidationError("a rescope needs proposal.title or proposal.scope");
   return { taskId, task, proposal };
 }
 
-function migrateAuthority(state: State): boolean {
+// Old names in stored cards: class authority is hold, outcome rescope is keep.
+function migrate(state: State): boolean {
   let changed = false;
   for (const i of Object.values(state.items))
-    for (const x of [i.proposal, i.decision] as { class: string }[])
+    for (const x of [i.proposal, i.decision] as { class: string; outcome: string }[]) {
       if (x?.class === "authority") {
         x.class = "hold";
         changed = true;
       }
+      if (x?.outcome === "rescope") {
+        x.outcome = "keep";
+        changed = true;
+      }
+    }
   return changed;
 }
 
@@ -137,7 +144,7 @@ export class Store {
     this.state = existsSync(this.file)
       ? (JSON.parse(readFileSync(this.file, "utf8")) as State)
       : { items: {}, notify: { lastDecisionAt: 0, lastSentAt: 0 } };
-    if (migrateAuthority(this.state)) this.save();
+    if (migrate(this.state)) this.save();
   }
 
   private save(): void {

@@ -7,7 +7,10 @@ import { checkTaskId, ImageDir, type Image } from "./images";
 import { readJson, writeJson } from "./json-file";
 import { ValidationError } from "./store";
 
-export const EXTRA_CHOICES = ["rescope", "obsolete", "research more"] as const;
+// Nil, 2026-10-19: no rescope. "none: see note" picks no option; the curator
+// applies the note with its judgement. A stored rescope choice migrates to it.
+export const NOTE_ONLY = "none: see note";
+export const EXTRA_CHOICES = ["obsolete", "research more", NOTE_ONLY] as const;
 
 export type Option = { label: string; cost: string; recommended: boolean };
 export type PacketDecision = { choice: string; note: string; decidedAt: number };
@@ -55,6 +58,9 @@ export class PacketStore {
   ) {
     this.file = join(dataDir, "packets.json");
     this.items = readJson<Record<string, Packet>>(this.file, {});
+    const old = Object.values(this.items).filter((p) => p.decision?.choice === "rescope");
+    for (const p of old) p.decision!.choice = NOTE_ONLY;
+    if (old.length) this.save();
     this.images = new ImageDir(join(dataDir, "images", "packets"));
   }
 
@@ -130,8 +136,8 @@ export class PacketStore {
     const choice = text(r.choice, "choice", 200);
     const note = text(r.note, "note", 4000, false);
     if (!p.options.some((o) => o.label === choice) && !(EXTRA_CHOICES as readonly string[]).includes(choice))
-      throw new ValidationError("choice must be one of the options, rescope, obsolete or research more");
-    if (choice === "rescope" && !note.trim()) throw new ValidationError("a rescope needs a note with the new scope");
+      throw new ValidationError(`choice must be one of the options, ${EXTRA_CHOICES.join(", ")}`);
+    if (choice === NOTE_ONLY && !note.trim()) throw new ValidationError(`"${NOTE_ONLY}" needs a note`);
     p.decision = { choice, note, decidedAt: this.now() };
     p.applied = null;
     this.save();

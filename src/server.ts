@@ -31,14 +31,15 @@ const HELP = `Loop app API. Base: ${local}
 Triage (for the curator):
 GET  /api/summary                 counts per state
 GET  /api/items?state=open|decided|applied|failed|all
-POST /api/proposals               {"proposals":[{"taskId","task":{"title","description","priority","createdBy","createdAt"},"proposal":{"priority":"P0-P4","class":"auto|decide|hold","outcome":"keep|rescope|obsolete","title?","scope?","why"}}]}
-                                  task.* is the board task as it is now. A rescope needs proposal.title and/or proposal.scope.
+POST /api/proposals               {"proposals":[{"taskId","task":{"title","description","priority","createdBy","createdAt"},"proposal":{"priority":"P0-P4","class":"auto|decide|hold","outcome":"keep|obsolete","title?","scope?","why"}}]}
+                                  task.* is the board task as it is now. A keep may carry a new proposal.title and/or proposal.scope.
                                   An item with a decision not yet applied is skipped; an applied item gets the new proposal and reopens.
                                   A P4 task is proposed only to promote it: a proposal keeping it at P4 comes back under "refused".
 DELETE /api/items/:taskId         withdraw a card (the task closed meanwhile)
 GET  /api/decisions               decisions to write to the board (decided, or failed earlier), triage and packets:
                                   each has "kind": "triage" (decision: priority, class, outcome, note) or
-                                  "packet" (decision: choice = an option label, "rescope", "obsolete" or "research more"; note)
+                                  "packet" (decision: choice = an option label, "obsolete", "research more" or "none: see note"; note)
+                                  Nil's note can change anything; apply it with judgement (isomux-curator skill)
 POST /api/applied                 {"results":[{"taskId","decidedAt","kind?":"triage|packet","ok":true|false,"error?"}]}
                                   decidedAt from /api/decisions; a decision Nil changed since then comes back as stale.
 

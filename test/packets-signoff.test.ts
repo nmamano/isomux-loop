@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { sniff } from "../src/images";
-import { PacketStore, packetState } from "../src/packets";
+import { NOTE_ONLY, PacketStore, packetState } from "../src/packets";
 import { SignoffStore, signoffState } from "../src/signoff";
 import { ValidationError } from "../src/store";
 import { tempDir } from "./tmp";
@@ -30,11 +30,20 @@ describe("packets", () => {
     expect(s.put(packet(), task).title).toBe("Pick a layout");
   });
 
-  test("a decision names an option or rescope/obsolete/research more; rescope needs a note", () => {
-    const s = new PacketStore(tempDir(), () => 7);
+  test("a decision names an option, obsolete, research more, or no option with a note", () => {
+    const dir = tempDir();
+    const s = new PacketStore(dir, () => 7);
     s.put(packet(), task);
     expect(() => s.decide("abc12345", { choice: "Table" })).toThrow(ValidationError);
-    expect(() => s.decide("abc12345", { choice: "rescope" })).toThrow(ValidationError);
+    expect(() => s.decide("abc12345", { choice: "rescope", note: "smaller" })).toThrow(ValidationError);
+    expect(() => s.decide("abc12345", { choice: NOTE_ONLY, note: " " })).toThrow(ValidationError);
+    s.decide("abc12345", { choice: NOTE_ONLY, note: "smaller" });
+    // A decision stored as rescope before 2026-10-19 reads as no option, note kept.
+    const file = join(dir, "packets.json");
+    const raw = JSON.parse(readFileSync(file, "utf8"));
+    raw.abc12345.decision.choice = "rescope";
+    writeFileSync(file, JSON.stringify(raw));
+    expect(new PacketStore(dir).get("abc12345")!.decision).toMatchObject({ choice: NOTE_ONLY, note: "smaller" });
     expect(s.decide("abc12345", { choice: "research more" }).decision!.choice).toBe("research more");
     expect(s.decide("abc12345", { choice: "List", note: "cheaper" }).decision).toEqual({ choice: "List", note: "cheaper", decidedAt: 7 });
     expect(s.pending().map((p) => p.taskId)).toEqual(["abc12345"]);
