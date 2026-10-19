@@ -17,6 +17,7 @@ describe("classify", () => {
       [{ title: "untagged" }, "open", "triage"],
       [{ title: "untagged" }, "decided", "other"],
       [{ title: "[auto | ready] x" }, null, "ready"],
+      [{ title: "[design | ready] x", priority: "P0" }, null, "ready"],
       [{ title: "[decide | ready] x", priority: "P0" }, null, "ready"],
       [{ title: "[taste | ready] x", priority: "P0" }, null, "other"],
       [{ title: "[auto | ready] x", status: "in_progress", assignee: "Isomux Worker 2" }, null, "working"],

@@ -1,7 +1,7 @@
 // The loop app's page: status, triage (proposals and packets) and sign-off. Plain JS, no build.
 const PRIORITIES = ["P0", "P1", "P2", "P3", "P4"];
-// Nil, 2026-10-18: no taste class; an old taste proposal shows as decide.
-const CLASSES = ["auto", "decide", "hold"];
+// Nil, 2026-10-18: no taste class; an old taste proposal shows as design.
+const CLASSES = ["auto", "design", "hold"];
 const NOTE_ONLY = "none: see note";
 const EXTRA_CHOICES = ["obsolete", "research more", NOTE_ONLY];
 const CLASS_LABEL = { hold: "on hold" };
@@ -43,8 +43,8 @@ const HELP = {
   P3: "P3: low. Taken when nothing above it waits.",
   P4: "P4: backlog. The loop never picks it.",
   auto: "auto: the loop does it from start to finish.",
-  decide: "decide: needs your design go/no-go. The loop may research it and write a decision packet first.",
-  wasTaste: "The curator proposed taste, a class that no longer exists. It shows as decide; the curator will propose it again.",
+  design: "design: needs your design go/no-go. The loop may research it and write a design packet first.",
+  wasTaste: "The curator proposed taste, a class that no longer exists. It shows as design; the curator will propose it again.",
   hold: "On hold (tag [hold | ...]): the loop never touches it. Also for work run outside the loop.",
   keep: "keep: the task stays, with the priority and class above, and with the proposed title and scope when the card has them.",
   obsolete: "obsolete: the task is closed, with the reason. Reversible: it can be reopened.",
@@ -122,7 +122,7 @@ const HELP = {
 const STATE_INFO = {
   filed: ["Filed", "Open, no tag in the title, no card in the app yet. The loop never picks it."],
   triage: ["Triage", "An open card in the Triage tab: a curator proposal, or a worker's design packet. A task with an open card counts here whatever the board says."],
-  ready: ["Ready", "Tag [auto | ready] or [decide | ready], open, no assignee, P0-P3. The loop picks these."],
+  ready: ["Ready", "Tag [auto | ready] or [design | ready], open, no assignee, P0-P3. The loop picks these."],
   working: ["Working", "In progress, assigned to an Isomux Worker."],
   merging: ["Merging", "Tag [<class> | merging], in progress, no assignee. Isomux Main merges it after CI."],
   signoff: ["Sign-off", "Merged, with copy or a visible change: its item on the Sign-off tab waits for your approve or reject, or for its revert. The board already says done."],
@@ -453,13 +453,13 @@ function row(label, kind, list, k, p, id) {
 }
 function openCard(i) {
   const wasTaste = i.proposal.class === "taste";
-  const p = wasTaste ? { ...i.proposal, class: "decide" } : i.proposal;
+  const p = wasTaste ? { ...i.proposal, class: "design" } : i.proposal;
   const k = picks[i.taskId] || (picks[i.taskId] = { priority: p.priority, class: p.class, outcome: p.outcome, note: "" });
   return (
     '<div class="card">' + head(i, k, false) + body(i) +
     row("Priority", "priority", PRIORITIES, k, p, i.taskId) +
     row("Class", "class", CLASSES, k, p, i.taskId) +
-    (wasTaste ? '<div class="small warn"' + tip("wasTaste") + ">was taste: shown as decide</div>" : "") +
+    (wasTaste ? '<div class="small warn"' + tip("wasTaste") + ">was taste: shown as design</div>" : "") +
     row("Outcome", "outcome", OUTCOMES, k, p, i.taskId) +
     '<textarea rows="1" placeholder="Note for the curator (optional)" data-note="' + esc(i.taskId) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
     '<div class="err" data-err="' + esc(i.taskId) + '"></div>' +
@@ -787,11 +787,19 @@ function render() {
   el.className = tab === "signoff" ? "wide" : tab === "status" ? "" : "medium";
   const splitOn = tab === "open" && split.on;
   if (splitOn) el.className = "split-main";
+  document.body.classList.toggle("split-on", splitOn);
+  // Each pane scrolls on its own: a render keeps both positions.
+  const keep = [".split .side", ".split .pane"].map((sel) => document.querySelector(sel)?.scrollTop ?? 0);
   el.innerHTML = splitOn
     ? '<div class="split" style="--split:' + split.pct + '%"><div class="side" id="side">' + sidePane() + "</div>" +
       '<div class="divider" role="separator" aria-orientation="vertical"' + tip("divider") + "></div>" +
       '<div class="pane">' + renderTriage() + "</div></div>"
     : tab === "status" ? renderStatus() : tab === "signoff" ? renderSignoff() : tab === "backlog" ? renderBacklog() : renderTriage();
+  if (splitOn)
+    [".split .side", ".split .pane"].forEach((sel, n) => {
+      const pane = document.querySelector(sel);
+      if (pane) pane.scrollTop = keep[n];
+    });
   syncToggleAll();
 }
 function sidePane() {

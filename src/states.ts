@@ -23,7 +23,8 @@ export const STATES = [
 ] as const;
 export type StateKey = (typeof STATES)[number] | "other";
 
-const LOOP_CLASSES = ["auto", "decide"];
+// "decide" is the old name of design (Nil, 2026-10-19).
+const LOOP_CLASSES = ["auto", "design", "decide"];
 const LOOP_PRIORITIES = ["P0", "P1", "P2", "P3"];
 
 // The task's card in the app: "open" waits for Nil in the Triage tab;

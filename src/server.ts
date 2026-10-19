@@ -31,7 +31,7 @@ const HELP = `Loop app API. Base: ${local}
 Triage (for the curator):
 GET  /api/summary                 counts per state
 GET  /api/items?state=open|decided|applied|failed|all
-POST /api/proposals               {"proposals":[{"taskId","task":{"title","description","priority","createdBy","createdAt"},"proposal":{"priority":"P0-P4","class":"auto|decide|hold","outcome":"keep|obsolete","title?","scope?","why"}}]}
+POST /api/proposals               {"proposals":[{"taskId","task":{"title","description","priority","createdBy","createdAt"},"proposal":{"priority":"P0-P4","class":"auto|design|hold","outcome":"keep|obsolete","title?","scope?","why"}}]}
                                   task.* is the board task as it is now. A keep may carry a new proposal.title and/or proposal.scope.
                                   An item with a decision not yet applied is skipped; an applied item gets the new proposal and reopens.
                                   A P4 task is proposed only to promote it: a proposal keeping it at P4 comes back under "refused".

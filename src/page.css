@@ -22,13 +22,33 @@
   main.medium { max-width: 1100px; }
   main.wide { max-width: 1500px; }
   /* Diagram beside Triage. The 900px matches wideScreen in client.js. */
+  /* The page does not scroll: the header stays, and each pane scrolls on its
+     own with one thin bar in the theme's colors. */
   main.split-main { max-width: none; }
-  .split { display: grid; grid-template-columns: clamp(260px, var(--split), calc(100% - 440px)) 10px minmax(0, 1fr); align-items: start; }
-  .split .side { position: sticky; top: 8px; max-height: calc(100vh - 16px); overflow: auto; padding-right: 6px; }
-  .split .divider { align-self: stretch; cursor: col-resize; touch-action: none;
+  .split { display: grid; grid-template-columns: clamp(260px, var(--split), calc(100% - 440px)) 10px minmax(0, 1fr); }
+  .split .side, .split .pane { min-width: 0; overflow-y: auto; overscroll-behavior: contain; }
+  /* Chrome and Safari: a thin bar with no arrow buttons. Chrome ignores these
+     when scrollbar-width is set, so the standard properties are for the rest. */
+  .split .side::-webkit-scrollbar, .split .pane::-webkit-scrollbar { width: 8px; }
+  .split .side::-webkit-scrollbar-button, .split .pane::-webkit-scrollbar-button { display: none; }
+  .split .side::-webkit-scrollbar-track, .split .pane::-webkit-scrollbar-track { background: transparent; }
+  .split .side::-webkit-scrollbar-thumb, .split .pane::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--muted) 45%, transparent); border-radius: 4px; }
+  .split .side::-webkit-scrollbar-thumb:hover, .split .pane::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+  @supports not selector(::-webkit-scrollbar) {
+    .split .side, .split .pane { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 45%, transparent) transparent; }
+  }
+  .split .side { padding: 12px 8px 12px 0; }
+  .split .pane { padding: 12px 4px 12px 8px; }
+  .split .divider { cursor: col-resize; touch-action: none;
     background: linear-gradient(var(--muted), var(--muted)) center / 2px 100% no-repeat; opacity: .35; }
   .split .divider:hover, .split .divider.dragging { opacity: .9; }
-  .split .pane { min-width: 0; padding-left: 6px; }
+  @media (min-width: 900px) {
+    body.split-on { height: 100vh; height: 100dvh; overflow: hidden; display: flex; flex-direction: column; }
+    body.split-on header { flex: none; }
+    body.split-on main.split-main { flex: 1; min-height: 0; width: 100%; padding: 0 12px; }
+    body.split-on .split { height: 100%; }
+  }
   .copyid { border: 0; background: none; color: var(--muted); padding: 2px 3px; margin-left: 2px; cursor: pointer; vertical-align: -2px; border-radius: 4px; }
   .copyid:hover { color: var(--fg); background: var(--chip); }
   .copyid.done { color: var(--accent); }

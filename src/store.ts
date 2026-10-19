@@ -7,9 +7,10 @@ import { join } from "node:path";
 
 export const PRIORITIES = ["P0", "P1", "P2", "P3", "P4"] as const;
 // Nil, 2026-10-18: no taste class. A proposal stored before that may still say
-// taste; the page shows it as decide. Nil, 2026-10-19: "authority" is now
-// "hold" (the loop never touches it); stored cards are migrated on load.
-export const CLASSES = ["auto", "decide", "hold"] as const;
+// taste; the page shows it as design. Nil, 2026-10-19: "authority" is now
+// "hold" (the loop never touches it) and "decide" is now "design"; stored
+// cards are migrated on load.
+export const CLASSES = ["auto", "design", "hold"] as const;
 // Nil, 2026-10-19: no rescope outcome. A keep may carry a new title and/or
 // scope, and Nil's note can change anything; the curator applies both with
 // its judgement. Stored rescope cards are migrated to keep on load.
@@ -114,13 +115,15 @@ export function parseProposal(raw: unknown): Pick<Item, "taskId" | "task" | "pro
   return { taskId, task, proposal };
 }
 
-// Old names in stored cards: class authority is hold, outcome rescope is keep.
+// Old names in stored cards: class authority is hold, decide is design,
+// outcome rescope is keep.
+const OLD_CLASS: Record<string, string> = { authority: "hold", decide: "design" };
 function migrate(state: State): boolean {
   let changed = false;
   for (const i of Object.values(state.items))
     for (const x of [i.proposal, i.decision] as { class: string; outcome: string }[]) {
-      if (x?.class === "authority") {
-        x.class = "hold";
+      if (x && x.class in OLD_CLASS) {
+        x.class = OLD_CLASS[x.class];
         changed = true;
       }
       if (x?.outcome === "rescope") {

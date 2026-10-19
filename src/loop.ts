@@ -4,7 +4,8 @@
 import { MAIN_NAME, ROOM_ID, WORKER_NAMES } from "./config";
 import type { Agent, Office, Task } from "./office";
 
-const DISPATCH_CLASSES = ["auto", "decide"];
+// "decide" is the old name of design (Nil, 2026-10-19); old tags still count.
+const DISPATCH_CLASSES = ["auto", "design", "decide"];
 const LOOP_PRIORITIES = ["P0", "P1", "P2", "P3"];
 
 export type Tag = { class: string; state: string; rest: string };

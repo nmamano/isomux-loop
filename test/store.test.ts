@@ -135,10 +135,24 @@ describe("store", () => {
     const { store } = setup();
     const snap = { title: "Old idea", description: "", priority: "P4" as const, createdBy: "Nil", createdAt: 1 };
     expect(() => store.bringIn(snap, "b1", { priority: "P4", class: "auto" })).toThrow(ValidationError);
-    const i = store.bringIn(snap, "b1", { priority: "P2", class: "decide", note: "now matters" });
-    expect([itemState(i), i.decision!.priority, i.decision!.class, i.decision!.outcome, i.decision!.note]).toEqual(["decided", "P2", "decide", "keep", "now matters"]);
+    const i = store.bringIn(snap, "b1", { priority: "P2", class: "design", note: "now matters" });
+    expect([itemState(i), i.decision!.priority, i.decision!.class, i.decision!.outcome, i.decision!.note]).toEqual(["decided", "P2", "design", "keep", "now matters"]);
     expect(store.pending().map((x) => x.taskId)).toEqual(["b1"]);
     expect(() => store.bringIn(snap, "b1", { priority: "P1", class: "auto" })).toThrow(ValidationError);
+  });
+
+  test("the class decide is now design: stored cards migrate, new ones take design only", () => {
+    const { store, dir } = setup();
+    store.propose([proposal("old", { class: "design" })]);
+    store.decide("old", { ...decision, class: "design" });
+    const file = join(dir, "triage.json");
+    const raw = JSON.parse(readFileSync(file, "utf8"));
+    raw.items.old.proposal.class = "decide";
+    raw.items.old.decision.class = "decide";
+    writeFileSync(file, JSON.stringify(raw));
+    const again = new Store(dir);
+    expect([again.get("old")!.proposal.class, again.get("old")!.decision!.class]).toEqual(["design", "design"]);
+    expect(() => again.propose([proposal("new", { class: "decide" })])).toThrow(ValidationError);
   });
 
   test("the class authority is now hold: stored cards migrate, new ones take hold only", () => {

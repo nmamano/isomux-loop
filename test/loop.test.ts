@@ -56,6 +56,7 @@ describe("ready queue", () => {
       task({ title: "[auto | ready] p1 newer", priority: "P1" }),
       task({ title: "[taste | ready] no taste class any more", priority: "P0" }),
       task({ title: "[decide | ready] p1 newest", priority: "P1" }),
+      task({ title: "[design | ready] p0 design", priority: "P0" }),
       task({ title: "[auto | ready] p4", priority: "P4" }),
       task({ title: "[auto | nil] parked", priority: "P0" }),
       task({ title: "[hold | ready] on hold", priority: "P0" }),
@@ -66,6 +67,7 @@ describe("ready queue", () => {
       task({ title: "[auto | ready] no priority", priority: null }),
     ];
     expect(readyQueue(tasks).map((t) => t.title)).toEqual([
+      "[design | ready] p0 design",
       "[auto | ready] p1 newer",
       "[decide | ready] p1 newest",
       "[auto | ready] p2 old",
