@@ -86,6 +86,10 @@ const HELP = {
   tabBacklog: "The Backlog state: P4 tasks with no card. The loop never picks them. Bring one in as go, design or on hold, with a priority.",
   copyId: "Copy the task id.",
   keys: "Keyboard shortcuts for triage: j/k move between cards, g d h b o pick, 0-3 set the priority, Enter confirms. Press ? to show the list.",
+  viewbar: "Sort and filter the cards. The tab count and the diagram stay the full total; the keys follow the order shown. Your browser keeps these until Clear.",
+  search: "Matches the title, the description, the task id and the curator's reason. / puts the cursor here; Esc leaves.",
+  filters: "Combine any chips: in one row a card matches any chip, across rows it must match each row. A filter on the proposal hides design packets. Change compares the proposal with the board's priority.",
+  clearView: "Back to the default order with no filters.",
   toggleAll: "Expand or collapse every description and packet in this list at once.",
   splitView: "Show the task-state diagram beside Triage. It updates after each decision and every 15 s. Drag the line between them to change the widths. A narrow screen shows Triage only.",
   divider: "Drag to change the widths of the diagram and Triage.",
@@ -234,6 +238,7 @@ const KEY_HELP = [
   ["n", "write in the note; Esc leaves it"],
   ["Ctrl+Enter / Cmd+Enter", "confirm (Backlog: bring in), in the note or not; the next card becomes current. Enter and Shift+Enter never confirm"],
   ["Ctrl+Z / Cmd+Z", "undo the last confirm or Later while its notice shows"],
+  ["/", "search the cards; Esc leaves the box"],
   ["?", "show or hide this list"],
 ];
 let keysOpen = false;
@@ -395,6 +400,11 @@ function onKey(e) {
     document.getElementById("keys").hidden = true;
     return true;
   }
+  if (k === "/") {
+    const box = document.querySelector("[data-search]");
+    if (box) box.focus();
+    return Boolean(box);
+  }
   if (!keyTabs()) return false;
   if (k === "j" || k === "ArrowDown") return setCurrent(currentIndex + 1), true;
   if (k === "k" || k === "ArrowUp") return setCurrent(currentIndex - 1), true;
@@ -446,7 +456,7 @@ function onKey(e) {
 // While a note has the cursor, only Ctrl/Cmd+Enter (below) and Esc count.
 document.addEventListener("keydown", (e) => {
   const t = e.target;
-  const typing = t.tagName === "TEXTAREA" || t.tagName === "INPUT";
+  const typing = t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.tagName === "SELECT";
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z" && toast && !typing) {
     e.preventDefault();
     runToastUndo();
@@ -459,7 +469,7 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
-  if (t.tagName === "TEXTAREA" || t.tagName === "INPUT") {
+  if (typing) {
     if (e.key === "Escape") {
       t.blur();
       e.preventDefault();
@@ -487,10 +497,12 @@ function toggleAll(withSplit) {
     ' <button class="btn ghost" data-keys="1"' + tip("keys") + ">Keys</button>" + sp + "</div>" +
     helpBox(["toggleAll"], "toggleAll") + helpBox(["splitView"], "splitView");
 }
+// The cards' descriptions and packets, not the Filters fold.
+const CARD_DETAILS = '#list details[data-dkey]:not([data-dkey^="filters:"])';
 function syncToggleAll() {
   const btn = document.querySelector("[data-dall]");
   if (!btn) return;
-  const all = [...document.querySelectorAll("#list details[data-dkey]")];
+  const all = [...document.querySelectorAll(CARD_DETAILS)];
   btn.hidden = all.length === 0;
   btn.textContent = all.length && all.every((d) => d.open) ? "Collapse all" : "Expand all";
 }
@@ -764,11 +776,151 @@ function renderTriage() {
   if (tab === "open") all = lastLater(all);
   if (tab === "applied") all.sort((a, b) => b.x.applied.at - a.x.applied.at);
   if (!all.length) return '<div class="empty">' + (tab === "open" ? "Nothing in Triage." : "Nothing here.") + "</div>";
-  return (tab === "open" ? toggleAll(true) : "") + all
-    .map((e) =>
-      e.kind === "packet" ? (tab === "open" ? packetCard(e.x) : decidedPacketCard(e.x)) : tab === "open" ? openCard(e.x) : decidedCard(e.x),
-    )
+  // The cards first: they set the "Showing n of m" count the bar shows.
+  if (tab === "open") {
+    const cards = triageCards(all);
+    return toggleAll(true) + viewBar("triage", all) + '<div id="cards">' + cards + "</div>";
+  }
+  return all.map((e) => (e.kind === "packet" ? decidedPacketCard(e.x) : decidedCard(e.x))).join("");
+}
+function triageCards(all) {
+  const shown = viewList("triage", all);
+  setShown("triage", shown.length, all.length);
+  if (!shown.length) return '<div class="empty">No card matches the filters.</div>';
+  return shown.map((e) => (e.kind === "packet" ? packetCard(e.x) : openCard(e.x))).join("");
+}
+
+// --- sort and filter (Nil, 2026-10-19) ------------------------------------------
+// Per tab, kept in this browser. The tab count and the diagram stay the full
+// total; the keys follow the order shown.
+const VIEW_DEFAULT = {
+  triage: { sort: "proposed", kind: [], choice: [], pri: [], change: [], by: [], q: "" },
+  backlog: { sort: "oldest", by: [], q: "" },
+};
+const view = {};
+for (const k of Object.keys(VIEW_DEFAULT))
+  view[k] = Object.assign(JSON.parse(JSON.stringify(VIEW_DEFAULT[k])), JSON.parse(localStorage.getItem("loop.view." + k) || "{}"));
+const saveView = (k) => localStorage.setItem("loop.view." + k, JSON.stringify(view[k]));
+const SORTS = {
+  triage: [["proposed", "proposed priority"], ["board", "board priority"], ["oldest", "oldest task"], ["newest", "newest task"], ["card", "newest card"]],
+  backlog: [["oldest", "oldest task"], ["newest", "newest task"]],
+};
+const FILTER_ROWS = {
+  triage: [
+    ["kind", "Kind", () => [["proposal", "proposal"], ["packet", "design packet"]]],
+    ["choice", "Proposed", () => CHOICES.map((c) => [c, label(c)])],
+    ["pri", "Priority", () => PRIORITIES.map((p) => [p, p])],
+    ["change", "Change", () => [["up", "priority up"], ["down", "priority down"], ["same", "same priority"], ["new", "new task"]]],
+    ["by", "Filed by", (list) => filers(list)],
+  ],
+  backlog: [["by", "Filed by", (list) => filers(list)]],
+};
+const shownCount = {};
+// One shape for triage cards, packets and backlog tasks.
+function facts(e) {
+  if (e.kind === "packet") {
+    const p = e.x;
+    return { id: p.taskId, kind: "packet", by: null, board: p.priority, proposed: undefined, choice: undefined, created: p.createdAt, card: p.createdAt,
+      text: [p.title, p.question, p.body, p.taskId].join(" ") };
+  }
+  if (e.kind === "backlog") {
+    const t = e.x;
+    return { id: t.id, kind: "backlog", by: t.createdBy || "unknown", board: "P4", created: t.createdAt, card: t.createdAt,
+      text: [t.title, t.description, t.id].join(" ") };
+  }
+  const i = e.x;
+  return { id: i.taskId, kind: "proposal", by: i.task.createdBy || "unknown", board: i.task.priority, proposed: i.proposal.priority, choice: i.proposal.choice,
+    created: i.task.createdAt, card: i.proposedAt,
+    text: [i.task.title, i.task.description, i.taskId, i.proposal.why, i.proposal.title, i.proposal.scope].join(" ") };
+}
+const rank = (p) => (p ? Number(String(p).slice(1)) : null);
+// up / down / same compared with the board; "new" when the board has no priority.
+function change(f) {
+  if (f.kind !== "proposal") return null;
+  const board = rank(f.board);
+  if (board === null) return "new";
+  const to = f.choice === "backlog" ? 4 : f.choice === "obsolete" ? null : rank(f.proposed);
+  if (to === null) return null;
+  return to < board ? "up" : to > board ? "down" : "same";
+}
+function filers(list) {
+  const n = {};
+  for (const e of list) {
+    const by = facts(e).by;
+    if (by) n[by] = (n[by] || 0) + 1;
+  }
+  return Object.keys(n).sort((a, b) => n[b] - n[a] || a.localeCompare(b)).slice(0, 10).map((b) => [b, b + " (" + n[b] + ")"]);
+}
+function matches(f, v) {
+  // A filter on the proposal hides packets, which have none.
+  if (v.kind && v.kind.length && !v.kind.includes(f.kind)) return false;
+  if (v.choice && v.choice.length && !v.choice.includes(f.choice)) return false;
+  if (v.pri && v.pri.length && !v.pri.includes(f.proposed)) return false;
+  if (v.change && v.change.length && !v.change.includes(change(f))) return false;
+  if (v.by && v.by.length && !v.by.includes(f.by)) return false;
+  const q = v.q.trim().toLowerCase();
+  return !q || f.text.toLowerCase().includes(q);
+}
+function activeFilters(k) {
+  const v = view[k];
+  return FILTER_ROWS[k].reduce((n, [field]) => n + v[field].length, 0) + (v.q.trim() ? 1 : 0);
+}
+// The default order is the list's own (Triage: packets first, then proposed
+// priority and age). Later cards stay at the end in every order.
+function viewList(k, all) {
+  const v = view[k];
+  const by = {
+    board: (a, b) => (rank(a.board) ?? 9) - (rank(b.board) ?? 9) || a.created - b.created,
+    oldest: (a, b) => a.created - b.created,
+    newest: (a, b) => b.created - a.created,
+    card: (a, b) => b.card - a.card,
+  }[v.sort];
+  let list = all.map((e) => ({ e, f: facts(e) })).filter((x) => matches(x.f, v));
+  if (by) list = list.sort((a, b) => by(a.f, b.f));
+  if (k === "triage") list = list.filter((x) => !later.has(x.f.id)).concat(list.filter((x) => later.has(x.f.id)));
+  return list.map((x) => x.e);
+}
+function setShown(k, n, total) {
+  shownCount[k] = [n, total];
+  const el = document.getElementById("shown-" + k);
+  if (el) el.textContent = showingText(k);
+}
+function showingText(k) {
+  const [n, total] = shownCount[k] || [0, 0];
+  return "Showing " + n + " of " + total;
+}
+function viewBar(k, all) {
+  const v = view[k];
+  const on = activeFilters(k);
+  const rows = FILTER_ROWS[k]
+    .map(([field, name, values]) => {
+      const vals = values(all);
+      if (!vals.length) return "";
+      return '<div class="row"><span class="label">' + name + "</span>" +
+        vals.map(([val, text]) => '<button class="chip' + (v[field].includes(val) ? " on" : "") + '" data-vf="' + esc(JSON.stringify([k, field, val])) + '">' + esc(text) + "</button>").join("") + "</div>";
+    })
     .join("");
+  return (
+    '<div class="viewbar small"' + tip("viewbar") + "><label>Sort <select data-sort=\"" + k + "\">" +
+    SORTS[k].map(([val, text]) => '<option value="' + val + '"' + (v.sort === val ? " selected" : "") + ">" + text + "</option>").join("") + "</select></label>" +
+    '<input type="search" data-search="' + k + '" placeholder="Search (/)" value="' + esc(v.q) + '"' + tip("search") + ">" +
+    '<span id="shown-' + k + '">' + showingText(k) + "</span>" +
+    '<button class="btn ghost" data-clearview="' + k + '"' + (on ? "" : " hidden") + tip("clearView") + ">Clear</button> " + q("viewbar") + "</div>" +
+    helpBox(["viewbar", "search", "filters"], "viewbar") +
+    details("filters:" + k, "filters", "Filters" + (on ? " (" + on + " on)" : ""), '<div class="filters">' + rows + "</div>")
+  );
+}
+// Typing in the search box re-renders the cards only, so the box keeps the cursor.
+function rerenderCards() {
+  const box = document.getElementById("cards");
+  if (!box) return render();
+  box.innerHTML = tab === "backlog" ? backlogCards() : triageCards(triageEntries());
+  syncCurrent();
+  syncToggleAll();
+}
+function triageEntries() {
+  const open = items.filter((i) => itemState(i) === "open").map((i) => ({ kind: "triage", x: i }));
+  return packets.filter((p) => p.state === "open").map((p) => ({ kind: "packet", x: p })).concat(open);
 }
 
 // --- packets ------------------------------------------------------------------
@@ -912,9 +1064,19 @@ function diff(a, b) {
 // --- backlog ------------------------------------------------------------------
 
 function renderBacklog() {
-  let h = '<div class="small"' + tip("tabBacklog") + ">" + backlogTasks.length + " P4 tasks with no card, oldest first. The loop never picks them. " + q("tabBacklog") + "</div>" + helpBox(["tabBacklog", "bringIn"], "tabBacklog") + toggleAll();
+  let h = '<div class="small"' + tip("tabBacklog") + ">" + backlogTasks.length + " P4 tasks with no card. The loop never picks them. " + q("tabBacklog") + "</div>" + helpBox(["tabBacklog", "bringIn"], "tabBacklog") + toggleAll();
   if (!backlogTasks.length) return h + '<div class="empty">The backlog is empty.</div>';
-  for (const t of backlogTasks) {
+  const all = backlogTasks.map((t) => ({ kind: "backlog", x: t }));
+  const cards = backlogCards();
+  return h + viewBar("backlog", all) + '<div id="cards">' + cards + "</div>";
+}
+function backlogCards() {
+  const all = backlogTasks.map((t) => ({ kind: "backlog", x: t }));
+  const shown = viewList("backlog", all);
+  setShown("backlog", shown.length, all.length);
+  if (!shown.length) return '<div class="empty">No task matches the filters.</div>';
+  let h = "";
+  for (const t of shown.map((e) => e.x)) {
     const k = backlogPicks[t.id];
     h += cardOpen(t.id) + '<div class="meta"><span>Filed by ' + esc(t.createdBy || "unknown") + "</span><span>" + filed(t.createdAt) + "</span><span>Task " + idCopy(t.id) + "</span></div>" +
       '<div class="title">' + esc(t.title) + "</div>" +
@@ -1171,6 +1333,20 @@ document.addEventListener("click", async (e) => {
     document.getElementById("keys").hidden = !keysOpen;
     return;
   }
+  const vf = e.target.closest("[data-vf]");
+  if (vf) {
+    const [k, field, val] = JSON.parse(vf.dataset.vf);
+    const list = view[k][field];
+    view[k][field] = list.includes(val) ? list.filter((x) => x !== val) : list.concat(val);
+    saveView(k);
+    return render();
+  }
+  const cv = e.target.closest("[data-clearview]");
+  if (cv) {
+    view[cv.dataset.clearview] = JSON.parse(JSON.stringify(VIEW_DEFAULT[cv.dataset.clearview]));
+    saveView(cv.dataset.clearview);
+    return render();
+  }
   if (e.target.closest("[data-split]")) {
     split.on = !split.on;
     saveSplit();
@@ -1178,7 +1354,7 @@ document.addEventListener("click", async (e) => {
     return;
   }
   if (e.target.closest("[data-dall]")) {
-    const all = [...document.querySelectorAll("#list details[data-dkey]")];
+    const all = [...document.querySelectorAll(CARD_DETAILS)];
     const open = !all.every((d) => d.open);
     for (const d of all) {
       d.open = open;
@@ -1331,8 +1507,27 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 });
+document.addEventListener("change", (e) => {
+  const k = e.target.dataset && e.target.dataset.sort;
+  if (!k) return;
+  view[k].sort = e.target.value;
+  saveView(k);
+  render();
+});
 document.addEventListener("input", (e) => {
   const ds = e.target.dataset || {};
+  if (ds.search !== undefined) {
+    view[ds.search].q = e.target.value;
+    saveView(ds.search);
+    rerenderCards();
+    // The bar itself stays, so the box keeps the cursor.
+    const n = activeFilters(ds.search);
+    const clear = document.querySelector('[data-clearview="' + ds.search + '"]');
+    if (clear) clear.hidden = !n;
+    const sum = document.querySelector('details[data-dkey="filters:' + ds.search + '"] summary');
+    if (sum) sum.textContent = "Filters" + (n ? " (" + n + " on)" : "");
+    return;
+  }
   if (ds.note !== undefined && picks[ds.note]) picks[ds.note].note = e.target.value;
   if (ds.pnote !== undefined && packetPicks[ds.pnote]) packetPicks[ds.pnote].note = e.target.value;
   if (ds.rnote !== undefined) rejectNotes[ds.rnote] = e.target.value;
@@ -1359,5 +1554,5 @@ load().then(() => {
   }
 });
 setInterval(() => {
-  if (!document.activeElement || document.activeElement.tagName !== "TEXTAREA") load();
+  if (!document.activeElement || !["TEXTAREA", "INPUT", "SELECT"].includes(document.activeElement.tagName)) load();
 }, 60000);
