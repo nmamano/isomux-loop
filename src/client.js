@@ -556,6 +556,22 @@ function diff(a, b) {
 }
 // --- sign-off -----------------------------------------------------------------
 
+// Source files wrap prose at a fixed width; a single line break inside a
+// paragraph is not part of the copy. Blank lines, list items, headings,
+// quotes and table rows keep their breaks.
+function unwrap(text) {
+  const block = (l) => /^\s*([-*+>|#]|\d+[.)]\s)/.test(l) || /^\s/.test(l);
+  const lines = text.split("\n");
+  let out = lines[0] ?? "";
+  for (let i = 1; i < lines.length; i++) {
+    const prev = lines[i - 1];
+    const cur = lines[i];
+    const join = prev.trim() && cur.trim() && !block(cur) && !/^\s*(#|\|)/.test(prev);
+    out += (join ? " " : "\n") + cur;
+  }
+  return out;
+}
+
 // Nil's comments per sign-off item, kept here while he types and saved to the app.
 const soComments = {};
 const commentTimers = {};
@@ -593,7 +609,7 @@ function renderSignoff() {
       clock(it.merged.at) + "</span>" + stateText + "</div>";
     if (it.summary) h += '<div class="mdbody"' + tip("summary") + ">" + md(it.summary) + "</div>";
     it.copy.forEach((c, n) => {
-      const [o, nw] = diff(c.old || "", c.new);
+      const [o, nw] = diff(unwrap(c.old || ""), unwrap(c.new));
       h += '<div class="entry"><div class="where"' + tip("where") + ">" + esc(c.where) + "</div>" +
         '<div class="cols"><div><h2' + tip("old") + '>Old</h2><div class="copytext">' + (c.old ? o : '<span class="small">New copy</span>') +
         '</div></div><div><h2' + tip("new") + '>New</h2><div class="copytext">' + nw + "</div></div></div>" +
@@ -627,6 +643,8 @@ function renderSignoff() {
 function render() {
   renderTabs();
   const el = document.getElementById("list");
+  // Sign-off and Triage use a wide screen; the status page keeps its column.
+  el.className = tab === "signoff" ? "wide" : tab === "status" ? "" : "medium";
   el.innerHTML = tab === "status" ? renderStatus() : tab === "signoff" ? renderSignoff() : renderTriage();
 }
 function showErr(id, msg) {

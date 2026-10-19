@@ -19,6 +19,8 @@
     font: inherit; border-bottom: 2px solid transparent; white-space: nowrap; cursor: pointer; }
   nav button.on { color: var(--fg); border-bottom-color: var(--accent); font-weight: 600; }
   main { max-width: 720px; margin: 0 auto; padding: 12px; }
+  main.medium { max-width: 1100px; }
+  main.wide { max-width: 1500px; }
   .empty { color: var(--muted); text-align: center; padding: 40px 0; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
     padding: 14px; margin-bottom: 12px; }
