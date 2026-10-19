@@ -1,10 +1,12 @@
 import { DISPATCH_MS, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
+import { ClosedTimes } from "./closed-times";
 import { CopyStore } from "./copy";
 import { dispatch, status, tick, type DispatchResult, type Status, type TickResult } from "./loop";
 import { httpOffice } from "./office";
 import { page } from "./page";
 import { PauseFlag } from "./pause";
-import { Store, ValidationError } from "./store";
+import { stateViews, type StateKey, type StateView } from "./states";
+import { itemState, Store, ValidationError } from "./store";
 
 const port = Number(process.env.PORT);
 const dataDir = process.env.ISOMUX_APP_DATA_DIR;
@@ -19,6 +21,7 @@ const office = httpOffice(appToken);
 const store = new Store(dataDir);
 const copy = new CopyStore(dataDir);
 const pause = new PauseFlag(dataDir);
+const closed = new ClosedTimes(dataDir, office);
 
 const HELP = `Loop app API. Base: ${local}
 
@@ -34,7 +37,8 @@ POST /api/applied                 {"results":[{"taskId","decidedAt","ok":true|fa
                                   decidedAt from /api/decisions; a decision Nil changed since then comes back as stale.
 
 Loop (for Isomux PM):
-GET  /api/status                  pause state, last dispatch and tick, ready queue, holders, merging, parked
+GET  /api/status                  pause state, last dispatch and tick, ready queue, holders, merging, and the
+                                  ten task states (board.states) with counts and tasks; done/obsolete list the last 20
 POST /api/pause | /api/resume     pause stops dispatch and the tick; the first tick after a resume catches what stopped meanwhile
 POST /api/settings                {"workers": 1-6}: the loop dispatches to Workers 1..N (also on the status page).
                                   Lowering N takes no task away; a worker above N keeps its tick while it holds a loop task.
@@ -105,15 +109,30 @@ setInterval(() => void notifyTriage(), 30_000);
 
 // --- status ------------------------------------------------------------------
 
-let statusCache: { at: number; value: Status } | null = null;
+type Board = Status & { states: Record<StateKey, StateView>; closedPending: number };
+let statusCache: { at: number; value: Board } | null = null;
 
 async function loopStatus(): Promise<Record<string, unknown>> {
-  let board: Status | null = null;
+  let board: Board | null = null;
   let error: string | undefined;
   try {
     if (!statusCache || Date.now() - statusCache.at > STATUS_CACHE_MS) {
-      const [agents, tasks] = await Promise.all([office.agents(), office.tasks()]);
-      statusCache = { at: Date.now(), value: status(agents, tasks, pause.workers) };
+      const [agents, all] = await Promise.all([office.agents(), office.allTasks()]);
+      // The dispatch view sees what dispatch sees: the board's default listing.
+      const live = all.filter((t) => (t.status === "open" || t.status === "in_progress") && t.priority !== "P4");
+      const proposed = new Set(store.list("all").filter((i) => itemState(i) !== "applied").map((i) => i.taskId));
+      statusCache = {
+        at: Date.now(),
+        value: {
+          ...status(agents, live, pause.workers),
+          states: stateViews(all, proposed, (t) => closed.get(t)),
+          closedPending: closed.missing(all).length,
+        },
+      };
+      // Close times the cache lacks fill in the background; the next read shows them.
+      void closed.fill(all).then((n) => {
+        if (n > 0) statusCache = null;
+      });
     }
     board = statusCache.value;
   } catch (err) {

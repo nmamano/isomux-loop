@@ -56,7 +56,12 @@ const HELP = {
   free: "Loop workers without a task. They get the next ready task at the next dispatch.",
   ready: "Tasks the loop can take now, in the order it takes them.",
   merging: "Approved work that Isomux Main merges after CI.",
-  parked: "Tasks that wait for you: a decision packet, a taste branch, or a question.",
+  waiting: "Waiting for Nil: tag [auto | nil], [decide | nil] or [taste | nil]. A packet, taste screenshots or a question waits for you (an ask in your Inbox).",
+  never: "Never picked: tag [authority | ...]. The loop never touches it; also for work run outside the loop.",
+  diagram: "Every task of the room is in exactly one of these ten states, read from the board now. Tap a state to list its tasks. Arrows show who moves a task on.",
+  other: "Tasks that fit none of the ten states, for example a tag the loop does not know or batch work outside the loop.",
+  recentDone: "The last 20 tasks closed as done, newest first.",
+  recentObsolete: "The last 20 tasks closed as obsolete, newest first.",
   tabStatus: "The loop now: pause, workers, queue, merges and what waits for you.",
   tabOpen: "The curator's proposals that wait for your decision.",
   tabDecided: "Your decisions that the curator has not written to the board yet. You can undo them.",
@@ -65,6 +70,81 @@ const HELP = {
   old: "The text as it is now. Struck words go away.",
   new: "The text as proposed. Marked words are new.",
 };
+// The ten states: label, definition (board facts), and place in the diagram.
+const STATE_INFO = {
+  filed: ["Filed", "Open, no tag in the title, no proposal in the app yet. The loop never picks it."],
+  proposed: ["Proposed", "A curator proposal waits in triage for your decision."],
+  ready: ["Ready", "Tag [auto | ready], [decide | ready] or [taste | ready], open, no assignee, P0-P3. The loop picks these."],
+  working: ["Working", "In progress, assigned to an Isomux Worker."],
+  waiting: ["Waiting for Nil", "Tag [auto | nil], [decide | nil] or [taste | nil]: a packet, taste screenshots or a question waits for you (an ask in your Inbox)."],
+  merging: ["Merging", "Tag [<class> | merging], in progress, no assignee. Isomux Main merges it after CI."],
+  never: ["Never picked", "Tag [authority | ...]. The loop never touches it."],
+  backlog: ["Backlog", "P4. The loop never picks it."],
+  done: ["Done", "Status done."],
+  obsolete: ["Obsolete", "Status obsolete: closed, and reversible."],
+};
+const BOX = {
+  filed: [140, 10, 120], proposed: [140, 90, 120], ready: [140, 170, 120], working: [140, 250, 120],
+  merging: [140, 330, 120], done: [140, 410, 120],
+  never: [0, 40, 100], backlog: [0, 110, 100], obsolete: [300, 90, 100], waiting: [300, 250, 100],
+};
+// [path, label x, label y, anchor, label, help]
+const EDGES = [
+  ["M200,56 V88", 206, 76, "start", "curator", "Filed to Proposed: the curator proposes a review."],
+  ["M200,136 V168", 206, 156, "start", "Nil", "Proposed to Ready: you confirm it with a loop class."],
+  ["M200,216 V248", 206, 236, "start", "app", "Ready to Working: the app gives it to a free worker."],
+  ["M200,296 V328", 206, 316, "start", "approved", "Working to Merging: the reviewer approved the work."],
+  ["M200,376 V408", 206, 396, "start", "CI green", "Merging to Done: CI passed and Isomux Main merged it."],
+  ["M140,104 L102,68", 121, 115, "middle", "Nil", "Proposed to Never picked or Backlog: your decision."],
+  ["M140,120 L102,128", null],
+  ["M260,112 H298", 279, 106, "middle", "Nil", "Proposed to Obsolete: you close it."],
+  ["M260,272 H298", 279, 266, "middle", "to Nil", "Working to Waiting for Nil: a decision packet, taste screenshots or a scope question."],
+  ["M350,250 V136", 355, 196, "start", "Nil: no", "Waiting for Nil to Obsolete: you said no."],
+  ["M300,258 L262,206", 303, 234, "start", "Nil: go", "Waiting for Nil to Ready: you said go."],
+  ["M300,288 L262,344", 303, 322, "start", "Nil approves", "Waiting for Nil to Merging: you approved a taste branch."],
+  ["M140,352 H118 V192 H138", 114, 276, "end", "CI red", "Merging to Ready: CI failed because of the branch; it goes back to the queue."],
+];
+let pickedState = null;
+
+function diagram(states) {
+  const marker =
+    '<defs><marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">' +
+    '<path d="M0,0 L8,4 L0,8 z" style="fill:var(--muted)"/></marker></defs>';
+  const edges = EDGES.map(([d, x, y, anchor, label, help]) =>
+    "<g>" + (help ? "<title>" + esc(help) + "</title>" : "") +
+    '<path d="' + d + '" fill="none" style="stroke:var(--muted)" stroke-width="1.4" marker-end="url(#ah)"/>' +
+    (label ? '<text x="' + x + '" y="' + y + '" text-anchor="' + anchor + '" font-size="10" style="fill:var(--muted)">' + esc(label) + "</text>" : "") +
+    "</g>").join("");
+  const boxes = Object.entries(BOX).map(([k, [x, y, w]]) => {
+    const [label, help] = STATE_INFO[k];
+    const n = states[k] ? states[k].count : 0;
+    const cls = "st st-" + k + (pickedState === k ? " picked" : "");
+    return '<g class="' + cls + '" data-state="' + k + '" role="button" tabindex="0"><title>' + esc(label + ": " + help + " Tap to list.") + "</title>" +
+      '<rect x="' + (x + 1) + '" y="' + (y + 1) + '" width="' + (w - 2) + '" height="42" rx="9"/>' +
+      '<text x="' + (x + w / 2) + '" y="' + (y + 19) + '" text-anchor="middle" font-size="12" font-weight="600">' + esc(label) + "</text>" +
+      '<text x="' + (x + w / 2) + '" y="' + (y + 36) + '" text-anchor="middle" font-size="13">' + n + "</text></g>";
+  }).join("");
+  return '<svg class="diagram" viewBox="0 0 400 456" role="img" aria-label="Task states">' + marker + edges + boxes + "</svg>";
+}
+function briefLine(t) {
+  const when = t.closedAt ? " · closed " + clock(t.closedAt) : "";
+  return taskLine({ id: t.id, title: t.title, priority: t.priority }, null, when);
+}
+function renderStates(b) {
+  let h = "<h2" + tip("diagram") + ">Task states " + q("diagram") + "</h2>" + helpBox(["diagram"], "diagram") + diagram(b.states);
+  if (b.states.other.count) h += '<div class="small"' + tip("other") + '><a href="#" data-state="other">' + b.states.other.count + (b.states.other.count === 1 ? " task fits" : " tasks fit") + " no state</a> " + q("other") + "</div>" + helpBox(["other"], "other");
+  if (b.closedPending) h += '<div class="small">Reading close times: ' + b.closedPending + " tasks left.</div>";
+  if (pickedState) {
+    const v = b.states[pickedState];
+    const [label, help] = pickedState === "other" ? ["Other", HELP.other] : STATE_INFO[pickedState];
+    const recent = pickedState === "done" || pickedState === "obsolete";
+    h += '<div class="picked-list"><h2 title="' + esc(help) + '">' + esc(label) + " (" + v.count + ")" + (recent ? " · last " + v.tasks.length : "") + "</h2>" +
+      '<div class="small">' + esc(help) + "</div>" +
+      (v.tasks.length ? v.tasks.map(briefLine).join("") : '<div class="small">None.</div>') + "</div>";
+  }
+  return h;
+}
+
 const TAB_HELP = { status: "tabStatus", open: "tabOpen", decided: "tabDecided", applied: "tabApplied", copy: "tabCopy" };
 
 // title="" for hover.
@@ -157,14 +237,14 @@ function renderTabs() {
       '<button class="' + (k === tab ? "on" : "") + '" data-tab="' + k + '"' + tip(TAB_HELP[k]) + ">" + label + (k in n ? " (" + n[k] + ")" : "") + "</button>",
   ).join("");
 }
-function taskLine(t, who) {
+function taskLine(t, who, extra) {
   const m = t.title.match(/^\[\s*([a-z]+)\s*\|\s*([^\]]*?)\s*\]\s*(.*)$/s);
   const tag = m ? '<span class="tag">' + esc(m[1]) + " · " + esc(m[2]) + "</span>" : "";
   return (
     '<div class="line">' +
     (who ? '<span class="who">' + esc(who) + "</span> · " : "") +
     '<span class="tag">' + esc(t.priority || "-") + "</span>" + tag + esc(m ? m[3] : t.title) +
-    ' <span class="small">' + esc(t.id) + "</span></div>"
+    ' <span class="small">' + esc(t.id) + esc(extra || "") + "</span></div>"
   );
 }
 function section(title, key, lines, empty) {
@@ -199,11 +279,16 @@ function renderStatus() {
   h += q("runs") + "</div>" + helpBox(["runs"], "runs");
   if (s.error) return h + '<div class="err">Board unreadable: ' + esc(s.error) + "</div>";
   const b = s.board;
+  h += renderStates(b);
   h += section("Working", "working", b.holding.map((x) => taskLine(x.task, x.worker)), "No worker holds a task.");
   h += '<div class="small" style="margin-top:6px"' + tip("free") + ">Free: " + (b.freeWorkers.length ? esc(b.freeWorkers.join(", ")) : "none") + " " + q("free") + "</div>" + helpBox(["free"], "free");
   h += section("Ready queue (" + b.ready.length + ")", "ready", b.ready.map((x) => taskLine(x)), "Nothing is ready.");
   h += section("Waiting to merge (" + b.merging.length + ")", "merging", b.merging.map((x) => taskLine(x)), "Nothing waits to merge.");
-  h += section("Parked for Nil (" + b.parked.length + ")", "parked", b.parked.map((x) => taskLine(x)), "Nothing is parked.");
+  const st = b.states;
+  h += section("Waiting for Nil (" + st.waiting.count + ")", "waiting", st.waiting.tasks.map(briefLine), "Nothing waits for you.");
+  h += section("Never picked (" + st.never.count + ")", "never", st.never.tasks.map(briefLine), "No task is tagged authority.");
+  h += section("Done (" + st.done.count + ") · last " + st.done.tasks.length, "recentDone", st.done.tasks.map(briefLine), "Nothing is done yet.");
+  h += section("Obsolete (" + st.obsolete.count + ") · last " + st.obsolete.tasks.length, "recentObsolete", st.obsolete.tasks.map(briefLine), "Nothing is obsolete.");
   return h;
 }
 
@@ -362,6 +447,15 @@ function showErr(id, msg) {
   if (el) el.textContent = msg;
 }
 document.addEventListener("click", async (e) => {
+  const st = e.target.closest("[data-state]");
+  if (st) {
+    e.preventDefault();
+    pickedState = pickedState === st.dataset.state ? null : st.dataset.state;
+    render();
+    const list = document.querySelector(".picked-list");
+    if (list) list.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    return;
+  }
   const a = e.target.closest("a[data-copy], a[data-copy-list]");
   if (a) {
     e.preventDefault();

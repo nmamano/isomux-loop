@@ -71,3 +71,13 @@
   .helpbox { flex-basis: 100%; background: var(--chip); border-radius: 8px; padding: 8px 10px; margin: 4px 0 6px;
     font-size: 13px; color: var(--fg); text-transform: none; letter-spacing: 0; font-weight: normal; }
   .helpbox div + div { margin-top: 4px; }
+  .diagram { width: 100%; max-width: 460px; display: block; margin: 4px auto 8px; }
+  .diagram text { fill: var(--fg); pointer-events: none; }
+  .diagram .st { cursor: pointer; }
+  .diagram .st rect { fill: var(--card); stroke: var(--line); stroke-width: 1.4; }
+  .diagram .st-filed rect, .diagram .st-proposed rect, .diagram .st-ready rect, .diagram .st-working rect,
+  .diagram .st-merging rect, .diagram .st-done rect { stroke: var(--accent); }
+  .diagram .st-waiting rect { fill: color-mix(in srgb, var(--warn) 14%, var(--card)); stroke: var(--warn); }
+  .diagram .st-never rect, .diagram .st-backlog rect, .diagram .st-obsolete rect { fill: var(--chip); }
+  .diagram .st.picked rect { stroke-width: 3; }
+  .picked-list { margin-bottom: 8px; }

@@ -29,6 +29,10 @@ export type PatchResult = { ok: true; task: Task } | { ok: false; status: number
 export interface Office {
   // Open and in-progress tasks of the loop's room (the board's default listing).
   tasks(): Promise<Task[]>;
+  // Every task of the room, done, obsolete and P4 included.
+  allTasks(): Promise<Task[]>;
+  // When the task last moved to done or obsolete, from its history; null if unknown.
+  closedAt(id: string): Promise<number | null>;
   agents(): Promise<Agent[]>;
   patchTask(id: string, body: Record<string, unknown>): Promise<PatchResult>;
   // Without a target the message goes to the app's configured target.
@@ -44,6 +48,15 @@ export function httpOffice(token: string, base = OFFICE): Office {
   }
   return {
     tasks: () => getJson<Task[]>(`/api/tasks?roomId=${ROOM_ID}`),
+    allTasks: () => getJson<Task[]>(`/api/tasks?roomId=${ROOM_ID}&status=all`),
+    async closedAt(id) {
+      type Item = { time: number; taskChanges?: { status?: { new?: string } } };
+      const h = await getJson<{ items: Item[] }>(`/api/tasks/${encodeURIComponent(id)}/history`);
+      const times = h.items
+        .filter((i) => ["done", "obsolete"].includes(i.taskChanges?.status?.new ?? ""))
+        .map((i) => i.time);
+      return times.length > 0 ? Math.max(...times) : null;
+    },
     async agents() {
       const list = await getJson<Agent[] | { agents: Agent[] }>("/agents?back=1");
       return Array.isArray(list) ? list : list.agents;

@@ -18,6 +18,8 @@ function stubOffice(tasks: Task[], agents: Agent[], conflict: string[] = []) {
   const patches: { id: string; body: Record<string, unknown> }[] = [];
   const office: Office = {
     tasks: async () => tasks.map((t) => ({ ...t })),
+    allTasks: async () => tasks.map((t) => ({ ...t })),
+    closedAt: async () => null,
     agents: async () => agents,
     async patchTask(id, body): Promise<PatchResult> {
       patches.push({ id, body });
@@ -165,7 +167,7 @@ describe("tick", () => {
 });
 
 describe("status", () => {
-  test("ready queue, holders, free workers, merging and parked", () => {
+  test("ready queue, holders, free workers and merging", () => {
     const r = task({ title: "[auto | ready] r" });
     const h = task({ title: "[auto | ready] h", status: "in_progress", assignee: "Isomux Worker 1" });
     const m = task({ title: "[auto | merging] m", status: "in_progress" });
@@ -175,6 +177,5 @@ describe("status", () => {
     expect(s.holding.map((x) => [x.worker, x.task.id])).toEqual([["Isomux Worker 1", h.id]]);
     expect(s.freeWorkers).toEqual(["Isomux Worker 2"]);
     expect(s.merging.map((t) => t.id)).toEqual([m.id]);
-    expect(s.parked.map((t) => t.id)).toEqual([p.id]);
   });
 });

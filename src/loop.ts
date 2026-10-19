@@ -134,7 +134,6 @@ export type Status = {
   holding: { worker: string; task: Task }[];
   freeWorkers: string[];
   merging: Task[];
-  parked: Task[];
 };
 
 export function status(agents: Agent[], tasks: Task[], n: number): Status {
@@ -143,6 +142,5 @@ export function status(agents: Agent[], tasks: Task[], n: number): Status {
     holding: holdings(agents, tasks).map((h) => ({ worker: h.worker.name, task: h.task })),
     freeWorkers: freeWorkers(agents, tasks, n).map((w) => w.name),
     merging: withState(tasks, "merging"),
-    parked: withState(tasks, "nil"),
   };
 }
