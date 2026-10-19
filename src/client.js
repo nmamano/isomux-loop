@@ -62,7 +62,7 @@ const HELP = {
   ready: "Tasks the loop can take now, in the order it takes them.",
   merging: "Approved work that Isomux Main merges after CI.",
   signoffLine: "Merged work with copy or a visible change that waits for your approve or reject before the push.",
-  signoff: "Needs your sign-off: merged work whose item on the Sign-off tab waits for you, has edits requested, or waits for its revert.",
+  signoff: "Needs your sign-off: merged work whose item on the Sign-off tab waits for you, or waits for its revert.",
   never: "Never picked: tag [authority | ...]. The loop never touches it; also for work run outside the loop.",
   diagram: "Every task of the room is in exactly one of these states, read from the board now. Tap a state to list its tasks. Arrows show who moves a task on.",
   other: "Tasks that fit none of the states, for example a tag the loop does not know, a [<class> | nil] task without a card, or batch work outside the loop.",
@@ -87,11 +87,10 @@ const HELP = {
   images: "Screenshots from the worker. Tap one to open it full size.",
   links: "The branch with the work, and the diff when there is one.",
   packetConfirm: "Confirm saves your choice. The curator writes it to the task a few minutes after your last decision; until then you can undo it in Decided.",
-  approve: "Approve: this copy or change may go out with the next push.",
+  approve: "Approve: this copy or change goes out with the next push. If you wrote comments, Approve also files a P0 copy-edits task with them; the edits come later as their own commit and sign-off item.",
   reject: "Reject: Isomux Main reverts the commit at once and the task goes back to ready with your note (and your comments). Needs a note.",
-  requestEdits: "Request edits: keeps the merge and files a P0 task to fix the copy as a commit on top, with your comments. Needs a comment on at least one entry. The push waits until that task's own sign-off.",
-  comment: "Optional. A note (\"shorter\"), or the exact new text in quotes. Saved as you type; used by Request edits and Reject.",
-  editsSign: "Edits requested: a copy-edits task is on the board. The push waits until that task's own sign-off item is merged and decided.",
+  comment: "Optional. A note (\"shorter\"), or the exact new text in quotes. Saved as you type. Approve turns comments into a copy-edits task; Reject adds them to its note.",
+  editsFiled: "Approved, and your comments became a copy-edits task. This commit goes out with the next push; the edits follow as their own commit.",
   rejectNote: "Why you reject it, and what to do instead. The worker reads it when the task comes back.",
   undoApprove: "Undo the approval while the push go has not been given.",
   push: "Approve and push: tells Isomux Main to push main at the sha below. Enabled when every item is approved or rejected and every rejection is reverted.",
@@ -109,7 +108,7 @@ const STATE_INFO = {
   ready: ["Ready", "Tag [auto | ready] or [decide | ready], open, no assignee, P0-P3. The loop picks these."],
   working: ["Working", "In progress, assigned to an Isomux Worker."],
   merging: ["Merging", "Tag [<class> | merging], in progress, no assignee. Isomux Main merges it after CI."],
-  signoff: ["Needs your sign-off", "Merged, with copy or a visible change: its item on the Sign-off tab waits for you, has edits requested, or waits for its revert. The board already says done."],
+  signoff: ["Needs your sign-off", "Merged, with copy or a visible change: its item on the Sign-off tab waits for you, or waits for its revert. The board already says done."],
   never: ["Never picked", "Tag [authority | ...]. The loop never touches it."],
   backlog: ["Backlog", "P4. The loop never picks it."],
   done: ["Done", "Status done."],
@@ -120,7 +119,7 @@ const BOX = {
   merging: [140, 330, 120], signoff: [140, 410, 120], done: [140, 490, 120],
   never: [0, 40, 100], backlog: [0, 110, 100], obsolete: [300, 90, 100],
 };
-// [path, label x, label y, anchor, label, help, label runs up the lane]
+// [path, label x, label y, anchor, label, help, label runs up the lane, dashed]
 const EDGES = [
   ["M200,56 V88", 206, 76, "start", "curator", "Filed to Triage card: the curator proposes a review."],
   ["M200,136 V168", 206, 156, "start", "Nil", "Triage card to Ready: you confirm it with a loop class, or pick a packet option."],
@@ -128,14 +127,14 @@ const EDGES = [
   ["M200,296 V328", 206, 316, "start", "approved", "Working to Merging: the reviewer approved the work."],
   ["M200,376 V408", 206, 396, "start", "to sign off", "Merging to Needs your sign-off: merged, and it has copy or a visible change."],
   ["M260,352 H290 V512 H262", 295, 440, "start", "nothing to sign off", "Merging to Done: merged, with nothing to sign off."],
-  ["M200,456 V488", 206, 476, "start", "approved", "Needs your sign-off to Done: you approved it and gave the push go."],
+  ["M200,456 V488", 206, 476, "start", "approved", "Needs your sign-off to Done: approved; comments become a copy-edits task. It is done once you give the push go."],
   ["M140,104 L102,68", 121, 115, "middle", "Nil", "Triage card to Never picked or Backlog: your decision."],
   ["M140,120 L102,128", null],
   ["M260,112 H298", 279, 106, "middle", "Nil", "Triage card to Obsolete: you close it."],
   ["M260,272 H284 V128 H262", 289, 200, "start", "packet", "Working to Triage card: the worker hit a design decision and sent you a packet."],
   ["M140,352 H120 V204 H138", 116, 280, "middle", "CI red", "Merging to Ready: CI failed because of the branch; it goes back to the queue.", true],
   ["M140,432 H108 V190 H138", 104, 330, "middle", "rejected, reverted", "Needs your sign-off to Ready: you rejected it, Isomux Main reverted it, and it goes back to the queue with your note.", true],
-  ["M140,444 H94 V176 H138", 90, 330, "middle", "edits requested", "Needs your sign-off to Ready: you requested edits, and a copy-edits task enters the queue.", true],
+  ["M140,444 H94 V176 H138", 90, 330, "middle", "files a task", "Approving with comments files a new copy-edits task, which enters Ready. The approved task itself goes on to Done.", true, true],
 ];
 let pickedState = null;
 
@@ -143,9 +142,9 @@ function diagram(states) {
   const marker =
     '<defs><marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">' +
     '<path d="M0,0 L8,4 L0,8 z" style="fill:var(--muted)"/></marker></defs>';
-  const edges = EDGES.map(([d, x, y, anchor, label, help, up]) =>
+  const edges = EDGES.map(([d, x, y, anchor, label, help, up, dashed]) =>
     "<g>" + (help ? "<title>" + esc(help) + "</title>" : "") +
-    '<path d="' + d + '" fill="none" style="stroke:var(--muted)" stroke-width="1.4" marker-end="url(#ah)"/>' +
+    '<path d="' + d + '" fill="none" style="stroke:var(--muted)" stroke-width="1.4"' + (dashed ? ' stroke-dasharray="4 3"' : "") + ' marker-end="url(#ah)"/>' +
     (label ? '<text x="' + x + '" y="' + y + '" text-anchor="' + anchor + '"' + (up ? ' transform="rotate(-90 ' + x + " " + y + ')"' : "") +
       ' font-size="10" style="fill:var(--muted)">' + esc(label) + "</text>" : "") +
     "</g>").join("");
@@ -586,6 +585,10 @@ const commentTimers = {};
 function commentsOf(it) {
   return soComments[it.taskId] || (soComments[it.taskId] = JSON.parse(JSON.stringify(it.comments || { copy: {}, images: {} })));
 }
+// The button says what it will do: with comments it also files the edits.
+function approveLabel(taskId) {
+  return hasComments(taskId) ? "Approve, file edits" : "Approve";
+}
 function hasComments(taskId) {
   const c = soComments[taskId];
   return Boolean(c && [...Object.values(c.copy), ...Object.values(c.images)].some((v) => v && v.trim()));
@@ -608,9 +611,11 @@ function renderSignoff() {
   for (const it of so.items) {
     const waiting = it.state === "waiting";
     const stateText =
-      it.state === "approved" ? '<span class="ok"' + tip("approvedSign") + ">Approved</span>"
+      it.state === "approved"
+        ? it.decision.edits
+          ? '<span class="ok"' + tip("editsFiled") + ">Approved, edits filed: task " + esc(it.decision.edits) + "</span>"
+          : '<span class="ok"' + tip("approvedSign") + ">Approved</span>"
       : it.state === "rejected" ? '<span class="warn"' + tip("rejected") + ">Rejected, waiting for revert: " + esc(it.decision.note) + "</span>"
-      : it.state === "edits" ? '<span class="warn"' + tip("editsSign") + ">Edits requested: task " + esc(it.decision.edits) + (it.editsSettled ? " (signed off)" : " (waiting for its sign-off)") + "</span>"
       : "<span" + tip("waitingSign") + ">Waiting for you</span>";
     h += '<div class="card signoff-card"><div class="sotitle">' + esc(it.title) + "</div>" +
       '<div class="meta"><span>Task ' + esc(it.taskId) + "</span><span" + tip("sha") + ">commit <code>" + esc(it.merged.commit.slice(0, 10)) + "</code></span><span>merged " +
@@ -657,11 +662,10 @@ function renderSignoff() {
     h += '<div class="err" data-err="' + esc(it.taskId) + '"></div>';
     if (waiting)
       h += '<div class="entry"><textarea rows="1" placeholder="Why you reject it (needed to reject)" data-rnote="' + esc(it.taskId) + '"' + tip("rejectNote") + ">" + esc(rejectNotes[it.taskId] || "") + "</textarea>" +
-        '<div class="actions"><button class="btn primary" data-approve="' + esc(it.taskId) + '"' + tip("approve") + ">Approve</button>" +
-        '<button class="btn ghost" data-edits="' + esc(it.taskId) + '"' + (hasComments(it.taskId) ? "" : " disabled") + tip("requestEdits") + ">Request edits</button>" +
+        '<div class="actions"><button class="btn primary" data-approve="' + esc(it.taskId) + '"' + tip("approve") + ">" + approveLabel(it.taskId) + "</button>" +
         '<button class="btn ghost" data-reject="' + esc(it.taskId) + '"' + tip("reject") + ">Reject</button>" + q("sactions", it.taskId) + "</div>" +
-        helpBox(["approve", "requestEdits", "reject", "comment", "rejectNote"], "sactions", it.taskId) + "</div>";
-    if (it.state === "approved")
+        helpBox(["approve", "reject", "comment", "rejectNote"], "sactions", it.taskId) + "</div>";
+    if (it.state === "approved" && !it.decision.edits)
       h += '<div class="actions"><button class="btn ghost" data-sundo="' + esc(it.taskId) + '"' + tip("undoApprove") + ">Undo</button></div>";
     h += "</div>";
   }
@@ -730,14 +734,13 @@ document.addEventListener("click", async (e) => {
     });
   }
   if (d.pundo) return act(d.pundo, () => api("/api/packets/" + encodeURIComponent(d.pundo) + "/undo", { method: "POST" }));
-  if (d.approve) return act(d.approve, () => api("/api/signoff/" + encodeURIComponent(d.approve) + "/approve", { method: "POST" }));
-  if (d.sundo) return act(d.sundo, () => api("/api/signoff/" + encodeURIComponent(d.sundo) + "/undo", { method: "POST" }));
-  if (d.edits)
-    return act(d.edits, async () => {
-      clearTimeout(commentTimers[d.edits]);
-      await api("/api/signoff/" + encodeURIComponent(d.edits) + "/comments", { method: "POST", body: soComments[d.edits] });
-      await api("/api/signoff/" + encodeURIComponent(d.edits) + "/edits", { method: "POST" });
+  if (d.approve)
+    return act(d.approve, async () => {
+      clearTimeout(commentTimers[d.approve]);
+      if (soComments[d.approve]) await api("/api/signoff/" + encodeURIComponent(d.approve) + "/comments", { method: "POST", body: soComments[d.approve] });
+      await api("/api/signoff/" + encodeURIComponent(d.approve) + "/approve", { method: "POST" });
     });
+  if (d.sundo) return act(d.sundo, () => api("/api/signoff/" + encodeURIComponent(d.sundo) + "/undo", { method: "POST" }));
   if (d.reject) {
     const note = (rejectNotes[d.reject] || "").trim();
     if (!note) return showErr(d.reject, "Write why you reject it first.");
@@ -811,8 +814,8 @@ document.addEventListener("input", (e) => {
     const c = soComments[taskId];
     if (!c) return;
     c[kind][n] = e.target.value;
-    const btn = document.querySelector('[data-edits="' + CSS.escape(taskId) + '"]');
-    if (btn) btn.disabled = !hasComments(taskId);
+    const btn = document.querySelector('[data-approve="' + CSS.escape(taskId) + '"]');
+    if (btn) btn.textContent = approveLabel(taskId);
     clearTimeout(commentTimers[taskId]);
     commentTimers[taskId] = setTimeout(() => {
       api("/api/signoff/" + encodeURIComponent(taskId) + "/comments", { method: "POST", body: c }).catch((err) => showErr(taskId, err.message));

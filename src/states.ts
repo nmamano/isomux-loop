@@ -28,8 +28,8 @@ const LOOP_PRIORITIES = ["P0", "P1", "P2", "P3"];
 // First match wins, from the end of the path backwards, so a task never
 // counts in two states. hasCard: a triage proposal or a packet that is not
 // written to the board yet. needsSignoff: the app holds a merged sign-off
-// item for it that waits for Nil, has edits requested, or waits for its
-// revert (the board already says done).
+// item for it that waits for Nil or waits for its revert (the board already
+// says done).
 export function classify(t: Task, hasCard: boolean, needsSignoff = false): StateKey {
   if (needsSignoff) return "signoff";
   if (t.status === "done") return "done";

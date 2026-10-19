@@ -20,11 +20,12 @@ export type SignoffItem = {
   comments?: Comments;
   postedAt: number;
   merged: { commit: string; at: number } | null;
-  // edits: the board task Nil's "Request edits" created; approved is false then.
+  // edits: the copy-edits task an approval with comments filed (Nil, 2026-10-19:
+  // approve and request edits are one case, approved with 0 or more edits).
   decision: { approved: boolean; note: string; at: number; edits?: string } | null;
   reverted: { commit: string; at: number } | null;
 };
-export type SignoffState = "unmerged" | "waiting" | "approved" | "rejected" | "edits";
+export type SignoffState = "unmerged" | "waiting" | "approved" | "rejected";
 
 type State = {
   items: Record<string, SignoffItem>;
@@ -37,7 +38,6 @@ type State = {
 export function signoffState(i: SignoffItem): SignoffState {
   if (!i.merged) return "unmerged";
   if (!i.decision) return "waiting";
-  if (i.decision.edits) return "edits";
   return i.decision.approved ? "approved" : "rejected";
 }
 
@@ -208,31 +208,18 @@ export class SignoffStore {
     return lines;
   }
 
-  checkEdits(taskId: string): SignoffItem {
+  // Approve. With comments the caller files a copy-edits task first and passes
+  // its id; the merged commit still goes out with the next push go.
+  checkApprove(taskId: string): { item: SignoffItem; hasComments: boolean } {
     const i = this.mergedItem(taskId);
-    if (signoffState(i) !== "waiting") throw new ValidationError("edits can only be requested for an item that waits for you");
-    if (this.commentLines(i, false).length === 0) throw new ValidationError("write a comment on at least one entry first");
-    return i;
+    if (signoffState(i) !== "waiting") throw new ValidationError("only an item that waits for you can be approved");
+    return { item: i, hasComments: this.commentLines(i, false).length > 0 };
   }
 
-  recordEdits(taskId: string, editTaskId: string): SignoffItem {
+  approve(taskId: string, editsTaskId?: string): SignoffItem {
     const i = this.mergedItem(taskId);
-    i.decision = { approved: false, note: "", at: this.now(), edits: editTaskId };
-    this.save();
-    return i;
-  }
-
-  // An edits item is settled once the edits task's own item is merged and decided.
-  editsSettled(i: SignoffItem): boolean {
-    const e = i.decision?.edits ? this.state.items[i.decision.edits] : undefined;
-    return Boolean(e?.merged && e.decision);
-  }
-
-  approve(taskId: string): SignoffItem {
-    const i = this.mergedItem(taskId);
-    if (signoffState(i) === "rejected") throw new ValidationError("already rejected");
-    if (signoffState(i) === "edits") throw new ValidationError("edits are requested for this item");
-    i.decision = { approved: true, note: "", at: this.now() };
+    if (signoffState(i) !== "waiting") throw new ValidationError("only an item that waits for you can be approved");
+    i.decision = { approved: true, note: "", at: this.now(), ...(editsTaskId ? { edits: editsTaskId } : {}) };
     this.save();
     return i;
   }
@@ -257,6 +244,7 @@ export class SignoffStore {
   undo(taskId: string): SignoffItem {
     const i = this.mergedItem(taskId);
     if (signoffState(i) !== "approved") throw new ValidationError("only an approval can be undone");
+    if (i.decision?.edits) throw new ValidationError(`the copy-edits task ${i.decision.edits} is filed; close it on the board instead`);
     i.decision = null;
     this.save();
     return i;
@@ -266,28 +254,22 @@ export class SignoffStore {
   // and a main sha newer than the last push go.
   pushCheck(): { ok: boolean; reason: string; sha: string | null; approved: string[] } {
     const items = this.visible();
-    const approved = items
-      .filter((i) => signoffState(i) === "approved" || (signoffState(i) === "edits" && this.editsSettled(i)))
-      .map((i) => i.taskId);
-    const editsOpen = items.filter((i) => signoffState(i) === "edits" && !this.editsSettled(i)).length;
+    const approved = items.filter((i) => signoffState(i) === "approved").map((i) => i.taskId);
     const sha = this.state.lastSha?.commit ?? null;
     const waiting = items.filter((i) => signoffState(i) === "waiting").length;
     const rejected = items.filter((i) => signoffState(i) === "rejected").length;
     let reason = "";
     if (waiting) reason = `${waiting} item${waiting === 1 ? "" : "s"} still need${waiting === 1 ? "s" : ""} your approve or reject`;
-    else if (editsOpen)
-      reason = `${editsOpen} item${editsOpen === 1 ? "" : "s"} wait${editsOpen === 1 ? "s" : ""} for the sign-off of ${editsOpen === 1 ? "its" : "their"} copy-edits task`;
     else if (rejected) reason = `${rejected} rejected item${rejected === 1 ? "" : "s"} wait${rejected === 1 ? "s" : ""} for Isomux Main's revert`;
     else if (!sha) reason = "Isomux Main has reported no merge yet";
     else if (this.state.lastPushGo?.commit === sha && approved.length === 0) reason = `main ${sha.slice(0, 8)} already has a push go`;
     return { ok: reason === "", reason, sha, approved };
   }
 
-  // After Main got the message: approved items, and edits items whose edits
-  // task is signed off, leave the list.
+  // After Main got the message: approved items leave the list.
   recordPushGo(sha: string): void {
     for (const i of this.visible()) {
-      if (signoffState(i) === "approved" || (signoffState(i) === "edits" && this.editsSettled(i))) {
+      if (signoffState(i) === "approved") {
         delete this.state.items[i.taskId];
         this.images.clear(i.taskId);
       }

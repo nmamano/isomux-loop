@@ -63,10 +63,10 @@ POST /api/signoff/:taskId/images  raw PNG/JPEG/WebP bytes, ?caption=..., as for 
 POST /api/signoff/:taskId/merged  Isomux Main after EVERY merge, item or not: {"commit"}. The sha is what a push go names.
 POST /api/signoff/:taskId/reverted  Isomux Main after a revert Nil asked for: {"commit"}. The item leaves the list.
 GET  /api/signoff                 merged items, the main sha, and whether a push go is possible
-Nil's buttons on the Sign-off tab: approve; request edits (needs a comment on at least one entry: the app files a P0
-"[auto | ready] Copy edits: <title>" task with the comments, and the item blocks the push until that task's own
-sign-off item is merged and decided); reject (a note, plus any comments; messages Main "/isomux-main revert ...");
-and "Approve and push" (messages Main "/isomux-main push go ..."). Comments are saved as Nil types
+Nil's buttons on the Sign-off tab: approve (with comments on any entry it also files a P0
+"[auto | ready] Copy edits: <title>" task with them; the merged commit still goes out with the next push);
+reject (a note, plus any comments; messages Main "/isomux-main revert ..."); and "Approve and push"
+(messages Main "/isomux-main push go ..."). Comments are saved as Nil types
 (POST /api/signoff/:taskId/comments {"copy":{"0":"..."},"images":{"0":"..."}}).
 The app cannot tell which member pressed them.
 `;
@@ -151,7 +151,7 @@ async function loopStatus(): Promise<Record<string, unknown>> {
             all,
             cards,
             (t) => closed.get(t),
-            new Set(signoff.visible().filter((i) => ["waiting", "edits", "rejected"].includes(signoffState(i))).map((i) => i.taskId)),
+            new Set(signoff.visible().filter((i) => ["waiting", "rejected"].includes(signoffState(i))).map((i) => i.taskId)),
           ),
           closedPending: closed.missing(all).length,
         },
@@ -280,7 +280,7 @@ async function route(req: Request): Promise<Response> {
   // Sign-off
   if (m === "GET" && path === "/api/signoff")
     return json({
-      items: signoff.visible().map((i) => ({ ...i, state: signoffState(i), editsSettled: signoff.editsSettled(i) })),
+      items: signoff.visible().map((i) => ({ ...i, state: signoffState(i) })),
       ...signoff.meta(),
       push: signoff.pushCheck(),
     });
@@ -295,7 +295,7 @@ async function route(req: Request): Promise<Response> {
     signoff.recordPushGo(check.sha!);
     return json({ sent: text });
   }
-  const so = path.match(/^\/api\/signoff\/([^/]+)\/(images|merged|reverted|approve|reject|undo|comments|edits)$/);
+  const so = path.match(/^\/api\/signoff\/([^/]+)\/(images|merged|reverted|approve|reject|undo|comments)$/);
   if (so && m === "POST") {
     const taskId = decodeURIComponent(so[1]);
     switch (so[2]) {
@@ -305,17 +305,13 @@ async function route(req: Request): Promise<Response> {
         return json(signoff.merged(taskId, await body(req)));
       case "reverted":
         return json(signoff.reverted(taskId, await body(req)));
-      case "approve":
-        return json(signoff.approve(taskId));
-      case "undo":
-        return json(signoff.undo(taskId));
-      case "comments":
-        return json(signoff.setComments(taskId, await body(req)));
-      case "edits": {
-        const item = signoff.checkEdits(taskId);
+      case "approve": {
+        // Comments make the approval file a copy-edits task as well.
+        const { item, hasComments } = signoff.checkApprove(taskId);
+        if (!hasComments) return json(signoff.approve(taskId));
         const title = item.title.replace(/^\[[^\]]*\]\s*/, "");
         const description = [
-          `Copy edits Nil requested at sign-off in the loop app (${new Date().toISOString().slice(0, 10)}).`,
+          `Copy edits Nil asked for when he approved this at sign-off in the loop app (${new Date().toISOString().slice(0, 10)}). The merged commit goes out as it is; these edits come as their own commit with their own sign-off item.`,
           `Source task: ${item.taskId}. Merged commit: ${item.merged!.commit}.`,
           "",
           "Rule: Nil's quoted text goes in verbatim; for a note, write the edit and create a sign-off item for it.",
@@ -326,11 +322,15 @@ async function route(req: Request): Promise<Response> {
         try {
           created = await office.createTask({ title: `[auto | ready] Copy edits: ${title}`, description, priority: "P0", roomId: ROOM_ID });
         } catch (err) {
-          return json({ error: `the board refused the edits task (${String(err instanceof Error ? err.message : err)}); nothing changed` }, 502);
+          return json({ error: `the board refused the copy-edits task (${String(err instanceof Error ? err.message : err)}); the item is not approved yet` }, 502);
         }
         statusCache = null;
-        return json(signoff.recordEdits(taskId, created.id));
+        return json(signoff.approve(taskId, created.id));
       }
+      case "undo":
+        return json(signoff.undo(taskId));
+      case "comments":
+        return json(signoff.setComments(taskId, await body(req)));
       case "reject": {
         const { item, note } = signoff.checkReject(taskId, await body(req));
         const text = `/isomux-main revert ${taskId} (${item.merged!.commit}): Nil rejected it at sign-off: ${note}`;

@@ -127,21 +127,18 @@ describe("sign-off", () => {
     expect(() => s.setComments("t1", { copy: { "0": "y" } })).toThrow(ValidationError);
   });
 
-  test("request edits needs a comment and blocks the push until the edits task's item is merged and decided", () => {
+  test("approve with comments: approved with its edits task, does not block the push, cannot be undone", () => {
     const s = new SignoffStore(tempDir());
     s.put(item);
     s.merged("t1", { commit: "aaaaaaa1" });
-    expect(() => s.checkEdits("t1")).toThrow(ValidationError);
+    expect(s.checkApprove("t1").hasComments).toBe(false);
     s.setComments("t1", { copy: { "0": '"Agents ask on the Asks page."' } });
-    s.checkEdits("t1");
-    expect(signoffState(s.recordEdits("t1", "ed1"))).toBe("edits");
-    expect(s.pushCheck().ok).toBe(false);
-    s.put({ ...item, taskId: "ed1", title: "Copy edits" });
-    s.merged("ed1", { commit: "bbbbbbb2" });
-    expect(s.pushCheck().ok).toBe(false);
-    s.approve("ed1");
-    expect(s.pushCheck()).toEqual({ ok: true, reason: "", sha: "bbbbbbb2", approved: ["t1", "ed1"] });
-    s.recordPushGo("bbbbbbb2");
+    expect(s.checkApprove("t1").hasComments).toBe(true);
+    const a = s.approve("t1", "ed1");
+    expect([signoffState(a), a.decision!.edits]).toEqual(["approved", "ed1"]);
+    expect(() => s.undo("t1")).toThrow(ValidationError);
+    expect(s.pushCheck()).toEqual({ ok: true, reason: "", sha: "aaaaaaa1", approved: ["t1"] });
+    s.recordPushGo("aaaaaaa1");
     expect(s.visible()).toEqual([]);
   });
 
