@@ -8,7 +8,7 @@ import { httpOffice, type Task } from "./office";
 import { page } from "./page";
 import { PacketStore, packetState } from "./packets";
 import { PauseFlag } from "./pause";
-import { SignoffStore, signoffState } from "./signoff";
+import { SignoffStore, signoffState, withAudience } from "./signoff";
 import { classify, stateViews, type Card, type StateKey, type StateView } from "./states";
 import { itemState, Store, ValidationError } from "./store";
 
@@ -77,7 +77,11 @@ POST /api/classify                run the curator wake now: every 10 minutes, al
                                   the undecided cards and packets whose task is done, obsolete or gone
 
 Sign-off before the push:
-POST /api/signoff                 worker at hand-off: {"taskId","title","summary?","copy":[{"where","old","new"}]}
+POST /api/signoff                 worker at hand-off: {"taskId","title","summary?","copy":[{"where","old","new","audience?"}]}
+                                  audience: "member" (what a person reads: UI strings, site, docs, emails, GitHub comments)
+                                  or "agent" (what agents read: system prompt, agent reference, skills, API errors agents
+                                  act on, logs). Without it the app guesses from where (system-prompt, agent-reference,
+                                  skills -> agent; else member) and marks the entry guessed. Agent entries show secondary.
                                   (old "" for new copy). Replaces the task's item unless Nil rejected it and the revert is not reported.
 POST /api/signoff/:taskId/images  raw PNG/JPEG/WebP bytes, ?caption=..., as for packets. For a before/after pair add
                                   ?pair=<short name>&side=before|after (one image per side); a pair shows side by side.
@@ -445,7 +449,7 @@ async function route(req: Request): Promise<Response> {
   // Sign-off
   if (m === "GET" && path === "/api/signoff")
     return json({
-      items: signoff.visible().map((i) => ({ ...i, state: signoffState(i) })),
+      items: signoff.visible().map((i) => ({ ...i, copy: i.copy.map(withAudience), state: signoffState(i) })),
       unpushed: signoff.unpushedList(),
       ...signoff.meta(),
       push: signoff.pushCheck(),

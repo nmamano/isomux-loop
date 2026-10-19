@@ -8,7 +8,23 @@ import { checkTaskId, ImageDir, type Image } from "./images";
 import { readJson, writeJson } from "./json-file";
 import { ValidationError } from "./store";
 
-export type CopyEntry = { where: string; old: string; new: string };
+// audience (Nil, 2026-10-20): "member" for what a person reads (UI, site,
+// docs, emails, GitHub comments), "agent" for what agents read (system
+// prompt, agent reference, skills, API errors, logs). Without it the app
+// guesses from where, and says so (guessed).
+export type Audience = "member" | "agent";
+export type CopyEntry = { where: string; old: string; new: string; audience?: Audience; guessed?: boolean };
+
+// Member paths first (a UI file about skills is still UI), then agent ones.
+const MEMBER_WHERE = /(^|[\/\s])(ui|site|docs)\/|shared\/i18n/i;
+const AGENT_WHERE = /system-prompt|agent-reference|\bskills?\b|SKILL\.md/i;
+export function guessAudience(where: string): Audience {
+  return !MEMBER_WHERE.test(where) && AGENT_WHERE.test(where) ? "agent" : "member";
+}
+// An entry stored before audiences existed gets the guess when it is read.
+export function withAudience(c: CopyEntry): CopyEntry {
+  return c.audience ? c : { ...c, audience: guessAudience(c.where), guessed: true };
+}
 // Nil's per-entry comments: a note, or the exact new text in quotes.
 export type Comments = { copy: Record<string, string>; images: Record<string, string> };
 export type SignoffItem = {
@@ -121,11 +137,14 @@ export class SignoffStore {
       summary: text(r.summary, "summary", 20_000, false),
       copy: copy.map((c, n) => {
         const x = (c ?? {}) as Record<string, unknown>;
-        return {
+        if (x.audience !== undefined && x.audience !== "member" && x.audience !== "agent")
+          throw new ValidationError(`copy[${n}].audience must be member or agent`);
+        return withAudience({
           where: text(x.where, `copy[${n}].where`, 500),
           old: text(x.old, `copy[${n}].old`, 100_000, false),
           new: text(x.new, `copy[${n}].new`, 100_000),
-        };
+          ...(x.audience ? { audience: x.audience as Audience } : {}),
+        });
       }),
       images: [],
       postedAt: this.now(),

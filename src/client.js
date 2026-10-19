@@ -126,6 +126,8 @@ const HELP = {
   nothingToSign: "Merged, with no copy or visible change to sign off.",
   sentPush: "The push go included it: it leaves when Isomux Main reports the push.",
   where: "Where this copy appears.",
+  audMember: "For members: a person reads this (UI, site, docs, emails, GitHub comments). \"guessed\": the worker did not say; the app guessed from where.",
+  audAgent: "For agents: agents read this (system prompt, agent reference, skills, API errors, logs). Folded and listed last, to skim. Tap to open. \"guessed\": the app guessed from where.",
   summary: "What the worker says changed.",
 };
 // The states: label, definition (board facts), and place in the diagram.
@@ -1216,13 +1218,21 @@ function renderSignoff() {
       '<div class="meta"><span>Task ' + idCopy(it.taskId) + "</span><span" + tip("sha") + ">commit <code>" + esc(it.merged.commit.slice(0, 10)) + "</code></span><span>merged " +
       clock(it.merged.at) + "</span>" + stateText + "</div>";
     if (it.summary) h += '<div class="mdbody"' + tip("summary") + ">" + md(it.summary) + "</div>";
-    it.copy.forEach((c, n) => {
+    // Copy members read comes first at full weight; copy for agents follows,
+    // dimmer and folded to one line. n stays the entry's index (comments).
+    const entries = it.copy.map((c, n) => [c, n]);
+    const forAgents = (c) => c.audience === "agent";
+    for (const [c, n] of entries.filter(([c]) => !forAgents(c)).concat(entries.filter(([c]) => forAgents(c)))) {
       const [o, nw] = diff(unwrap(c.old || ""), unwrap(c.new));
-      h += '<div class="entry"><div class="where"' + tip("where") + ">" + esc(c.where) + "</div>" +
-        '<div class="cols"><div><h2' + tip("old") + '>Old</h2><div class="copytext">' + (c.old ? o : '<span class="small">New copy</span>') +
-        '</div></div><div><h2' + tip("new") + '>New</h2><div class="copytext">' + nw + "</div></div></div>" +
-        (waiting ? commentBox(it, "copy", n) : "") + "</div>";
-    });
+      const agent = forAgents(c);
+      const tag = '<span class="aud ' + (agent ? "agent" : "member") + '"' + tip(agent ? "audAgent" : "audMember") + ">" +
+        (agent ? "for agents" : "for members") + (c.guessed ? " · guessed" : "") + "</span>";
+      const cols = '<div class="cols"><div><h2' + tip("old") + '>Old</h2><div class="copytext">' + (c.old ? o : '<span class="small">New copy</span>') +
+        '</div></div><div><h2' + tip("new") + '>New</h2><div class="copytext">' + nw + "</div></div></div>" + (waiting ? commentBox(it, "copy", n) : "");
+      h += agent
+        ? '<div class="entry agent">' + details("aud:" + it.taskId + ":" + n, "audAgent", tag + " " + esc(c.where), cols) + "</div>"
+        : '<div class="entry"><div class="where"' + tip("where") + ">" + tag + " " + esc(c.where) + "</div>" + cols + "</div>";
+    }
     // Before/after pairs side by side (one comment each, kept on the pair's
     // first image); lone images as thumbnails with their own comment.
     const imgUrl = (im) => "/img/signoff/" + encodeURIComponent(it.taskId) + "/" + im.file;

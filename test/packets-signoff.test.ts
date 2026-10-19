@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { sniff } from "../src/images";
 import { NOTE_ONLY, PacketStore, packetState } from "../src/packets";
-import { SignoffStore, signoffState } from "../src/signoff";
+import { guessAudience, SignoffStore, signoffState, withAudience } from "../src/signoff";
 import { ValidationError } from "../src/store";
 import { tempDir } from "./tmp";
 
@@ -159,6 +159,23 @@ describe("sign-off", () => {
     expect([...new SignoffStore(dir).unpushedIds()]).toEqual(["later"]);
     expect(s.pushed({ commit: "eeeeeee" }).pushed).toEqual(["later"]);
     expect(s.unpushedIds().size).toBe(0);
+  });
+
+  test("copy audience: as given, or guessed from where and marked guessed; other values are refused", () => {
+    const s = new SignoffStore(tempDir());
+    const it = s.put({ ...item, copy: [
+      { where: "server/system-prompt.ts", old: "", new: "a" },
+      { where: "ui/settings.tsx", old: "", new: "b" },
+      { where: "GitHub comment on issue 12", old: "", new: "c", audience: "member" },
+      { where: "server/agent-reference/tasks.md", old: "", new: "d", audience: "member" },
+    ] });
+    expect(it.copy.map((c) => [c.audience, Boolean(c.guessed)])).toEqual([["agent", true], ["member", true], ["member", false], ["member", false]]);
+    expect(() => s.put({ ...item, copy: [{ where: "x", old: "", new: "y", audience: "robot" }] })).toThrow(ValidationError);
+    // Where: member paths win over agent words; skills and the agent reference are for agents.
+    expect(["ui/skills-panel.tsx", "~/.claude/skills/isomux-curator/SKILL.md", "isomux-curator skill", "docs/features.md", "shared/i18n/en.ts", "README.md"].map(guessAudience))
+      .toEqual(["member", "agent", "agent", "member", "member", "member"]);
+    // An entry stored before audiences existed is guessed when read.
+    expect(withAudience({ where: "server/system-prompt.ts", old: "", new: "x" })).toMatchObject({ audience: "agent", guessed: true });
   });
 
   test("the unpushed list is in merge order; a merge the last push go included is marked sent", () => {
