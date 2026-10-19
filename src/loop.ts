@@ -4,13 +4,14 @@
 import { MAIN_NAME, ROOM_ID, WORKER_NAMES } from "./config";
 import type { Agent, Office, Task } from "./office";
 
-// "decide" is the old name of design (Nil, 2026-10-19); old tags still count.
-const DISPATCH_CLASSES = ["auto", "design", "decide"];
+// "auto" and "decide" are the old names of go and design (Nil, 2026-10-19);
+// old tags still count.
+const DISPATCH_CLASSES = ["go", "design", "auto", "decide"];
 const LOOP_PRIORITIES = ["P0", "P1", "P2", "P3"];
 
 export type Tag = { class: string; state: string; rest: string };
 
-// `[auto | ready] Title` -> {class: "auto", state: "ready", rest: "Title"}
+// `[go | ready] Title` -> {class: "go", state: "ready", rest: "Title"}
 export function parseTag(title: string): Tag | null {
   const m = title.match(/^\[\s*([a-z]+)\s*\|\s*([^\]]*?)\s*\]\s*(.*)$/s);
   return m ? { class: m[1], state: m[2], rest: m[3] } : null;

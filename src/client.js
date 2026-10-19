@@ -1,11 +1,13 @@
 // The loop app's page: status, triage (proposals and packets) and sign-off. Plain JS, no build.
-const PRIORITIES = ["P0", "P1", "P2", "P3", "P4"];
-// Nil, 2026-10-18: no taste class; an old taste proposal shows as design.
-const CLASSES = ["auto", "design", "hold"];
+// Nil, 2026-10-19: one choice per card (no class + outcome, no P4 priority).
+// go, design and hold take a priority; backlog sets P4; obsolete closes.
+const PRIORITIES = ["P0", "P1", "P2", "P3"];
+const CHOICES = ["go", "design", "hold", "backlog", "obsolete"];
+const TAGGED = ["go", "design", "hold"];
+const tagged = (c) => TAGGED.includes(c);
 const NOTE_ONLY = "none: see note";
 const EXTRA_CHOICES = ["obsolete", "research more", NOTE_ONLY];
 const CLASS_LABEL = { hold: "on hold" };
-const OUTCOMES = ["keep", "obsolete"];
 const TABS = [
   ["status", "Status"],
   ["open", "Triage"],
@@ -41,20 +43,17 @@ const HELP = {
   P1: "P1: high. Taken after every P0.",
   P2: "P2: normal.",
   P3: "P3: low. Taken when nothing above it waits.",
-  P4: "P4: backlog. The loop never picks it.",
-  auto: "auto: the loop does it from start to finish.",
-  design: "design: needs your design go/no-go. The loop may research it and write a design packet first.",
-  wasTaste: "The curator proposed taste, a class that no longer exists. It shows as design; the curator will propose it again.",
+  go: "go: the loop does it from start to finish (tag [go | ready]).",
+  design: "design: needs your design go/no-go. The loop may research it and write a design packet first (tag [design | ready]).",
   hold: "On hold (tag [hold | ...]): the loop never touches it. Also for work run outside the loop.",
-  keep: "keep: the task stays, with the priority and class above, and with the proposed title and scope when the card has them.",
+  backlog: "backlog: the task goes to P4 with no tag. The loop never picks it; the Backlog tab lists it.",
   obsolete: "obsolete: the task is closed, with the reason. Reversible: it can be reopened.",
-  priority: "Which priority the task gets. The loop takes P0 first, then P1 to P3, oldest first within one. P4 is backlog: never picked.",
-  class: "What kind of work it is, which decides how far the loop goes alone.",
-  outcome: "What happens to the task itself.",
+  choice: "What happens to the task. go, design and on hold take a priority below; a proposed title and scope come with them.",
+  priority: "Which priority the task gets. The loop takes P0 first, then P1 to P3, oldest first within one.",
   head: "Board: the task's priority and tag on the board now. Yours: what is selected in the rows below; it changes as you tap. The dot on a chip marks the curator's proposal. Nothing in these lines needs you: you decide with the rows below.",
   dot: "The dot marks the curator's proposal.",
   why: "The curator's reason for its proposal.",
-  scope: "The new title and description the curator proposes for this task. Keep accepts them; your note can change them.",
+  scope: "The new title and description the curator proposes for this task. go, design or on hold accepts them; your note can change them.",
   description: "The task's description on the board today.",
   note: "Optional words for the curator. A note can change anything, for example the scope; the curator applies it when it writes your decision to the board.",
   confirm: "Confirm saves your choice in the rows above. The curator writes it to the board a few minutes after your last decision; until then you can undo it in Decided.",
@@ -82,12 +81,12 @@ const HELP = {
   tabOpen: "Cards that wait for your decision: workers' design packets first, then the curator's proposals.",
   tabDecided: "Your decisions that the curator has not written to the board yet. You can undo them.",
   tabApplied: "Decisions the curator wrote to the board.",
-  tabBacklog: "The Backlog state: P4 tasks with no card. The loop never picks them. Bring one in to give it a priority and a class.",
+  tabBacklog: "The Backlog state: P4 tasks with no card. The loop never picks them. Bring one in as go, design or on hold, with a priority.",
   copyId: "Copy the task id.",
   toggleAll: "Expand or collapse every description and packet in this list at once.",
   splitView: "Show the task-state diagram beside Triage. It updates after each decision and every 15 s. Drag the line between them to change the widths. A narrow screen shows Triage only.",
   divider: "Drag to change the widths of the diagram and Triage.",
-  bringIn: "Bring in: give this backlog task a priority (P0-P3) and a class. It goes to the curator like any triage decision, and you can undo it in Decided until then.",
+  bringIn: "Bring in: give this backlog task go, design or on hold and a priority (P0-P3). It goes to the curator like any triage decision, and you can undo it in Decided until then.",
   tabSignoff: "Merged copy and visible changes: approve or reject each, then press Approve and push.",
   old: "The text before the change. Struck words went away.",
   pairImages: "The same screen before and after the change. Tap an image to open it full size. One comment covers the pair.",
@@ -122,7 +121,7 @@ const HELP = {
 const STATE_INFO = {
   filed: ["Filed", "Open, no tag in the title, no card in the app yet. The loop never picks it."],
   triage: ["Triage", "An open card in the Triage tab: a curator proposal, or a worker's design packet. A task with an open card counts here whatever the board says."],
-  ready: ["Ready", "Tag [auto | ready] or [design | ready], open, no assignee, P0-P3. The loop picks these."],
+  ready: ["Ready", "Tag [go | ready] or [design | ready], open, no assignee, P0-P3. The loop picks these."],
   working: ["Working", "In progress, assigned to an Isomux Worker."],
   merging: ["Merging", "Tag [<class> | merging], in progress, no assignee. Isomux Main merges it after CI."],
   signoff: ["Sign-off", "Merged, with copy or a visible change: its item on the Sign-off tab waits for your approve or reject, or for its revert. The board already says done."],
@@ -140,7 +139,7 @@ const BOX = {
 // [path, label x, label y, anchor, label, help, label runs up the lane, dashed]
 const EDGES = [
   ["M200,56 V88", 206, 76, "start", "curator", "Filed to Triage: the curator proposes a review."],
-  ["M200,136 V168", 206, 156, "start", "Nil", "Triage to Ready: you confirm it with a loop class, or pick a packet option."],
+  ["M200,136 V168", 206, 156, "start", "Nil", "Triage to Ready: you confirm go or design with a priority, or pick a packet option."],
   ["M200,216 V248", 206, 236, "start", "app", "Ready to Working: the app gives it to a free worker."],
   ["M200,296 V328", 206, 316, "start", "approved", "Working to Merging: the reviewer approved the work."],
   ["M200,376 V408", 206, 396, "start", "to sign off", "Merging to Sign-off: merged, and it has copy or a visible change."],
@@ -418,14 +417,18 @@ function filed(ms) {
   const d = Math.floor((Date.now() - ms) / 86400000);
   return d < 1 ? "today" : d === 1 ? "1 day ago" : d + " days ago";
 }
+// "P1 · go", or "backlog" and "obsolete", which have no priority.
+function summary(x) {
+  return tagged(x.choice) ? (x.priority || "no priority") + " · " + label(x.choice) : label(x.choice);
+}
 // sel: the selection (open card) or the decision (decided card).
 function head(i, sel, showProposal) {
   const p = i.proposal;
   const m = i.task.title.match(/^\[\s*([a-z]+)\s*\|\s*([^\]]*?)\s*\]/);
   const board = (i.task.priority || "no priority") + " · " + (m ? m[1] + " | " + m[2] : "no tag");
   return (
-    '<div class="meta"' + tip("head") + "><span>Board: " + esc(board) + " → yours: <b>" + sel.priority + " · " + label(sel.class) + " · " + sel.outcome +
-    "</b></span>" + (showProposal ? "<span>curator proposed: " + p.priority + " · " + label(p.class) + " · " + p.outcome + "</span>" : "") +
+    '<div class="meta"' + tip("head") + "><span>Board: " + esc(board) + " → yours: <b>" + esc(summary(sel)) +
+    "</b></span>" + (showProposal ? "<span>curator proposed: " + esc(summary(p)) + "</span>" : "") +
     q("head", i.taskId) + "</div>" + helpBox(["head"], "head", i.taskId) +
     '<div class="meta"' + tip("head") + "><span>Filed by " + esc(i.task.createdBy || "unknown") + "</span><span>" +
     filed(i.task.createdAt) + "</span><span>Task " + idCopy(i.taskId) + "</span></div>" +
@@ -452,15 +455,14 @@ function row(label, kind, list, k, p, id) {
   );
 }
 function openCard(i) {
-  const wasTaste = i.proposal.class === "taste";
-  const p = wasTaste ? { ...i.proposal, class: "design" } : i.proposal;
-  const k = picks[i.taskId] || (picks[i.taskId] = { priority: p.priority, class: p.class, outcome: p.outcome, note: "" });
+  const p = i.proposal;
+  // A proposal without a priority (backlog, obsolete) starts from the board's.
+  const board = PRIORITIES.includes(i.task.priority) ? i.task.priority : null;
+  const k = picks[i.taskId] || (picks[i.taskId] = { choice: p.choice, priority: p.priority || board, note: "" });
   return (
     '<div class="card">' + head(i, k, false) + body(i) +
-    row("Priority", "priority", PRIORITIES, k, p, i.taskId) +
-    row("Class", "class", CLASSES, k, p, i.taskId) +
-    (wasTaste ? '<div class="small warn"' + tip("wasTaste") + ">was taste: shown as design</div>" : "") +
-    row("Outcome", "outcome", OUTCOMES, k, p, i.taskId) +
+    row("Choice", "choice", CHOICES, k, p, i.taskId) +
+    (tagged(k.choice) ? row("Priority", "priority", PRIORITIES, k, p, i.taskId) : "") +
     '<textarea rows="1" placeholder="Note for the curator (optional)" data-note="' + esc(i.taskId) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
     '<div class="err" data-err="' + esc(i.taskId) + '"></div>' +
     '<div class="actions"><button class="btn primary" data-decide="' + esc(i.taskId) + '"' + tip("confirm") + ">Confirm</button>" +
@@ -478,7 +480,7 @@ function decidedCard(i) {
   const stateKey = s === "applied" ? "applied" : s === "failed" ? "failed" : "pending";
   let h =
     '<div class="card">' + head(i, d, true) +
-    '<div class="why"><span class="label"' + tip("decision") + ">Your decision</span><br><b>" + d.priority + " · " + label(d.class) + " · " + d.outcome + "</b>" +
+    '<div class="why"><span class="label"' + tip("decision") + ">Your decision</span><br><b>" + esc(summary(d)) + "</b>" +
     (d.note ? "<br>" + esc(d.note) : "") + "</div>" + '<div class="meta">' + status + q("state", i.taskId) + "</div>" +
     helpBox(s === "applied" ? [stateKey] : [stateKey, "undo"], "state", i.taskId);
   if (s !== "applied")
@@ -655,8 +657,8 @@ function renderBacklog() {
     } else {
       const chipRow = (kind, list) =>
         list.map((v) => '<button class="chip' + (k[kind] === v ? " on" : "") + '" data-bpick="' + kind + '" data-id="' + esc(t.id) + '" data-v="' + v + '"' + tip(v) + ">" + label(v) + "</button>").join("");
-      h += '<div class="row"><span class="label"' + tip("priority") + ">Priority</span>" + chipRow("priority", ["P0", "P1", "P2", "P3"]) + "</div>" +
-        '<div class="row"><span class="label"' + tip("class") + ">Class</span>" + chipRow("class", CLASSES) + "</div>" +
+      h += '<div class="row"><span class="label"' + tip("choice") + ">Choice</span>" + chipRow("choice", TAGGED) + "</div>" +
+        '<div class="row"><span class="label"' + tip("priority") + ">Priority</span>" + chipRow("priority", PRIORITIES) + "</div>" +
         '<textarea rows="1" placeholder="Note for the curator (optional)" data-bnote="' + esc(t.id) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
         '<div class="err" data-err="' + esc(t.id) + '"></div>' +
         '<div class="actions"><button class="btn primary" data-bconfirm="' + esc(t.id) + '"' + tip("bringIn") + ">Bring in</button>" +
@@ -934,7 +936,7 @@ document.addEventListener("click", async (e) => {
     }
   };
   if (d.bring) {
-    backlogPicks[d.bring] = { priority: null, class: null, note: "" };
+    backlogPicks[d.bring] = { choice: null, priority: null, note: "" };
     return render();
   }
   if (d.bcancel) {
@@ -947,7 +949,7 @@ document.addEventListener("click", async (e) => {
   }
   if (d.bconfirm) {
     const k = backlogPicks[d.bconfirm];
-    if (!k.priority || !k.class) return showErr(d.bconfirm, "Pick a priority and a class first.");
+    if (!k.choice || !k.priority) return showErr(d.bconfirm, "Pick a choice and a priority first.");
     return act(d.bconfirm, async () => {
       await api("/api/backlog/" + encodeURIComponent(d.bconfirm) + "/bring", { method: "POST", body: k });
       delete backlogPicks[d.bconfirm];
@@ -1013,6 +1015,7 @@ document.addEventListener("click", async (e) => {
   }
   if (d.decide) {
     const k = picks[d.decide];
+    if (tagged(k.choice) && !k.priority) return showErr(d.decide, "Pick a priority first.");
     try {
       t.disabled = true;
       await api("/api/items/" + encodeURIComponent(d.decide) + "/decide", { method: "POST", body: k });

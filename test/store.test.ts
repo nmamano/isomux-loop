@@ -20,9 +20,9 @@ function setup() {
 const proposal = (taskId: string, over: Record<string, unknown> = {}) => ({
   taskId,
   task: { title: `Task ${taskId}`, description: "d", priority: "P2", createdBy: "Isomux PM", createdAt: 5 },
-  proposal: { priority: "P1", class: "auto", outcome: "keep", why: "needed for the pilot", ...over },
+  proposal: { choice: "go", priority: "P1", why: "needed for the pilot", ...over },
 });
-const decision = { priority: "P1", class: "auto", outcome: "keep", note: "" };
+const decision = { choice: "go", priority: "P1", note: "" };
 
 describe("store", () => {
   test("proposal, decision and apply move an item through its states", () => {
@@ -43,7 +43,7 @@ describe("store", () => {
     store.decide("a", decision);
     const readAt = store.get("a")!.decision!.decidedAt;
     clock.advance(1000);
-    store.decide("a", { ...decision, outcome: "obsolete" });
+    store.decide("a", { ...decision, choice: "obsolete" });
     expect(store.markApplied([{ taskId: "a", decidedAt: readAt, ok: true }]).stale).toEqual(["a"]);
     expect(itemState(store.get("a")!)).toBe("decided");
   });
@@ -73,21 +73,6 @@ describe("store", () => {
     store.markApplied([{ taskId: "a", decidedAt, ok: false, error: "409 stale version" }]);
     expect(itemState(store.get("a")!)).toBe("failed");
     expect(store.pending().map((i) => i.taskId)).toEqual(["a"]);
-  });
-
-  test("no rescope outcome: a keep carries the new title and scope; stored rescope cards migrate to keep", () => {
-    const { store, dir } = setup();
-    expect(() => store.propose([proposal("a", { outcome: "rescope", scope: "smaller" })])).toThrow(ValidationError);
-    store.propose([proposal("a", { scope: "smaller" }), proposal("b")]);
-    store.decide("b", decision);
-    expect(store.get("a")!.proposal.scope).toBe("smaller");
-    const file = join(dir, "triage.json");
-    const raw = JSON.parse(readFileSync(file, "utf8"));
-    raw.items.a.proposal.outcome = "rescope";
-    raw.items.b.decision.outcome = "rescope";
-    writeFileSync(file, JSON.stringify(raw));
-    const again = new Store(dir);
-    expect([again.get("a")!.proposal.outcome, again.get("a")!.proposal.scope, again.get("b")!.decision!.outcome]).toEqual(["keep", "smaller", "keep"]);
   });
 
   test("one notification per burst, after the quiet time", () => {
@@ -123,50 +108,60 @@ describe("store", () => {
     expect(store.list("open").map((i) => i.taskId)).toEqual(["old-p1", "new-p1", "old-p2"]);
   });
 
+  test("one choice: go, design and hold need P0-P3; backlog and obsolete carry no priority", () => {
+    const { store } = setup();
+    expect(() => store.propose([proposal("a", { priority: "P4" })])).toThrow(ValidationError);
+    expect(() => store.propose([proposal("a", { priority: undefined })])).toThrow(ValidationError);
+    expect(() => store.propose([proposal("a", { choice: "auto" })])).toThrow(ValidationError);
+    store.propose([proposal("a", { choice: "backlog", priority: "P1" }), proposal("b", { choice: "hold", scope: "smaller" })]);
+    expect([store.get("a")!.proposal.priority, store.get("b")!.proposal.scope]).toEqual([null, "smaller"]);
+    expect(() => store.decide("a", { choice: "design", note: "" })).toThrow(ValidationError);
+    expect(store.decide("a", { choice: "obsolete", priority: "P2", note: "" }).decision).toMatchObject({ choice: "obsolete", priority: null });
+    expect(store.decide("a", { choice: "design", priority: "P3", note: "" }).decision).toMatchObject({ choice: "design", priority: "P3" });
+  });
+
+  test("cards stored as class + outcome migrate to one choice on load", () => {
+    const { store, dir } = setup();
+    const old: [Record<string, unknown>, string, string | null][] = [
+      [{ priority: "P1", class: "auto", outcome: "keep" }, "go", "P1"],
+      [{ priority: "P2", class: "decide", outcome: "keep" }, "design", "P2"],
+      [{ priority: "P0", class: "taste", outcome: "keep" }, "design", "P0"],
+      [{ priority: "P3", class: "authority", outcome: "keep" }, "hold", "P3"],
+      [{ priority: "P4", class: "auto", outcome: "keep" }, "backlog", null],
+      [{ priority: "P1", class: "auto", outcome: "obsolete" }, "obsolete", null],
+    ];
+    store.propose(old.map((_, n) => proposal(`t${n}`)));
+    store.decide("t0", decision);
+    const file = join(dir, "triage.json");
+    const raw = JSON.parse(readFileSync(file, "utf8"));
+    old.forEach(([shape], n) => (raw.items[`t${n}`].proposal = { ...shape, why: "w", title: n === 1 ? "New title" : undefined }));
+    raw.items.t0.decision = { priority: "P2", class: "decide", outcome: "keep", note: "x", decidedAt: 1 };
+    writeFileSync(file, JSON.stringify(raw));
+    const again = new Store(dir);
+    expect(old.map((_, n): (string | null)[] => [again.get(`t${n}`)!.proposal.choice, again.get(`t${n}`)!.proposal.priority])).toEqual(old.map(([, c, pr]) => [c, pr]));
+    expect(again.get("t1")!.proposal.title).toBe("New title");
+    expect(again.get("t0")!.decision).toEqual({ choice: "design", priority: "P2", note: "x", decidedAt: 1 });
+    const saved = JSON.parse(readFileSync(file, "utf8")).items.t0.proposal;
+    expect(["class" in saved, "outcome" in saved, saved.choice]).toEqual([false, false, "go"]);
+  });
+
   test("a P4 task gets a card only to promote it", () => {
     const { store } = setup();
-    const p4 = (id: string, priority: string) => ({ ...proposal(id, { priority }), task: { ...proposal(id).task, priority: "P4" } });
-    const out = store.propose([p4("stay", "P4"), p4("up", "P3")]);
-    expect([out.refused, out.created]).toEqual([["stay"], ["up"]]);
+    const p4 = (id: string, over: Record<string, unknown>) => ({ ...proposal(id, over), task: { ...proposal(id).task, priority: "P4" } });
+    const out = store.propose([p4("stay", { choice: "backlog" }), p4("gone", { choice: "obsolete" }), p4("up", { choice: "design", priority: "P3" })]);
+    expect([out.refused, out.created]).toEqual([["stay", "gone"], ["up"]]);
     expect(store.get("stay")).toBeUndefined();
   });
 
   test("bring in from the backlog: a decided card at P0-P3, refused when a card is open", () => {
     const { store } = setup();
     const snap = { title: "Old idea", description: "", priority: "P4" as const, createdBy: "Nil", createdAt: 1 };
-    expect(() => store.bringIn(snap, "b1", { priority: "P4", class: "auto" })).toThrow(ValidationError);
-    const i = store.bringIn(snap, "b1", { priority: "P2", class: "design", note: "now matters" });
-    expect([itemState(i), i.decision!.priority, i.decision!.class, i.decision!.outcome, i.decision!.note]).toEqual(["decided", "P2", "design", "keep", "now matters"]);
+    expect(() => store.bringIn(snap, "b1", { choice: "go", priority: "P4" })).toThrow(ValidationError);
+    expect(() => store.bringIn(snap, "b1", { choice: "backlog", priority: "P2" })).toThrow(ValidationError);
+    const i = store.bringIn(snap, "b1", { choice: "design", priority: "P2", note: "now matters" });
+    expect([itemState(i), i.decision!.choice, i.decision!.priority, i.decision!.note]).toEqual(["decided", "design", "P2", "now matters"]);
     expect(store.pending().map((x) => x.taskId)).toEqual(["b1"]);
-    expect(() => store.bringIn(snap, "b1", { priority: "P1", class: "auto" })).toThrow(ValidationError);
+    expect(() => store.bringIn(snap, "b1", { choice: "go", priority: "P1" })).toThrow(ValidationError);
   });
 
-  test("the class decide is now design: stored cards migrate, new ones take design only", () => {
-    const { store, dir } = setup();
-    store.propose([proposal("old", { class: "design" })]);
-    store.decide("old", { ...decision, class: "design" });
-    const file = join(dir, "triage.json");
-    const raw = JSON.parse(readFileSync(file, "utf8"));
-    raw.items.old.proposal.class = "decide";
-    raw.items.old.decision.class = "decide";
-    writeFileSync(file, JSON.stringify(raw));
-    const again = new Store(dir);
-    expect([again.get("old")!.proposal.class, again.get("old")!.decision!.class]).toEqual(["design", "design"]);
-    expect(() => again.propose([proposal("new", { class: "decide" })])).toThrow(ValidationError);
-  });
-
-  test("the class authority is now hold: stored cards migrate, new ones take hold only", () => {
-    const { store, dir } = setup();
-    store.propose([proposal("old", { class: "hold" })]);
-    store.decide("old", { ...decision, class: "hold" });
-    const file = join(dir, "triage.json");
-    const raw = JSON.parse(readFileSync(file, "utf8"));
-    raw.items.old.proposal.class = "authority";
-    raw.items.old.decision.class = "authority";
-    writeFileSync(file, JSON.stringify(raw));
-    const again = new Store(dir);
-    expect([again.get("old")!.proposal.class, again.get("old")!.decision!.class]).toEqual(["hold", "hold"]);
-    expect(JSON.parse(readFileSync(file, "utf8")).items.old.proposal.class).toBe("hold");
-    expect(() => again.propose([proposal("new", { class: "authority" })])).toThrow(ValidationError);
-  });
 });

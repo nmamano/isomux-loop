@@ -5,20 +5,22 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+// The board's priorities; P4 is its backlog.
 export const PRIORITIES = ["P0", "P1", "P2", "P3", "P4"] as const;
-// Nil, 2026-10-18: no taste class. A proposal stored before that may still say
-// taste; the page shows it as design. Nil, 2026-10-19: "authority" is now
-// "hold" (the loop never touches it) and "decide" is now "design"; stored
-// cards are migrated on load.
-export const CLASSES = ["auto", "design", "hold"] as const;
-// Nil, 2026-10-19: no rescope outcome. A keep may carry a new title and/or
-// scope, and Nil's note can change anything; the curator applies both with
-// its judgement. Stored rescope cards are migrated to keep on load.
-export const OUTCOMES = ["keep", "obsolete"] as const;
+// Nil, 2026-10-19: one field per card instead of class + outcome (and no P4
+// priority): go / design / hold take a priority P0-P3 and a tag; backlog
+// writes P4 and no tag; obsolete closes the task. A go/design/hold card may
+// carry a new title and/or scope, which Nil accepts with it; his note can
+// change anything, and the curator applies it with its judgement. Cards
+// stored in the old shape are migrated on load.
+export const CHOICES = ["go", "design", "hold", "backlog", "obsolete"] as const;
+export const TAGGED = ["go", "design", "hold"] as const;
+export const LOOP_PRIORITIES = ["P0", "P1", "P2", "P3"] as const;
 
 export type Priority = (typeof PRIORITIES)[number];
-export type TaskClass = (typeof CLASSES)[number] | "taste";
-export type Outcome = (typeof OUTCOMES)[number];
+export type LoopPriority = (typeof LOOP_PRIORITIES)[number];
+export type Choice = (typeof CHOICES)[number];
+const tagged = (c: Choice) => (TAGGED as readonly string[]).includes(c);
 
 export type TaskSnapshot = {
   title: string;
@@ -29,19 +31,18 @@ export type TaskSnapshot = {
 };
 
 export type ProposalBody = {
-  priority: Priority;
-  class: TaskClass;
-  outcome: Outcome;
-  // Optional, on keep: the new title (without the tag) and the new description.
+  choice: Choice;
+  // P0-P3 for go, design and hold; null for backlog and obsolete.
+  priority: LoopPriority | null;
+  // Optional: the new title (without the tag) and the new description.
   title?: string;
   scope?: string;
   why: string;
 };
 
 export type Decision = {
-  priority: Priority;
-  class: TaskClass;
-  outcome: Outcome;
+  choice: Choice;
+  priority: LoopPriority | null;
   note: string;
   decidedAt: number;
 };
@@ -103,11 +104,10 @@ export function parseProposal(raw: unknown): Pick<Item, "taskId" | "task" | "pro
     createdBy: str(t.createdBy, "task.createdBy", 200, true) ?? "",
     createdAt: Number.isFinite(createdAt) ? createdAt : 0,
   };
-  const outcome = oneOf(p.outcome, OUTCOMES, "proposal.outcome");
+  const choice = oneOf(p.choice, CHOICES, "proposal.choice");
   const proposal: ProposalBody = {
-    priority: oneOf(p.priority, PRIORITIES, "proposal.priority"),
-    class: oneOf(p.class, CLASSES, "proposal.class"),
-    outcome,
+    choice,
+    priority: tagged(choice) ? oneOf(p.priority, LOOP_PRIORITIES, "proposal.priority") : null,
     title: str(p.title, "proposal.title", 500, true),
     scope: str(p.scope, "proposal.scope", 20000, true),
     why: str(p.why, "proposal.why", 2000)!,
@@ -115,23 +115,32 @@ export function parseProposal(raw: unknown): Pick<Item, "taskId" | "task" | "pro
   return { taskId, task, proposal };
 }
 
-// Old names in stored cards: class authority is hold, decide is design,
-// outcome rescope is keep.
-const OLD_CLASS: Record<string, string> = { authority: "hold", decide: "design" };
+// Cards stored as class + outcome (before 2026-10-19): outcome obsolete is
+// obsolete, priority P4 is backlog, else the class under its new name.
+const OLD_CLASS: Record<string, Choice> = { auto: "go", decide: "design", taste: "design", authority: "hold", design: "design", hold: "hold" };
+export function fromOldShape(x: Record<string, unknown>): void {
+  const choice: Choice =
+    x.outcome === "obsolete" ? "obsolete" : x.priority === "P4" ? "backlog" : (OLD_CLASS[String(x.class)] ?? "design");
+  x.choice = choice;
+  x.priority = tagged(choice) && (LOOP_PRIORITIES as readonly unknown[]).includes(x.priority) ? x.priority : null;
+  delete x.class;
+  delete x.outcome;
+}
 function migrate(state: State): boolean {
   let changed = false;
   for (const i of Object.values(state.items))
-    for (const x of [i.proposal, i.decision] as { class: string; outcome: string }[]) {
-      if (x && x.class in OLD_CLASS) {
-        x.class = OLD_CLASS[x.class];
+    for (const x of [i.proposal, i.decision] as unknown as (Record<string, unknown> | null)[])
+      if (x && !("choice" in x)) {
+        fromOldShape(x);
         changed = true;
       }
-      if (x?.outcome === "rescope") {
-        x.outcome = "keep";
-        changed = true;
-      }
-    }
   return changed;
+}
+
+// A decision from the page or the Backlog tab: go/design/hold need P0-P3.
+function choiceAndPriority(r: Record<string, unknown>, allowed: readonly Choice[]): { choice: Choice; priority: LoopPriority | null } {
+  const choice = oneOf(r.choice, allowed, "choice");
+  return { choice, priority: tagged(choice) ? oneOf(r.priority, LOOP_PRIORITIES, "priority") : null };
 }
 
 export class Store {
@@ -162,7 +171,7 @@ export class Store {
     // Higher proposed priority first, then the oldest task.
     return picked.sort(
       (a, b) =>
-        a.proposal.priority.localeCompare(b.proposal.priority) ||
+        (a.proposal.priority ?? "P9").localeCompare(b.proposal.priority ?? "P9") ||
         a.task.createdAt - b.task.createdAt,
     );
   }
@@ -181,13 +190,13 @@ export class Store {
   // is never overwritten; an applied item may get a fresh proposal (a change
   // of direction), which reopens it.
   // Nil, 2026-10-19: a P4 (backlog) task gets a card only to promote it, so a
-  // proposal that keeps a P4 task at P4 is refused, not stored.
+  // proposal for a P4 task that is not go, design or hold is refused, not stored.
   propose(raws: unknown[]): { created: string[]; updated: string[]; skipped: string[]; refused: string[] } {
     const parsed = raws.map(parseProposal);
     const out = { created: [] as string[], updated: [] as string[], skipped: [] as string[], refused: [] as string[] };
     const at = this.now();
     for (const p of parsed) {
-      if (p.task.priority === "P4" && p.proposal.priority === "P4") {
+      if (p.task.priority === "P4" && !tagged(p.proposal.choice)) {
         out.refused.push(p.taskId);
         continue;
       }
@@ -209,16 +218,14 @@ export class Store {
     const existing = this.state.items[taskId];
     if (existing && itemState(existing) !== "applied") throw new ValidationError("this task already has a card");
     const r = (raw ?? {}) as Record<string, unknown>;
-    const priority = oneOf(r.priority, PRIORITIES, "priority");
-    if (priority === "P4") throw new ValidationError("bring it in at P0 to P3");
-    const cls = oneOf(r.class, CLASSES, "class");
+    const c = choiceAndPriority(r, TAGGED);
     const at = this.now();
     this.state.items[taskId] = {
       taskId,
       task,
-      proposal: { priority, class: cls, outcome: "keep", why: "Nil brought it in from the backlog." },
+      proposal: { ...c, why: "Nil brought it in from the backlog." },
       proposedAt: at,
-      decision: { priority, class: cls, outcome: "keep", note: str(r.note, "note", 4000, true) ?? "", decidedAt: at },
+      decision: { ...c, note: str(r.note, "note", 4000, true) ?? "", decidedAt: at },
       applied: null,
     };
     this.state.notify.lastDecisionAt = at;
@@ -240,9 +247,7 @@ export class Store {
     const r = (raw ?? {}) as Record<string, unknown>;
     const at = this.now();
     item.decision = {
-      priority: oneOf(r.priority, PRIORITIES, "priority"),
-      class: oneOf(r.class, CLASSES, "class"),
-      outcome: oneOf(r.outcome, OUTCOMES, "outcome"),
+      ...choiceAndPriority(r, CHOICES),
       note: str(r.note, "note", 4000, true) ?? "",
       decidedAt: at,
     };

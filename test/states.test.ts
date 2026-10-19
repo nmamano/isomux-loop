@@ -16,34 +16,35 @@ describe("classify", () => {
       [{ title: "untagged" }, null, "filed"],
       [{ title: "untagged" }, "open", "triage"],
       [{ title: "untagged" }, "decided", "other"],
+      [{ title: "[go | ready] x" }, null, "ready"],
       [{ title: "[auto | ready] x" }, null, "ready"],
       [{ title: "[design | ready] x", priority: "P0" }, null, "ready"],
       [{ title: "[decide | ready] x", priority: "P0" }, null, "ready"],
       [{ title: "[taste | ready] x", priority: "P0" }, null, "other"],
-      [{ title: "[auto | ready] x", status: "in_progress", assignee: "Isomux Worker 2" }, null, "working"],
+      [{ title: "[go | ready] x", status: "in_progress", assignee: "Isomux Worker 2" }, null, "working"],
       [{ title: "untagged batch", status: "in_progress", assignee: "Isomux Worker 3" }, null, "working"],
       [{ title: "[decide | nil] x" }, "open", "triage"],
-      [{ title: "[auto | nil] x" }, null, "other"],
-      [{ title: "[auto | merging] x", status: "in_progress" }, null, "merging"],
+      [{ title: "[go | nil] x" }, null, "other"],
+      [{ title: "[go | merging] x", status: "in_progress" }, null, "merging"],
       [{ title: "[hold | nil] x" }, null, "hold"],
       [{ title: "[authority | nil] x" }, null, "hold"],
-      [{ title: "[auto | ready] x", priority: "P4" }, null, "backlog"],
+      [{ title: "[go | ready] x", priority: "P4" }, null, "backlog"],
       [{ title: "untagged", priority: "P4" }, null, "backlog"],
       [{ title: "untagged", priority: "P4" }, "open", "triage"],
       [{ title: "untagged", priority: "P4" }, "decided", "other"],
-      [{ title: "[auto | merging] x", status: "done" }, null, "done"],
+      [{ title: "[go | merging] x", status: "done" }, null, "done"],
       [{ title: "x", status: "obsolete" }, null, "obsolete"],
-      [{ title: "[auto | soak until 10-25] x" }, null, "other"],
-      [{ title: "[auto | ready] x", assignee: "Isomux PM" }, null, "other"],
+      [{ title: "[go | soak until 10-25] x" }, null, "other"],
+      [{ title: "[go | ready] x", assignee: "Isomux PM" }, null, "other"],
       [{ title: "untagged", status: "in_progress", assignee: "Isomux Lead" }, null, "other"],
     ];
     for (const [over, card, state] of cases) expect([over.title, classify(task(over), card)]).toEqual([over.title, state]);
     // A merged task whose sign-off item waits counts there, though the board says done.
-    expect(classify(task({ title: "[auto | merging] x", status: "done" }), null, true)).toBe("signoff");
+    expect(classify(task({ title: "[go | merging] x", status: "done" }), null, true)).toBe("signoff");
     // Merged and not pushed: Push, after Sign-off; a task back at work is not in Push.
     expect(classify(task({ title: "x", status: "done" }), null, false, true)).toBe("push");
     expect(classify(task({ title: "x", status: "done" }), null, true, true)).toBe("signoff");
-    expect(classify(task({ title: "[auto | ready] x" }), null, false, true)).toBe("ready");
+    expect(classify(task({ title: "[go | ready] x" }), null, false, true)).toBe("ready");
   });
 });
 
@@ -65,15 +66,15 @@ describe("state views", () => {
   test("the Triage state is exactly the open cards, whatever the board says of their tasks", () => {
     // Every board shape that has a state of its own, each with an open card.
     const withCard = [
-      task({ title: "[auto | ready] x", status: "in_progress", assignee: "Isomux Worker 1" }),
-      task({ title: "[auto | ready] x" }),
-      task({ title: "[auto | merging] x", status: "in_progress" }),
+      task({ title: "[go | ready] x", status: "in_progress", assignee: "Isomux Worker 1" }),
+      task({ title: "[go | ready] x" }),
+      task({ title: "[go | merging] x", status: "in_progress" }),
       task({ title: "[hold | nil] x" }),
       task({ title: "untagged", priority: "P4" }),
-      task({ title: "[auto | merging] x", status: "done" }),
+      task({ title: "[go | merging] x", status: "done" }),
     ];
     const decided = task({ title: "untagged" });
-    const plain = task({ title: "[auto | ready] y", status: "in_progress", assignee: "Isomux Worker 1" });
+    const plain = task({ title: "[go | ready] y", status: "in_progress", assignee: "Isomux Worker 1" });
     const cards = new Map<string, Card>([...withCard.map((t) => [t.id, "open"] as [string, Card]), [decided.id, "decided"]]);
     const v = stateViews([...withCard, decided, plain], cards, () => undefined, new Set([withCard[5].id]));
     const openCards = [...cards].filter(([, c]) => c === "open").map(([id]) => id);

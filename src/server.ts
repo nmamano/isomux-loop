@@ -31,13 +31,16 @@ const HELP = `Loop app API. Base: ${local}
 Triage (for the curator):
 GET  /api/summary                 counts per state
 GET  /api/items?state=open|decided|applied|failed|all
-POST /api/proposals               {"proposals":[{"taskId","task":{"title","description","priority","createdBy","createdAt"},"proposal":{"priority":"P0-P4","class":"auto|design|hold","outcome":"keep|obsolete","title?","scope?","why"}}]}
-                                  task.* is the board task as it is now. A keep may carry a new proposal.title and/or proposal.scope.
+POST /api/proposals               {"proposals":[{"taskId","task":{"title","description","priority","createdBy","createdAt"},"proposal":{"choice":"go|design|hold|backlog|obsolete","priority":"P0-P3 (go, design, hold only)","title?","scope?","why"}}]}
+                                  task.* is the board task as it is now. go, design and hold tag the task [<choice> | <state>] at the
+                                  priority; backlog sets P4 and no tag; obsolete closes it. A go/design/hold card may carry a new
+                                  proposal.title and/or proposal.scope, which Nil accepts with the card.
                                   An item with a decision not yet applied is skipped; an applied item gets the new proposal and reopens.
-                                  A P4 task is proposed only to promote it: a proposal keeping it at P4 comes back under "refused".
+                                  A P4 task is proposed only to promote it: a proposal for it that is not go, design or hold comes
+                                  back under "refused".
 DELETE /api/items/:taskId         withdraw a card (the task closed meanwhile)
 GET  /api/decisions               decisions to write to the board (decided, or failed earlier), triage and packets:
-                                  each has "kind": "triage" (decision: priority, class, outcome, note) or
+                                  each has "kind": "triage" (decision: choice, priority, note) or
                                   "packet" (decision: choice = an option label, "obsolete", "research more" or "none: see note"; note)
                                   Nil's note can change anything; apply it with judgement (isomux-curator skill)
 POST /api/applied                 {"results":[{"taskId","decidedAt","kind?":"triage|packet","ok":true|false,"error?"}]}
@@ -51,7 +54,7 @@ GET  /api/packets                 all packets with their state
 
 Backlog (Nil's tab):
 GET  /api/backlog                 the tasks of the Backlog state (P4, no card), oldest first
-POST /api/backlog/:taskId/bring   {"priority":"P0-P3","class","note?"}: a decided card that goes to the curator
+POST /api/backlog/:taskId/bring   {"choice":"go|design|hold","priority":"P0-P3","note?"}: a decided card that goes to the curator
                                   with the next burst, like any triage decision
 
 Loop (for Isomux PM):
@@ -78,7 +81,7 @@ POST /api/signoff/pushed          Isomux Main after every push: {"commit"} (the 
                                   that sha leaves the Push state; returns {"pushed":[taskIds]}.
 GET  /api/signoff                 merged items, the main sha, and whether a push go is possible
 Nil's buttons on the Sign-off tab: approve (with comments on any entry it also files a P0
-"[auto | ready] Copy edits: <title>" task with them; the merged commit still goes out with the next push);
+"[go | ready] Copy edits: <title>" task with them; the merged commit still goes out with the next push);
 reject (a note, plus any comments; messages Main "/isomux-main revert ..."); and "Approve and push"
 (messages Main "/isomux-main push go ..."). Comments are saved as Nil types
 (POST /api/signoff/:taskId/comments {"copy":{"0":"..."},"images":{"0":"..."}}).
@@ -458,7 +461,7 @@ async function route(req: Request): Promise<Response> {
         ].join("\n");
         let created;
         try {
-          created = await office.createTask({ title: `[auto | ready] Copy edits: ${title}`, description, priority: "P0", roomId: ROOM_ID });
+          created = await office.createTask({ title: `[go | ready] Copy edits: ${title}`, description, priority: "P0", roomId: ROOM_ID });
         } catch (err) {
           return json({ error: `the board refused the copy-edits task (${String(err instanceof Error ? err.message : err)}); the item is not approved yet` }, 502);
         }
