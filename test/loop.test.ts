@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dispatch, freeWorkers, parseTag, readyQueue, staleCards, status, tick, unclassified } from "../src/loop";
+import { dispatch, dueIn, freeWorkers, parseTag, readyQueue, staleCards, status, tick, unclassified } from "../src/loop";
 import type { Agent, Office, PatchResult, Task } from "../src/office";
 
 const ROOM = "e6818e47";
@@ -46,6 +46,15 @@ describe("tags", () => {
     expect(parseTag("[go | ready] Fix it")).toEqual({ class: "go", state: "ready", rest: "Fix it" });
     expect(parseTag("[decide|soak until 10-25] X")).toEqual({ class: "decide", state: "soak until 10-25", rest: "X" });
     expect(parseTag("Fix it")).toBeNull();
+  });
+});
+
+describe("due in", () => {
+  test("a run is due everyMs after the last one, at once when that is past or it never ran", () => {
+    expect(dueIn(null, 5_000, 3_600_000)).toBe(0);
+    expect(dueIn(1_000, 1_000 + 600_000, 3_600_000)).toBe(3_000_000);
+    expect(dueIn(1_000, 1_000 + 3_600_000, 3_600_000)).toBe(0);
+    expect(dueIn(1_000, 1_000 + 9_000_000, 3_600_000)).toBe(0);
   });
 });
 

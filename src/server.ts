@@ -1,7 +1,9 @@
 import { CLASSIFY_MS, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
 import { ClosedTimes } from "./closed-times";
 import { type ImageDir } from "./images";
-import { dispatch, staleCards, status, tick, unclassified, type DispatchResult, type Status, type TickResult } from "./loop";
+import { dispatch, dueIn, staleCards, status, tick, unclassified, type DispatchResult, type Status, type TickResult } from "./loop";
+import { join } from "node:path";
+import { readJson, writeJson } from "./json-file";
 import { httpOffice, type Task } from "./office";
 import { page } from "./page";
 import { PacketStore, packetState } from "./packets";
@@ -61,7 +63,8 @@ Loop (for Isomux PM):
 GET  /api/status                  pause state, last dispatch and tick, ready queue, holders, merging, and the
                                   ten task states (board.states) with counts and tasks; done/obsolete list the last 20;
                                   board.states.triage is the open cards of the Triage tab
-POST /api/pause | /api/resume     pause stops dispatch and the tick; the first tick after a resume catches what stopped meanwhile
+POST /api/pause | /api/resume     pause stops dispatch and the tick; the first tick after a resume (within a minute) catches what stopped
+                                  meanwhile. The tick is due an hour after the last one, also across app restarts (timers.json).
 POST /api/settings                {"workers": 1-6}: the loop dispatches to Workers 1..N (also on the status page).
                                   Lowering N takes no task away; a worker above N keeps its tick while it holds a loop task.
 POST /api/dispatch | /api/tick    run one now (both refuse while paused)
@@ -92,7 +95,10 @@ The app cannot tell which member pressed them.
 
 type Run<T> = { at: number; result?: T; error?: string };
 let lastDispatch: Run<DispatchResult> | null = null;
-let lastTick: Run<TickResult> | null = null;
+// The last tick is kept in the data dir: an interval timer starts over at
+// every restart, so with frequent restarts the hourly tick never fired.
+const timersFile = join(dataDir, "timers.json");
+let lastTick: Run<TickResult> | null = readJson<{ lastTick: Run<TickResult> | null }>(timersFile, { lastTick: null }).lastTick;
 let busy = false;
 
 async function exclusive<T>(fn: () => Promise<T>): Promise<Run<T> | null> {
@@ -123,9 +129,26 @@ async function runDispatch(): Promise<Run<DispatchResult> | null> {
 async function runTick(): Promise<Run<TickResult> | null> {
   if (pause.paused) return null;
   const run = await exclusive(() => tick(office, pause.workers));
-  if (run) lastTick = run;
+  if (run) {
+    lastTick = run;
+    writeJson(timersFile, { lastTick });
+  }
   return run;
 }
+
+// The next tick is due TICK_MS after the last one, also across restarts (at
+// once when that is past). A tick that could not run (paused, or dispatch
+// busy) is tried again a minute later, so the first one after a resume
+// catches up.
+function scheduleTick(): void {
+  setTimeout(async () => {
+    if (dueIn(lastTick?.at ?? null, Date.now(), TICK_MS) > 0) return scheduleTick();
+    const run = await runTick();
+    if (run) scheduleTick();
+    else setTimeout(scheduleTick, 60_000);
+  }, dueIn(lastTick?.at ?? null, Date.now(), TICK_MS));
+}
+scheduleTick();
 
 // --- curator wake (Nil, 2026-10-19) ----------------------------------------------
 // Every 10 minutes, also while dispatch is paused (triage is Nil's work, not
@@ -190,7 +213,6 @@ setTimeout(() => void runClassify(), 30_000);
 setInterval(() => void runClassify(), CLASSIFY_MS);
 
 setInterval(() => void runDispatch(), DISPATCH_MS);
-setInterval(() => void runTick(), TICK_MS);
 
 // --- triage notifications ------------------------------------------------------
 

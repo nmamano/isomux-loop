@@ -99,6 +99,12 @@ export async function dispatch(office: Office, n: number): Promise<DispatchResul
   return out;
 }
 
+// How long until a run that is due every everyMs, after the last one at
+// lastAt (null: never ran). 0 when it is due now.
+export function dueIn(lastAt: number | null, now: number, everyMs: number): number {
+  return lastAt === null ? 0 : Math.max(0, lastAt + everyMs - now);
+}
+
 export type TickResult = { nudged: { worker: string; taskId: string }[]; main: number | null; errors: string[] };
 
 export function workerTickText(taskId: string): string {
