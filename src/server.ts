@@ -146,7 +146,12 @@ async function loopStatus(): Promise<Record<string, unknown>> {
         at: Date.now(),
         value: {
           ...status(agents, live, pause.workers),
-          states: stateViews(all, cards, (t) => closed.get(t)),
+          states: stateViews(
+            all,
+            cards,
+            (t) => closed.get(t),
+            new Set(signoff.visible().filter((i) => ["waiting", "edits", "rejected"].includes(signoffState(i))).map((i) => i.taskId)),
+          ),
           closedPending: closed.missing(all).length,
         },
       };

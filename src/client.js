@@ -62,6 +62,7 @@ const HELP = {
   ready: "Tasks the loop can take now, in the order it takes them.",
   merging: "Approved work that Isomux Main merges after CI.",
   signoffLine: "Merged work with copy or a visible change that waits for your approve or reject before the push.",
+  signoff: "Needs your sign-off: merged work whose item on the Sign-off tab waits for you, has edits requested, or waits for its revert.",
   never: "Never picked: tag [authority | ...]. The loop never touches it; also for work run outside the loop.",
   diagram: "Every task of the room is in exactly one of these states, read from the board now. Tap a state to list its tasks. Arrows show who moves a task on.",
   other: "Tasks that fit none of the states, for example a tag the loop does not know, a [<class> | nil] task without a card, or batch work outside the loop.",
@@ -105,6 +106,7 @@ const STATE_INFO = {
   ready: ["Ready", "Tag [auto | ready] or [decide | ready], open, no assignee, P0-P3. The loop picks these."],
   working: ["Working", "In progress, assigned to an Isomux Worker."],
   merging: ["Merging", "Tag [<class> | merging], in progress, no assignee. Isomux Main merges it after CI."],
+  signoff: ["Needs your sign-off", "Merged, with copy or a visible change: its item on the Sign-off tab waits for you, has edits requested, or waits for its revert. The board already says done."],
   never: ["Never picked", "Tag [authority | ...]. The loop never touches it."],
   backlog: ["Backlog", "P4. The loop never picks it."],
   done: ["Done", "Status done."],
@@ -112,7 +114,7 @@ const STATE_INFO = {
 };
 const BOX = {
   filed: [140, 10, 120], proposed: [140, 90, 120], ready: [140, 170, 120], working: [140, 250, 120],
-  merging: [140, 330, 120], done: [140, 410, 120],
+  merging: [140, 330, 120], signoff: [140, 410, 120], done: [140, 490, 120],
   never: [0, 40, 100], backlog: [0, 110, 100], obsolete: [300, 90, 100],
 };
 // [path, label x, label y, anchor, label, help, label runs up the lane]
@@ -121,13 +123,16 @@ const EDGES = [
   ["M200,136 V168", 206, 156, "start", "Nil", "Triage card to Ready: you confirm it with a loop class, or pick a packet option."],
   ["M200,216 V248", 206, 236, "start", "app", "Ready to Working: the app gives it to a free worker."],
   ["M200,296 V328", 206, 316, "start", "approved", "Working to Merging: the reviewer approved the work."],
-  ["M200,376 V408", 206, 396, "start", "CI green", "Merging to Done: CI passed and Isomux Main merged it."],
+  ["M200,376 V408", 206, 396, "start", "to sign off", "Merging to Needs your sign-off: merged, and it has copy or a visible change."],
+  ["M260,352 H290 V512 H262", 295, 440, "start", "nothing to sign off", "Merging to Done: merged, with nothing to sign off."],
+  ["M200,456 V488", 206, 476, "start", "approved", "Needs your sign-off to Done: you approved it and gave the push go."],
   ["M140,104 L102,68", 121, 115, "middle", "Nil", "Triage card to Never picked or Backlog: your decision."],
   ["M140,120 L102,128", null],
   ["M260,112 H298", 279, 106, "middle", "Nil", "Triage card to Obsolete: you close it."],
   ["M260,272 H284 V128 H262", 289, 200, "start", "packet", "Working to Triage card: the worker hit a design decision and sent you a packet."],
   ["M140,352 H120 V204 H138", 116, 280, "middle", "CI red", "Merging to Ready: CI failed because of the branch; it goes back to the queue.", true],
-  ["M140,432 H106 V184 H138", 102, 330, "middle", "sign-off rejected", "Done to Ready: you rejected it at sign-off, Isomux Main reverted it, and it goes back to the queue with your note.", true],
+  ["M140,432 H108 V190 H138", 104, 330, "middle", "rejected, reverted", "Needs your sign-off to Ready: you rejected it, Isomux Main reverted it, and it goes back to the queue with your note.", true],
+  ["M140,444 H94 V176 H138", 90, 330, "middle", "edits requested", "Needs your sign-off to Ready: you requested edits, and a copy-edits task enters the queue.", true],
 ];
 let pickedState = null;
 
@@ -150,7 +155,7 @@ function diagram(states) {
       '<text x="' + (x + w / 2) + '" y="' + (y + 19) + '" text-anchor="middle" font-size="12" font-weight="600">' + esc(label) + "</text>" +
       '<text x="' + (x + w / 2) + '" y="' + (y + 36) + '" text-anchor="middle" font-size="13">' + n + "</text></g>";
   }).join("");
-  return '<svg class="diagram" viewBox="0 0 400 456" role="img" aria-label="Task states">' + marker + edges + boxes + "</svg>";
+  return '<svg class="diagram" viewBox="0 0 400 536" role="img" aria-label="Task states">' + marker + edges + boxes + "</svg>";
 }
 function briefLine(t) {
   const when = t.closedAt ? " · closed " + clock(t.closedAt) : "";

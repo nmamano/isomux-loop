@@ -14,6 +14,7 @@ export const STATES = [
   "ready",
   "working",
   "merging",
+  "signoff",
   "never",
   "backlog",
   "done",
@@ -26,8 +27,11 @@ const LOOP_PRIORITIES = ["P0", "P1", "P2", "P3"];
 
 // First match wins, from the end of the path backwards, so a task never
 // counts in two states. hasCard: a triage proposal or a packet that is not
-// written to the board yet.
-export function classify(t: Task, hasCard: boolean): StateKey {
+// written to the board yet. needsSignoff: the app holds a merged sign-off
+// item for it that waits for Nil, has edits requested, or waits for its
+// revert (the board already says done).
+export function classify(t: Task, hasCard: boolean, needsSignoff = false): StateKey {
+  if (needsSignoff) return "signoff";
   if (t.status === "done") return "done";
   if (t.status === "obsolete") return "obsolete";
   if (t.priority === "P4") return "backlog";
@@ -67,10 +71,11 @@ export function stateViews(
   tasks: Task[],
   proposed: Set<string>,
   closedAt: (t: Task) => number | undefined,
+  signoff: Set<string> = new Set(),
 ): Record<StateKey, StateView> {
   const groups = {} as Record<StateKey, Task[]>;
   for (const k of [...STATES, "other" as const]) groups[k] = [];
-  for (const t of tasks) groups[classify(t, proposed.has(t.id))].push(t);
+  for (const t of tasks) groups[classify(t, proposed.has(t.id), signoff.has(t.id))].push(t);
   const out = {} as Record<StateKey, StateView>;
   for (const [k, list] of Object.entries(groups) as [StateKey, Task[]][]) {
     if (k === "done" || k === "obsolete") {

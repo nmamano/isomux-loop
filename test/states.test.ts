@@ -33,6 +33,8 @@ describe("classify", () => {
       [{ title: "untagged", status: "in_progress", assignee: "Isomux Lead" }, false, "other"],
     ];
     for (const [over, proposed, state] of cases) expect([over.title, classify(task(over), proposed)]).toEqual([over.title, state]);
+    // A merged task whose sign-off item waits counts there, though the board says done.
+    expect(classify(task({ title: "[auto | merging] x", status: "done" }), false, true)).toBe("signoff");
   });
 });
 
