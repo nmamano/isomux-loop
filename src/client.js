@@ -17,19 +17,78 @@ let loopState = null;
 let copies = [];
 const later = new Set();
 const picks = {};
+// Help rows opened with "?" (for phones, where hover does not exist).
+const openHelp = new Set();
+
+const HELP = {
+  P0: "P0: most urgent. The loop takes P0 tasks first.",
+  P1: "P1: high. Taken after every P0.",
+  P2: "P2: normal.",
+  P3: "P3: low. Taken when nothing above it waits.",
+  P4: "P4: backlog. The loop never picks it.",
+  auto: "auto: the loop does it from start to finish.",
+  decide: "decide: needs your design go/no-go. The loop may research it and write a decision packet first.",
+  taste: "taste: copy or a look you approve before it merges.",
+  authority: "authority: the loop never touches it. Also for work run outside the loop.",
+  keep: "keep: the task stays as it is, with the priority and class above.",
+  rescope: "rescope: the task is rewritten to the proposed scope, or to the scope in your note.",
+  obsolete: "obsolete: the task is closed, with the reason. Reversible: it can be reopened.",
+  priority: "Which priority the task gets. The loop takes P0 first, then P1 to P3, oldest first within one. P4 is backlog: never picked.",
+  class: "What kind of work it is, which decides how far the loop goes alone.",
+  outcome: "What happens to the task itself.",
+  head: "Facts about the task and the curator's proposal; nothing here needs you. \"Proposed\" is the curator's suggestion, already selected in the rows below. You decide with those rows.",
+  why: "The curator's reason for its proposal.",
+  scope: "The new title and description the curator proposes for this task.",
+  description: "The task's description on the board today.",
+  note: "Optional words for the curator, for example a different scope. It reads them when it writes your decision to the board.",
+  confirm: "Confirm saves your choice in the rows above. The curator writes it to the board a few minutes after your last decision; until then you can undo it in Decided.",
+  later: "Later moves this card to the end of the list. Nothing is saved.",
+  undo: "Undo takes the decision back while the curator has not written it to the board yet.",
+  decision: "What you chose for this task.",
+  applied: "On the board: the curator wrote your decision to the board.",
+  waiting: "Waiting for the curator: saved here; the curator writes it to the board a few minutes after your last decision.",
+  failed: "Failed: the curator could not write it to the board. It tries again with the next batch.",
+  pause: "Pause stops dispatch and the hourly tick. Workers keep the tasks they hold.",
+  resume: "Resume starts dispatch (every 2 minutes) and the hourly tick again.",
+  pairs: "How many worker/reviewer pairs the loop uses: it gives new tasks to Workers 1 to N. Lowering it takes no task away.",
+  runs: "Dispatch gives free workers the next ready task every 2 minutes. The tick nudges idle workers once an hour.",
+  working: "Workers that hold a task now.",
+  free: "Loop workers without a task. They get the next ready task at the next dispatch.",
+  ready: "Tasks the loop can take now, in the order it takes them.",
+  merging: "Approved work that Isomux Main merges after CI.",
+  parked: "Tasks that wait for you: a decision packet, a taste branch, or a question.",
+  tabStatus: "The loop now: pause, workers, queue, merges and what waits for you.",
+  tabOpen: "The curator's proposals that wait for your decision.",
+  tabDecided: "Your decisions that the curator has not written to the board yet. You can undo them.",
+  tabApplied: "Decisions the curator wrote to the board.",
+  tabCopy: "Copy that waits for your sign-off, old next to new.",
+  old: "The text as it is now. Struck words go away.",
+  new: "The text as proposed. Marked words are new.",
+};
+const TAB_HELP = { status: "tabStatus", open: "tabOpen", decided: "tabDecided", applied: "tabApplied", copy: "tabCopy" };
+
+// title="" for hover.
+function tip(key) {
+  return ' title="' + esc(HELP[key] || key) + '"';
+}
+// A "?" that opens the help for a row on a phone. id makes it unique per card.
+function q(key, id) {
+  const k = key + ":" + (id || "");
+  return '<button class="q' + (openHelp.has(k) ? " on" : "") + '" data-help="' + esc(k) + '"' +
+    ' title="What is this?" aria-label="What is this?">?</button>';
+}
+function helpBox(keys, key, id) {
+  if (!openHelp.has(key + ":" + (id || ""))) return "";
+  return '<div class="helpbox">' + keys.map((k) => "<div>" + esc(HELP[k]) + "</div>").join("") + "</div>";
+}
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
-function age(ms) {
-  if (!ms) return "";
-  const d = Math.floor((Date.now() - ms) / 86400000);
-  return d < 1 ? "today" : d + " d old";
-}
 function clock(ms) {
   if (!ms) return "never";
   const m = Math.round((Date.now() - ms) / 60000);
-  return m < 1 ? "just now" : m < 120 ? m + " min ago" : Math.round(m / 60) + " h ago";
+  return m < 1 ? "just now" : m < 120 ? m + " min ago" : m < 2880 ? Math.round(m / 60) + " h ago" : Math.round(m / 1440) + " days ago";
 }
 async function api(path, opts) {
   const res = await fetch(
@@ -95,7 +154,7 @@ function renderTabs() {
   };
   document.getElementById("tabs").innerHTML = TABS.map(
     ([k, label]) =>
-      '<button class="' + (k === tab ? "on" : "") + '" data-tab="' + k + '">' + label + (k in n ? " (" + n[k] + ")" : "") + "</button>",
+      '<button class="' + (k === tab ? "on" : "") + '" data-tab="' + k + '"' + tip(TAB_HELP[k]) + ">" + label + (k in n ? " (" + n[k] + ")" : "") + "</button>",
   ).join("");
 }
 function taskLine(t, who) {
@@ -108,8 +167,11 @@ function taskLine(t, who) {
     ' <span class="small">' + esc(t.id) + "</span></div>"
   );
 }
-function section(title, lines, empty) {
-  return "<h2>" + title + "</h2>" + (lines.length ? lines.join("") : '<div class="small">' + empty + "</div>");
+function section(title, key, lines, empty) {
+  return (
+    "<h2" + tip(key) + ">" + title + " " + q(key) + "</h2>" + helpBox([key], key) +
+    (lines.length ? lines.join("") : '<div class="small">' + empty + "</div>")
+  );
 }
 
 // --- status -----------------------------------------------------------------
@@ -121,26 +183,27 @@ function renderStatus() {
     '<div class="banner ' + (s.paused ? "paused" : "run") + '"><div><b>' +
     (s.paused ? "Paused: no dispatch, no tick" : "Running: dispatch and tick") + "</b>" +
     (s.paused && s.pausedSince ? '<div class="small">since ' + clock(s.pausedSince) + "</div>" : "") +
-    '</div><button class="btn ghost" data-pause="' + (s.paused ? "resume" : "pause") + '">' +
-    (s.paused ? "Resume" : "Pause") + "</button></div>";
-  h += '<div class="row"><span class="label">Worker/reviewer pairs</span>' +
-    [1, 2, 3, 4, 5, 6].map((n) => '<button class="chip' + (n === s.workers ? " on" : "") + '" data-workers="' + n + '">' + n + "</button>").join("") +
+    '</div><span><button class="btn ghost" data-pause="' + (s.paused ? "resume" : "pause") + '"' + tip(s.paused ? "resume" : "pause") + ">" +
+    (s.paused ? "Resume" : "Pause") + "</button> " + q("pause") + "</span></div>" + helpBox(["pause", "resume"], "pause");
+  h += '<div class="row"><span class="label"' + tip("pairs") + ">Worker/reviewer pairs " + q("pairs") + "</span>" +
+    helpBox(["pairs"], "pairs") +
+    [1, 2, 3, 4, 5, 6].map((n) => '<button class="chip' + (n === s.workers ? " on" : "") + '" data-workers="' + n + '"' + tip("pairs") + ">" + n + "</button>").join("") +
     '<div class="small">The loop dispatches to Workers 1 to ' + s.workers + ". Lowering it takes no task away.</div></div>";
   const d = s.lastDispatch;
   const t = s.lastTick;
-  h += '<div class="small">Last dispatch: ' + (d ? clock(d.at) : "not yet");
+  h += '<div class="small"' + tip("runs") + ">Last dispatch: " + (d ? clock(d.at) : "not yet");
   if (d && d.error) h += ' · <span class="warn">' + esc(d.error) + "</span>";
   else if (d && d.result) h += " · " + d.result.assigned.length + " assigned" + (d.result.errors.length ? ' · <span class="warn">' + esc(d.result.errors.join("; ")) + "</span>" : "");
   h += "<br>Last tick: " + (t ? clock(t.at) : "not yet");
   if (t && t.error) h += ' · <span class="warn">' + esc(t.error) + "</span>";
-  h += "</div>";
+  h += q("runs") + "</div>" + helpBox(["runs"], "runs");
   if (s.error) return h + '<div class="err">Board unreadable: ' + esc(s.error) + "</div>";
   const b = s.board;
-  h += section("Working", b.holding.map((x) => taskLine(x.task, x.worker)), "No worker holds a task.");
-  h += '<div class="small" style="margin-top:6px">Free: ' + (b.freeWorkers.length ? esc(b.freeWorkers.join(", ")) : "none") + "</div>";
-  h += section("Ready queue (" + b.ready.length + ")", b.ready.map((x) => taskLine(x)), "Nothing is ready.");
-  h += section("Waiting to merge (" + b.merging.length + ")", b.merging.map((x) => taskLine(x)), "Nothing waits to merge.");
-  h += section("Parked for Nil (" + b.parked.length + ")", b.parked.map((x) => taskLine(x)), "Nothing is parked.");
+  h += section("Working", "working", b.holding.map((x) => taskLine(x.task, x.worker)), "No worker holds a task.");
+  h += '<div class="small" style="margin-top:6px"' + tip("free") + ">Free: " + (b.freeWorkers.length ? esc(b.freeWorkers.join(", ")) : "none") + " " + q("free") + "</div>" + helpBox(["free"], "free");
+  h += section("Ready queue (" + b.ready.length + ")", "ready", b.ready.map((x) => taskLine(x)), "Nothing is ready.");
+  h += section("Waiting to merge (" + b.merging.length + ")", "merging", b.merging.map((x) => taskLine(x)), "Nothing waits to merge.");
+  h += section("Parked for Nil (" + b.parked.length + ")", "parked", b.parked.map((x) => taskLine(x)), "Nothing is parked.");
   return h;
 }
 
@@ -151,59 +214,75 @@ function chips(kind, list, chosen, proposed, id) {
     .map(
       (v) =>
         '<button class="chip' + (v === chosen ? " on" : "") + (v === proposed ? " proposed" : "") +
-        '" data-pick="' + kind + '" data-id="' + esc(id) + '" data-v="' + v + '">' + v + "</button>",
+        '" data-pick="' + kind + '" data-id="' + esc(id) + '" data-v="' + v + '"' + tip(v) + ">" + v + "</button>",
     )
     .join("");
 }
+function filed(ms) {
+  if (!ms) return "";
+  const d = Math.floor((Date.now() - ms) / 86400000);
+  return d < 1 ? "today" : d === 1 ? "1 day ago" : d + " days ago";
+}
 function head(i) {
   const p = i.proposal;
+  const now = i.task.priority ? "now " + esc(i.task.priority) : "no priority now";
   return (
-    '<div class="meta"><span>' + esc(i.task.priority || "no priority") + " → <b>" + p.priority + "</b></span><span>" +
-    p.class + "</span><span>" + p.outcome + "</span><span>" + esc(i.task.createdBy) + "</span><span>" +
-    age(i.task.createdAt) + "</span><span>" + esc(i.taskId) + "</span></div>" +
+    '<div class="meta"' + tip("head") + "><span>Proposed: <b>" + p.priority + " · " + p.class + " · " + p.outcome +
+    "</b> (" + now + ")</span>" + q("head", i.taskId) + "</div>" + helpBox(["head"], "head", i.taskId) +
+    '<div class="meta"' + tip("head") + "><span>Filed by " + esc(i.task.createdBy || "unknown") + "</span><span>" +
+    filed(i.task.createdAt) + "</span><span>Task " + esc(i.taskId) + "</span></div>" +
     '<div class="title">' + esc(i.task.title) + "</div>"
   );
 }
 function body(i) {
   const p = i.proposal;
-  let h = '<div class="why"><span class="label">Why</span><br>' + esc(p.why) + "</div>";
+  let h = '<div class="why"><span class="label"' + tip("why") + ">Why</span><br>" + esc(p.why) + "</div>";
   if (p.outcome === "rescope" || p.title || p.scope) {
-    h += '<div class="rescope"><span class="label">Proposed scope</span>';
+    h += '<div class="rescope"><span class="label"' + tip("scope") + ">Proposed scope</span>";
     if (p.title) h += '<div class="title">' + esc(p.title) + "</div>";
     if (p.scope) h += '<div class="desc">' + esc(p.scope) + "</div>";
     h += "</div>";
   }
   if (i.task.description)
-    h += '<details><summary>Current description</summary><div class="desc">' + esc(i.task.description) + "</div></details>";
+    h += '<details><summary' + tip("description") + '>Current description</summary><div class="desc">' + esc(i.task.description) + "</div></details>";
   return h;
+}
+function row(label, kind, list, k, p, id) {
+  return (
+    '<div class="row"><span class="label"' + tip(kind) + ">" + label + " " + q(kind, id) + "</span>" +
+    helpBox([kind].concat(list), kind, id) + chips(kind, list, k[kind], p[kind], id) + "</div>"
+  );
 }
 function openCard(i) {
   const p = i.proposal;
   const k = picks[i.taskId] || (picks[i.taskId] = { priority: p.priority, class: p.class, outcome: p.outcome, note: "" });
   return (
     '<div class="card">' + head(i) + body(i) +
-    '<div class="row"><span class="label">Priority</span>' + chips("priority", PRIORITIES, k.priority, p.priority, i.taskId) + "</div>" +
-    '<div class="row"><span class="label">Class</span>' + chips("class", CLASSES, k.class, p.class, i.taskId) + "</div>" +
-    '<div class="row"><span class="label">Outcome</span>' + chips("outcome", OUTCOMES, k.outcome, p.outcome, i.taskId) + "</div>" +
-    '<textarea rows="1" placeholder="Note for the curator (optional)" data-note="' + esc(i.taskId) + '">' + esc(k.note) + "</textarea>" +
+    row("Priority", "priority", PRIORITIES, k, p, i.taskId) +
+    row("Class", "class", CLASSES, k, p, i.taskId) +
+    row("Outcome", "outcome", OUTCOMES, k, p, i.taskId) +
+    '<textarea rows="1" placeholder="Note for the curator (optional)" data-note="' + esc(i.taskId) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
     '<div class="err" data-err="' + esc(i.taskId) + '"></div>' +
-    '<div class="actions"><button class="btn primary" data-decide="' + esc(i.taskId) + '">Confirm</button>' +
-    '<button class="btn ghost" data-later="' + esc(i.taskId) + '">Later</button></div></div>'
+    '<div class="actions"><button class="btn primary" data-decide="' + esc(i.taskId) + '"' + tip("confirm") + ">Confirm</button>" +
+    '<button class="btn ghost" data-later="' + esc(i.taskId) + '"' + tip("later") + ">Later</button>" + q("actions", i.taskId) + "</div>" +
+    helpBox(["confirm", "later", "note"], "actions", i.taskId) + "</div>"
   );
 }
 function decidedCard(i) {
   const d = i.decision;
   const s = itemState(i);
   const status =
-    s === "applied" ? '<span class="ok">On the board</span>'
-    : s === "failed" ? '<span class="warn">Failed: ' + esc(i.applied.error || "no reason given") + "</span>"
-    : "Waiting for the curator";
+    s === "applied" ? '<span class="ok"' + tip("applied") + ">On the board</span>"
+    : s === "failed" ? '<span class="warn"' + tip("failed") + ">Failed: " + esc(i.applied.error || "no reason given") + "</span>"
+    : "<span" + tip("waiting") + ">Waiting for the curator</span>";
+  const stateKey = s === "applied" ? "applied" : s === "failed" ? "failed" : "waiting";
   let h =
     '<div class="card">' + head(i) +
-    '<div class="why"><span class="label">Your decision</span><br><b>' + d.priority + " · " + d.class + " · " + d.outcome + "</b>" +
-    (d.note ? "<br>" + esc(d.note) : "") + "</div>" + '<div class="meta">' + status + "</div>";
+    '<div class="why"><span class="label"' + tip("decision") + ">Your decision</span><br><b>" + d.priority + " · " + d.class + " · " + d.outcome + "</b>" +
+    (d.note ? "<br>" + esc(d.note) : "") + "</div>" + '<div class="meta">' + status + q("state", i.taskId) + "</div>" +
+    helpBox(s === "applied" ? [stateKey] : [stateKey, "undo"], "state", i.taskId);
   if (s !== "applied")
-    h += '<div class="err" data-err="' + esc(i.taskId) + '"></div><div class="actions"><button class="btn ghost" data-undo="' + esc(i.taskId) + '">Undo</button></div>';
+    h += '<div class="err" data-err="' + esc(i.taskId) + '"></div><div class="actions"><button class="btn ghost" data-undo="' + esc(i.taskId) + '"' + tip("undo") + ">Undo</button></div>";
   return h + "</div>";
 }
 function renderTriage() {
@@ -257,8 +336,8 @@ function renderCopy() {
     return (
       '<p><a href="/" data-copy-list="1">All copy</a></p><div class="title">' + esc(c.title) + "</div>" +
       '<div class="small">' + esc(c.taskId) + " · updated " + clock(c.updatedAt) + "</div>" +
-      '<div class="cols"><div><h2>Old</h2><div class="copytext">' + (c.old ? o : '<span class="small">New copy</span>') +
-      '</div></div><div><h2>New</h2><div class="copytext">' + n + "</div></div></div>"
+      '<div class="cols"><div><h2' + tip("old") + '>Old</h2><div class="copytext">' + (c.old ? o : '<span class="small">New copy</span>') +
+      '</div></div><div><h2' + tip("new") + '>New</h2><div class="copytext">' + n + "</div></div></div>"
     );
   }
   if (!copies.length) return '<div class="empty">No copy waits for sign-off.</div>';
@@ -292,6 +371,11 @@ document.addEventListener("click", async (e) => {
   const t = e.target.closest("button");
   if (!t) return;
   const d = t.dataset;
+  if (d.help) {
+    if (openHelp.has(d.help)) openHelp.delete(d.help);
+    else openHelp.add(d.help);
+    return render();
+  }
   if (d.tab) return go(d.tab);
   if (d.pick) {
     picks[d.id][d.pick] = d.v;
