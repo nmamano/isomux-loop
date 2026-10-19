@@ -55,7 +55,7 @@ const HELP = {
   why: "The curator's reason for its proposal.",
   scope: "The new title and description the curator proposes for this task. go, design or on hold accepts them; your note can change them.",
   description: "The task's description on the board today.",
-  note: "Optional words for the curator. A note can change anything, for example the scope; the curator applies it when it writes your decision to the board.",
+  note: "Optional words for the curator. A note can change anything, for example the scope; the curator applies it when it writes your decision to the board. Shift+Enter confirms; Enter adds a line.",
   confirm: "Confirm saves your choice in the rows above. The curator writes it to the board a few minutes after your last decision; until then you can undo it in Decided.",
   later: "Later moves this card to the end of the list. Nothing is saved.",
   undo: "Undo takes the decision back while the curator has not written it to the board yet.",
@@ -1034,6 +1034,21 @@ document.addEventListener("click", async (e) => {
     } catch (err) {
       showErr(d.undo, err.message);
     }
+  }
+});
+// Shift+Enter in a note presses the card's Confirm (or Bring in) button, so
+// the same checks and errors apply. Plain Enter adds a line.
+const NOTE_CONFIRM = { note: "decide", pnote: "pdecide", bnote: "bconfirm" };
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || !e.shiftKey || e.isComposing || e.target.tagName !== "TEXTAREA") return;
+  for (const [field, button] of Object.entries(NOTE_CONFIRM)) {
+    const id = e.target.dataset[field];
+    if (id === undefined) continue;
+    const btn = document.querySelector("[data-" + button + '="' + CSS.escape(id) + '"]');
+    if (!btn || btn.disabled) return;
+    e.preventDefault();
+    btn.click();
+    return;
   }
 });
 document.addEventListener("input", (e) => {
