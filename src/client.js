@@ -27,6 +27,8 @@ const packetPicks = {};
 const rejectNotes = {};
 // Help rows opened with "?" (for phones, where hover does not exist).
 const openHelp = new Set();
+// Descriptions the reader opened, by key: a render keeps them open.
+const openDetails = new Set();
 
 const HELP = {
   P0: "P0: most urgent. The loop takes P0 tasks first.",
@@ -76,6 +78,7 @@ const HELP = {
   tabDecided: "Your decisions that the curator has not written to the board yet. You can undo them.",
   tabApplied: "Decisions the curator wrote to the board.",
   tabBacklog: "The Backlog state: P4 tasks with no card. The loop never picks them. Bring one in to give it a priority and a class.",
+  toggleAll: "Expand or collapse every description and packet in this list at once.",
   bringIn: "Bring in: give this backlog task a priority (P0-P3) and a class. It goes to the curator like any triage decision, and you can undo it in Decided until then.",
   tabSignoff: "Merged copy and visible changes: approve or reject each, then press Approve and push.",
   old: "The text before the change. Struck words went away.",
@@ -205,6 +208,20 @@ function helpBox(keys, key, id) {
 // Chip and summary text for a value: a class may read differently from its tag.
 function label(v) {
   return CLASS_LABEL[v] || v;
+}
+function details(key, summaryTip, summary, body) {
+  return '<details data-dkey="' + esc(key) + '"' + (openDetails.has(key) ? " open" : "") + "><summary" + tip(summaryTip) + ">" + summary + "</summary>" + body + "</details>";
+}
+// The label is set after each render, from what the list shows.
+function toggleAll() {
+  return '<div class="small"><button class="btn ghost" data-dall="1"' + tip("toggleAll") + ">Expand all</button> " + q("toggleAll") + "</div>" + helpBox(["toggleAll"], "toggleAll");
+}
+function syncToggleAll() {
+  const btn = document.querySelector("[data-dall]");
+  if (!btn) return;
+  const all = [...document.querySelectorAll("#list details[data-dkey]")];
+  btn.hidden = all.length === 0;
+  btn.textContent = all.length && all.every((d) => d.open) ? "Collapse all" : "Expand all";
 }
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -388,7 +405,7 @@ function body(i) {
     h += "</div>";
   }
   if (i.task.description)
-    h += '<details><summary' + tip("description") + '>Current description</summary><div class="desc">' + esc(i.task.description) + "</div></details>";
+    h += details("desc:" + i.taskId, "description", "Current description", '<div class="desc">' + esc(i.task.description) + "</div>");
   return h;
 }
 function row(label, kind, list, k, p, id) {
@@ -440,7 +457,7 @@ function renderTriage() {
   if (tab === "open") all = lastLater(all);
   if (tab === "applied") all.sort((a, b) => b.x.applied.at - a.x.applied.at);
   if (!all.length) return '<div class="empty">' + (tab === "open" ? "Nothing in Triage." : "Nothing here.") + "</div>";
-  return all
+  return (tab === "open" ? toggleAll() : "") + all
     .map((e) =>
       e.kind === "packet" ? (tab === "open" ? packetCard(e.x) : decidedPacketCard(e.x)) : tab === "open" ? openCard(e.x) : decidedCard(e.x),
     )
@@ -522,7 +539,7 @@ function packetCard(p) {
   return (
     '<div class="card packet">' + packetHead(p) +
     '<div class="question"' + tip("question") + ">" + esc(p.question) + "</div>" +
-    (p.body ? "<details><summary" + tip("packetBody") + ">The packet</summary><div class=\"mdbody\">" + md(p.body) + "</div></details>" : "") +
+    (p.body ? details("packet:" + p.taskId, "packetBody", "The packet", '<div class="mdbody">' + md(p.body) + "</div>") : "") +
     imagesHtml("packets", p.taskId, p.images) +
     (links ? '<div class="links"' + tip("links") + ">" + links + "</div>" : "") +
     '<div class="row"><span class="label"' + tip("options") + ">Options " + q("options", p.taskId) + "</span>" + helpBox(["options", "dot"], "options", p.taskId) +
@@ -589,13 +606,13 @@ function diff(a, b) {
 // --- backlog ------------------------------------------------------------------
 
 function renderBacklog() {
-  let h = '<div class="small"' + tip("tabBacklog") + ">" + backlogTasks.length + " P4 tasks with no card, oldest first. The loop never picks them. " + q("tabBacklog") + "</div>" + helpBox(["tabBacklog", "bringIn"], "tabBacklog");
+  let h = '<div class="small"' + tip("tabBacklog") + ">" + backlogTasks.length + " P4 tasks with no card, oldest first. The loop never picks them. " + q("tabBacklog") + "</div>" + helpBox(["tabBacklog", "bringIn"], "tabBacklog") + toggleAll();
   if (!backlogTasks.length) return h + '<div class="empty">The backlog is empty.</div>';
   for (const t of backlogTasks) {
     const k = backlogPicks[t.id];
     h += '<div class="card"><div class="meta"><span>Filed by ' + esc(t.createdBy || "unknown") + "</span><span>" + filed(t.createdAt) + "</span><span>Task " + esc(t.id) + "</span></div>" +
       '<div class="title">' + esc(t.title) + "</div>" +
-      (t.description ? '<details><summary' + tip("description") + '>Description</summary><div class="desc">' + esc(t.description) + "</div></details>" : "");
+      (t.description ? details("bdesc:" + t.id, "description", "Description", '<div class="desc">' + esc(t.description) + "</div>") : "");
     if (!k) {
       h += '<div class="actions"><button class="btn ghost" data-bring="' + esc(t.id) + '"' + tip("bringIn") + ">Bring in</button></div>";
     } else {
@@ -733,12 +750,36 @@ function render() {
   el.className = tab === "signoff" ? "wide" : tab === "status" ? "" : "medium";
   el.innerHTML =
     tab === "status" ? renderStatus() : tab === "signoff" ? renderSignoff() : tab === "backlog" ? renderBacklog() : renderTriage();
+  syncToggleAll();
 }
+// toggle does not bubble: listen in the capture phase.
+document.addEventListener(
+  "toggle",
+  (e) => {
+    const d = e.target;
+    if (!d.dataset || !d.dataset.dkey) return;
+    if (d.open) openDetails.add(d.dataset.dkey);
+    else openDetails.delete(d.dataset.dkey);
+    syncToggleAll();
+  },
+  true,
+);
 function showErr(id, msg) {
   const el = document.querySelector('[data-err="' + CSS.escape(id) + '"]');
   if (el) el.textContent = msg;
 }
 document.addEventListener("click", async (e) => {
+  if (e.target.closest("[data-dall]")) {
+    const all = [...document.querySelectorAll("#list details[data-dkey]")];
+    const open = !all.every((d) => d.open);
+    for (const d of all) {
+      d.open = open;
+      if (open) openDetails.add(d.dataset.dkey);
+      else openDetails.delete(d.dataset.dkey);
+    }
+    syncToggleAll();
+    return;
+  }
   const st = e.target.closest("[data-state]");
   if (st) {
     e.preventDefault();
