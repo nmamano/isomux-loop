@@ -35,7 +35,8 @@ export type SignoffItem = {
   images: Image[];
   comments?: Comments;
   postedAt: number;
-  merged: { commit: string; at: number } | null;
+  // seq: the merge's place in Main's report order (missing on older items).
+  merged: { commit: string; at: number; seq?: number } | null;
   // edits: the copy-edits task an approval with comments filed (Nil, 2026-10-19:
   // approve and request edits are one case, approved with 0 or more edits).
   decision: { approved: boolean; note: string; at: number; edits?: string } | null;
@@ -55,6 +56,23 @@ type State = {
   unpushed?: Record<string, { commit: string; at: number; seq: number }>;
   shas?: { commit: string; seq: number }[];
   seq?: number;
+  // A rejected merge and its revert (Nil, 2026-10-20): a push point between
+  // them would ship the merge without its revert.
+  spans?: { from: number; to: number }[];
+};
+
+export type PushCheck = {
+  ok: boolean;
+  reason: string;
+  // The push point: the newest reported sha with every item merged at or
+  // before it approved (or nothing to sign off), and not inside a span.
+  sha: string | null;
+  seq: number | null;
+  approved: string[];
+  // Every merge the push point takes, item or not.
+  tasks: string[];
+  // Items that hold the push point back, oldest first: it stays before them.
+  blockers: { taskId: string; state: "waiting" | "rejected"; seq: number }[];
 };
 
 export function signoffState(i: SignoffItem): SignoffState {
@@ -71,6 +89,11 @@ function text(v: unknown, field: string, max: number, required = true): string {
   if (typeof v !== "string") throw new ValidationError(`${field} must be a string`);
   if (v.length > max) throw new ValidationError(`${field} is longer than ${max} characters`);
   return v;
+}
+
+// A short sha matches its long form either way.
+function sameSha(a: string, b: string): boolean {
+  return a.startsWith(b) || b.startsWith(a);
 }
 
 function commitOf(raw: unknown): string {
@@ -184,7 +207,7 @@ export class SignoffStore {
     this.record(taskId, commit, at);
     const i = this.state.items[taskId];
     // A re-merge (after a red CI, say) moves the item to the new commit.
-    if (i && signoffState(i) !== "rejected") i.merged = { commit, at };
+    if (i && signoffState(i) !== "rejected") i.merged = { commit, at, seq: this.state.seq };
     this.save();
     return { signoff: Boolean(i) };
   }
@@ -195,10 +218,12 @@ export class SignoffStore {
     this.state.lastSha = { commit, at: this.now() };
     // The revert commit goes out with the next push; the task itself left
     // main and goes back to ready.
-    this.record(null, commit, this.now());
-    delete this.state.unpushed![taskId];
     const i = this.state.items[taskId];
     const removed = Boolean(i && signoffState(i) === "rejected");
+    const from = removed ? this.itemSeq(i!) : null;
+    this.record(null, commit, this.now());
+    if (from !== null) (this.state.spans ??= []).push({ from, to: this.state.seq! });
+    delete this.state.unpushed![taskId];
     if (removed) {
       delete this.state.items[taskId];
       this.images.clear(taskId);
@@ -304,26 +329,53 @@ export class SignoffStore {
     return i;
   }
 
-  // Push go: no merged item undecided, no rejection waiting for its revert,
-  // and a main sha newer than the last push go.
-  pushCheck(): { ok: boolean; reason: string; sha: string | null; approved: string[] } {
-    const items = this.visible();
-    const approved = items.filter((i) => signoffState(i) === "approved").map((i) => i.taskId);
-    const sha = this.state.lastSha?.commit ?? null;
-    const waiting = items.filter((i) => signoffState(i) === "waiting").length;
-    const rejected = items.filter((i) => signoffState(i) === "rejected").length;
-    let reason = "";
-    if (waiting) reason = `${waiting} item${waiting === 1 ? "" : "s"} still need${waiting === 1 ? "s" : ""} your approve or reject`;
-    else if (rejected) reason = `${rejected} rejected item${rejected === 1 ? "" : "s"} wait${rejected === 1 ? "s" : ""} for Isomux Main's revert`;
-    else if (!sha) reason = "Isomux Main has reported no merge yet";
-    else if (this.state.lastPushGo?.commit === sha && approved.length === 0) reason = `main ${sha.slice(0, 8)} already has a push go`;
-    return { ok: reason === "", reason, sha, approved };
+  // An item's merge in report order. Items from before seq existed: their
+  // task's unpushed entry, else their commit in the sha list, else 0, which
+  // holds every later merge back (the safe side).
+  private itemSeq(i: SignoffItem): number {
+    if (i.merged?.seq !== undefined) return i.merged.seq;
+    const u = this.state.unpushed?.[i.taskId];
+    if (u && i.merged && u.commit === i.merged.commit) return u.seq;
+    const s = (this.state.shas ?? []).find((x) => i.merged && sameSha(x.commit, i.merged.commit));
+    return s ? s.seq : 0;
+  }
+  private shaSeq(commit: string | undefined): number | undefined {
+    if (!commit) return undefined;
+    return [...(this.state.shas ?? [])].reverse().find((x) => sameSha(x.commit, commit))?.seq;
   }
 
-  // After Main got the message: approved items leave the list.
+  // Main is linear, so a push is "everything up to sha X" (Nil, 2026-10-20):
+  // push along the way, up to the first item that still waits for Nil (or
+  // for its revert). Later merges wait for the next push.
+  pushCheck(): PushCheck {
+    const blockers = this.visible()
+      .filter((i) => ["waiting", "rejected"].includes(signoffState(i)))
+      .map((i) => ({ taskId: i.taskId, state: signoffState(i) as "waiting" | "rejected", seq: this.itemSeq(i) }))
+      .sort((a, b) => a.seq - b.seq);
+    const limit = blockers.length ? blockers[0].seq : Infinity;
+    const spans = this.state.spans ?? [];
+    const best = (this.state.shas ?? [])
+      .filter((x) => x.seq < limit && !spans.some((sp) => sp.from <= x.seq && x.seq < sp.to))
+      .reduce<{ commit: string; seq: number } | null>((a, b) => (!a || b.seq > a.seq ? b : a), null);
+    const seq = best ? best.seq : null;
+    const tasks = seq === null ? [] : Object.entries(this.state.unpushed ?? {}).filter(([, u]) => u.seq <= seq).sort((a, b) => a[1].seq - b[1].seq).map(([id]) => id);
+    const approved = this.visible().filter((i) => signoffState(i) === "approved" && seq !== null && this.itemSeq(i) <= seq).map((i) => i.taskId);
+    const goSeq = this.shaSeq(this.state.lastPushGo?.commit);
+    const b = blockers[0];
+    let reason = "";
+    if (!this.state.lastSha) reason = "Isomux Main has reported no merge yet";
+    else if (seq === null)
+      reason = b ? (b.state === "rejected" ? `rejected ${b.taskId} waits for its revert` : `${b.taskId}, the oldest item, waits for your approve or reject`) : "nothing new to push";
+    else if (goSeq !== undefined && goSeq >= seq) reason = `the push go for ${best!.commit.slice(0, 8)} is sent; it waits for Isomux Main`;
+    return { ok: reason === "", reason, sha: best ? best.commit : null, seq, approved, tasks, blockers };
+  }
+
+  // After Main got the message: the approved items up to the push point
+  // leave the list; later ones wait for the next push.
   recordPushGo(sha: string): void {
+    const seq = this.shaSeq(sha) ?? -1;
     for (const i of this.visible()) {
-      if (signoffState(i) === "approved") {
+      if (signoffState(i) === "approved" && this.itemSeq(i) <= seq) {
         delete this.state.items[i.taskId];
         this.images.clear(i.taskId);
       }
@@ -334,13 +386,13 @@ export class SignoffStore {
 
   // The merges not pushed yet (the diagram's Push stage), oldest first. sent:
   // the last push go included it, so it waits for Main's push report.
-  unpushedList(): { taskId: string; commit: string; at: number; sent: boolean }[] {
+  unpushedList(): { taskId: string; commit: string; at: number; seq: number; sent: boolean }[] {
     const go = this.state.lastPushGo?.commit;
     const same = (a: string) => Boolean(go) && (a.startsWith(go!) || go!.startsWith(a));
     const goSeq = [...(this.state.shas ?? [])].reverse().find((x) => same(x.commit))?.seq;
     return Object.entries(this.state.unpushed ?? {})
       .sort((a, b) => a[1].seq - b[1].seq)
-      .map(([taskId, u]) => ({ taskId, commit: u.commit, at: u.at, sent: goSeq !== undefined && u.seq <= goSeq }));
+      .map(([taskId, u]) => ({ taskId, commit: u.commit, at: u.at, seq: u.seq, sent: goSeq !== undefined && u.seq <= goSeq }));
   }
 
   // Main pushed this sha: every merge and revert reported up to it is pushed.
@@ -356,6 +408,7 @@ export class SignoffStore {
         out.push(id);
       }
     this.state.shas = this.state.shas!.filter((x) => x.seq > hit.seq);
+    this.state.spans = (this.state.spans ?? []).filter((sp) => sp.to > hit.seq);
     this.save();
     return { pushed: out };
   }

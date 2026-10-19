@@ -92,8 +92,13 @@ POST /api/signoff/:taskId/merged  Isomux Main after EVERY merge, item or not: {"
 POST /api/signoff/:taskId/reverted  Isomux Main after a revert Nil asked for: {"commit"}. The item leaves the list.
 POST /api/signoff/pushed          Isomux Main after every push: {"commit"} (the sha it pushed). Every merge reported up to
                                   that sha leaves the Push state; returns {"pushed":[taskIds]}.
-GET  /api/signoff                 merged items, the merges not pushed yet (unpushed: taskId, commit, sent = in the last push go),
-                                  the main sha, and whether a push go is possible
+GET  /api/signoff                 merged items, the merges not pushed yet (unpushed: taskId, commit, seq, sent = in the last
+                                  push go), the main sha, and push: the push point (Nil, 2026-10-20). Main is linear, so a
+                                  push is "everything up to sha X": push.sha is the newest reported sha with every item
+                                  merged at or before it approved (or nothing to sign off); push.tasks are the merges it
+                                  takes, push.blockers the items that hold it back (oldest first). A rejected item holds it
+                                  back until Main reports the revert, and no point between the rejected merge and its revert
+                                  is used. The push go names push.sha, never main's tip.
 Nil's buttons on the Sign-off tab: approve (with comments on any entry it also files a P0
 "[go | ready] Copy edits: <title>" task with them; the merged commit still goes out with the next push);
 reject (a note, plus any comments; messages Main "/isomux-main revert ..."); and "Push" on the Push tab
@@ -464,7 +469,9 @@ async function route(req: Request): Promise<Response> {
     const check = signoff.pushCheck();
     if (!check.ok) return json({ error: check.reason }, 409);
     const text =
-      `/isomux-main push go from Nil through the loop app: push main at ${check.sha}. ` +
+      `/isomux-main push go from Nil through the loop app: push main at ${check.sha} ` +
+      `(the push point: ${check.tasks.length} merge${check.tasks.length === 1 ? "" : "s"}; later merges wait for their sign-off). ` +
+      `git push origin ${check.sha}:main, never main's tip. ` +
       `Signed off: ${check.approved.length ? check.approved.join(", ") : "none (no copy or visible change waited)"}.`;
     if (!(await office.message(text, await mainAgentId()))) return json({ error: "the message to Isomux Main failed; nothing changed" }, 502);
     signoff.recordPushGo(check.sha!);

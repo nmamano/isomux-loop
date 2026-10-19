@@ -119,26 +119,60 @@ describe("sign-off", () => {
     expect(() => s.merged("t1", { commit: "not a sha" })).toThrow(ValidationError);
   });
 
-  test("push go waits for every decision and every revert, then removes the approved items", () => {
+  test("push point: everything up to the first item that waits; later approvals wait for the next push", () => {
+    const s = new SignoffStore(tempDir());
+    for (const id of ["t1", "t2", "t4"]) s.put({ ...item, taskId: id });
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.merged("plain", { commit: "bbbbbbb2" });
+    s.merged("t2", { commit: "ccccccc3" });
+    s.merged("t4", { commit: "ddddddd4" });
+    // t1 waits: nothing before it, so nothing to push.
+    expect(s.pushCheck()).toMatchObject({ ok: false, sha: null });
+    s.approve("t1");
+    // Up to plain: t2 waits, so its merge and later ones stay behind.
+    expect(s.pushCheck()).toMatchObject({ ok: true, sha: "bbbbbbb2", tasks: ["t1", "plain"], approved: ["t1"] });
+    s.approve("t4");
+    expect(s.pushCheck().sha).toBe("bbbbbbb2");
+    expect(s.pushCheck().blockers.map((b) => b.taskId)).toEqual(["t2"]);
+    s.recordPushGo("bbbbbbb2");
+    // Only the approvals up to the push point leave; t4 waits behind t2.
+    expect(s.visible().map((i) => i.taskId)).toEqual(["t2", "t4"]);
+    expect(s.pushCheck()).toMatchObject({ ok: false, sha: "bbbbbbb2" });
+    s.approve("t2");
+    expect(s.pushCheck()).toMatchObject({ ok: true, sha: "ddddddd4", approved: ["t2", "t4"] });
+    s.pushed({ commit: "bbbbbbb2" });
+    expect(s.pushCheck().tasks).toEqual(["t2", "t4"]);
+  });
+
+  test("push point: a rejected merge holds it back until its revert, and no point between them is used", () => {
     const s = new SignoffStore(tempDir());
     s.put(item);
-    s.put({ ...item, taskId: "t2" });
-    s.merged("t1", { commit: "aaaaaaa1" });
-    s.merged("t2", { commit: "bbbbbbb2" });
-    expect(s.pushCheck().ok).toBe(false);
-    s.approve("t1");
-    expect(() => s.checkReject("t2", { note: " " })).toThrow(ValidationError);
-    s.recordReject("t2", "wrong tone");
-    expect(s.pushCheck()).toMatchObject({ ok: false });
-    expect(() => s.put({ ...item, taskId: "t2" })).toThrow(ValidationError);
-    expect(s.reverted("t2", { commit: "ccccccc3" })).toEqual({ removed: true });
-    const check = s.pushCheck();
-    expect(check).toEqual({ ok: true, reason: "", sha: "ccccccc3", approved: ["t1"] });
-    s.recordPushGo(check.sha!);
-    expect(s.visible()).toEqual([]);
-    expect(s.pushCheck().ok).toBe(false);
-    s.merged("t3", { commit: "ddddddd4" });
-    expect(s.pushCheck()).toMatchObject({ ok: true, sha: "ddddddd4", approved: [] });
+    s.merged("before", { commit: "aaaaaaa1" });
+    s.merged("t1", { commit: "bbbbbbb2" });
+    s.merged("after", { commit: "ccccccc3" });
+    s.recordReject("t1", "wrong tone");
+    expect(s.pushCheck()).toMatchObject({ ok: true, sha: "aaaaaaa1" });
+    expect(() => s.put(item)).toThrow(ValidationError);
+    s.reverted("t1", { commit: "ddddddd4" });
+    // After the revert: up to the revert, never to "after" alone (it holds t1 without its revert).
+    expect(s.pushCheck()).toMatchObject({ ok: true, sha: "ddddddd4", tasks: ["before", "after"] });
+    s.merged("later", { commit: "eeeeeee5" });
+    expect(s.pushCheck().sha).toBe("eeeeeee5");
+    s.pushed({ commit: "aaaaaaa1" });
+    expect(s.pushCheck()).toMatchObject({ sha: "eeeeeee5", tasks: ["after", "later"] });
+  });
+
+  test("push point: never the rejected merge itself while a later item waits, also after its revert", () => {
+    const s = new SignoffStore(tempDir());
+    s.put(item);
+    s.put({ ...item, taskId: "w" });
+    s.merged("before", { commit: "aaaaaaa1" });
+    s.merged("t1", { commit: "bbbbbbb2" });
+    s.merged("w", { commit: "ccccccc3" });
+    s.recordReject("t1", "wrong tone");
+    s.reverted("t1", { commit: "ddddddd4" });
+    // w waits, so the point stays before it; bbbbbbb2 would ship t1 without its revert.
+    expect(s.pushCheck()).toMatchObject({ ok: true, sha: "aaaaaaa1", tasks: ["before"] });
   });
 
   test("every merge waits in Push until Main reports a push that includes it; a revert takes the task out", () => {
@@ -242,7 +276,7 @@ describe("sign-off", () => {
     const a = s.approve("t1", "ed1");
     expect([signoffState(a), a.decision!.edits]).toEqual(["approved", "ed1"]);
     expect(() => s.undo("t1")).toThrow(ValidationError);
-    expect(s.pushCheck()).toEqual({ ok: true, reason: "", sha: "aaaaaaa1", approved: ["t1"] });
+    expect(s.pushCheck()).toMatchObject({ ok: true, reason: "", sha: "aaaaaaa1", approved: ["t1"] });
     s.recordPushGo("aaaaaaa1");
     expect(s.visible()).toEqual([]);
   });

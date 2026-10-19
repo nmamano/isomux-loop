@@ -95,8 +95,12 @@ const HELP = {
   splitView: "Show the task-state diagram beside Triage. It updates after each decision and every 15 s. Drag the line between them to change the widths. A narrow screen shows Triage only.",
   divider: "Drag to change the widths of the diagram and Triage.",
   bringIn: "Bring in: give this backlog task go, design or on hold and a priority (P0-P3). It goes to the curator like any triage decision, and you can undo it in Decided until then.",
-  tabSignoff: "Merged copy and visible changes that wait for your approve or reject, and rejections that wait for their revert. An approved item moves to Push.",
-  tabPush: "Merged work not pushed yet: approved sign-off items and merges with nothing to sign off. The same tasks as the diagram's Push stage. Push sends them all.",
+  tabSignoff: "Merged copy and visible changes that wait for your approve or reject, and rejections that wait for their revert, oldest merge first. An approved item moves to Push; approving from the top moves the push point.",
+  tabPush: "Merged work not pushed yet: approved sign-off items and merges with nothing to sign off. The same tasks as the diagram's Push stage. Push sends everything up to the push point; the rest waits.",
+  pushPoint: "The push point is the newest merge with every sign-off item at or before it approved. Main is linear, so a push takes everything up to it. A rejected item holds it back until Isomux Main reports the revert.",
+  goesOut: "Merges up to the push point: the next push sends them.",
+  waitsBehind: "Merges after an item that still waits in Sign-off (or for its revert). They go out once that item is approved; approve Sign-off from the top to move the push point.",
+  waitsFor: "The oldest item in Sign-off before this merge. Approve it to let this one go out.",
   old: "The text before the change. Struck words went away.",
   pairImages: "The same screen before and after the change. Tap an image to open it full size. One comment covers the pair.",
   before: "The screen before the change.",
@@ -118,7 +122,7 @@ const HELP = {
   editsFiled: "Approved, and your comments became a copy-edits task. This commit goes out with the next push; the edits follow as their own commit.",
   rejectNote: "Why you reject it, and what to do instead. The worker reads it when the task comes back.",
   undoApprove: "Undo the approval: the item goes back to Sign-off. Possible until you press Push.",
-  push: "Push: tells Isomux Main to push main at the sha below, which sends every task in this list. Enabled when every item is approved or rejected and every rejection is reverted.",
+  push: "Push up to: tells Isomux Main to push main up to the push point, which sends every task under Goes out. Enabled when the push point is ahead of the last push go.",
   sha: "The main commit from Isomux Main's latest merge or revert. Push names this commit.",
   rejected: "Rejected: Isomux Main was asked to revert it. It stays here until Main reports the revert.",
   waitingSign: "Waiting for your approve or reject.",
@@ -1169,36 +1173,52 @@ function pushTasks() {
   const item = Object.fromEntries(signoffData.items.map((i) => [i.taskId, i]));
   return st.tasks.map((t) => ({ t, u: un[t.id], it: item[t.id] }));
 }
-function pushBanner() {
+function pushBanner(goes) {
   const so = signoffData;
-  const sha = so.lastSha ? so.lastSha.commit : null;
+  const pt = so.push;
+  const sha8 = pt.sha ? pt.sha.slice(0, 8) : "";
+  const last = so.lastSha ? so.lastSha.commit : null;
   return (
-    '<div class="banner ' + (so.push.ok ? "run" : "paused") + '"><div><b' + tip("push") + ">Push (" + pushTasks().length + ")</b>" +
-    '<div class="small"' + tip("sha") + ">main " + (sha ? "<code>" + esc(sha.slice(0, 10)) + "</code> · " + clock(so.lastSha.at) : "not reported yet") + "</div>" +
-    (so.push.ok ? "" : '<div class="small">' + esc(so.push.reason) + "</div>") +
-    '</div><span><button class="btn primary" data-push="1"' + (so.push.ok ? "" : " disabled") + tip("push") + ">Push</button> " + q("push") + "</span></div>" +
-    helpBox(["push", "sha"], "push") + '<div class="err" data-err="push"></div>'
+    '<div class="banner ' + (pt.ok ? "run" : "paused") + '"><div><b' + tip("push") + ">" +
+    (pt.sha ? "Push up to <code>" + esc(sha8) + "</code>: " + goes + (goes === 1 ? " task" : " tasks") : "Push (" + pushTasks().length + ")") + "</b>" +
+    '<div class="small"' + tip("sha") + ">main " + (last ? "<code>" + esc(last.slice(0, 10)) + "</code> · " + clock(so.lastSha.at) : "not reported yet") + "</div>" +
+    (pt.ok ? "" : '<div class="small">' + esc(pt.reason) + "</div>") +
+    '</div><span><button class="btn primary" data-push="1"' + (pt.ok ? "" : " disabled") + tip("push") + ">" + (pt.sha ? "Push up to " + esc(sha8) : "Push") + "</button> " + q("push") + "</span></div>" +
+    helpBox(["push", "pushPoint", "sha"], "push") + '<div class="err" data-err="push"></div>'
   );
 }
+function pushCard({ t, u, it }, waitsFor) {
+  const approved = it && it.state === "approved";
+  const status = approved
+    ? it.decision.edits
+      ? '<span class="ok"' + tip("editsFiled") + ">Approved, edits filed: task " + esc(it.decision.edits) + "</span>"
+      : '<span class="ok"' + tip("approvedSign") + ">Approved</span>"
+    : u && u.sent ? "<span" + tip("sentPush") + ">Push sent, waiting for Isomux Main</span>"
+    : "<span" + tip("nothingToSign") + ">Nothing to sign off</span>";
+  const wait = waitsFor ? ' <span class="warn"' + tip("waitsFor") + ">waits for " + esc(waitsFor) + "</span>" : "";
+  return cardOpen(t.id, "signoff-card") + '<div class="sotitle">' + esc(t.title) + "</div>" +
+    '<div class="meta"><span>Task ' + idCopy(t.id) + "</span>" +
+    (u ? "<span" + tip("sha") + ">commit <code>" + esc(u.commit.slice(0, 10)) + "</code></span><span>merged " + clock(u.at) + "</span>" : "") + status + wait + "</div>" +
+    '<div class="err" data-err="' + esc(t.id) + '"></div>' +
+    (approved && !it.decision.edits ? '<div class="actions"><button class="btn ghost" data-sundo="' + esc(t.id) + '"' + tip("undoApprove") + ">Undo</button></div>" : "") +
+    "</div>";
+}
+// Main is linear: the push takes every merge up to the push point; the
+// merges after it wait for the oldest item that still needs Nil.
 function renderPush() {
-  const list = pushTasks();
-  let h = '<div class="small"' + tip("tabPush") + ">" + esc(HELP.tabPush) + "</div>" + pushBanner();
+  // Merge order here: that is the order a push takes them in.
+  const list = pushTasks().sort((a, b) => (a.u ? a.u.seq : Infinity) - (b.u ? b.u.seq : Infinity));
+  const pt = signoffData.push;
+  const inPush = (x) => x.u && pt.seq !== null && pt.seq !== undefined && x.u.seq <= pt.seq;
+  const goes = list.filter(inPush);
+  const waits = list.filter((x) => !inPush(x));
+  const blocker = (x) => (pt.blockers || []).find((b) => !x.u || b.seq < x.u.seq);
+  let h = '<div class="small"' + tip("tabPush") + ">" + esc(HELP.tabPush) + "</div>" + pushBanner(goes.length);
   if (!list.length) return h + '<div class="empty">Nothing waits for the push.</div>';
-  for (const { t, u, it } of list) {
-    const approved = it && it.state === "approved";
-    const status = approved
-      ? it.decision.edits
-        ? '<span class="ok"' + tip("editsFiled") + ">Approved, edits filed: task " + esc(it.decision.edits) + "</span>"
-        : '<span class="ok"' + tip("approvedSign") + ">Approved</span>"
-      : u && u.sent ? '<span' + tip("sentPush") + ">Push sent, waiting for Isomux Main</span>"
-      : '<span' + tip("nothingToSign") + ">Nothing to sign off</span>";
-    h += cardOpen(t.id, "signoff-card") + '<div class="sotitle">' + esc(t.title) + "</div>" +
-      '<div class="meta"><span>Task ' + idCopy(t.id) + "</span>" +
-      (u ? "<span" + tip("sha") + ">commit <code>" + esc(u.commit.slice(0, 10)) + "</code></span><span>merged " + clock(u.at) + "</span>" : "") + status + "</div>" +
-      '<div class="err" data-err="' + esc(t.id) + '"></div>' +
-      (approved && !it.decision.edits ? '<div class="actions"><button class="btn ghost" data-sundo="' + esc(t.id) + '"' + tip("undoApprove") + ">Undo</button></div>" : "") +
-      "</div>";
-  }
+  if (goes.length) h += "<h2" + tip("goesOut") + ">Goes out (" + goes.length + ") " + q("goesOut") + "</h2>" + helpBox(["goesOut"], "goesOut") + goes.map((x) => pushCard(x, null)).join("");
+  if (waits.length)
+    h += "<h2" + tip("waitsBehind") + ">Waits (" + waits.length + ") " + q("waitsBehind") + "</h2>" + helpBox(["waitsBehind"], "waitsBehind") +
+      waits.map((x) => pushCard(x, (blocker(x) || {}).taskId || null)).join("");
   return h;
 }
 function renderSignoff() {
