@@ -29,6 +29,9 @@
     background: linear-gradient(var(--muted), var(--muted)) center / 2px 100% no-repeat; opacity: .35; }
   .split .divider:hover, .split .divider.dragging { opacity: .9; }
   .split .pane { min-width: 0; padding-left: 6px; }
+  .copyid { border: 0; background: none; color: var(--muted); padding: 2px 3px; margin-left: 2px; cursor: pointer; vertical-align: -2px; border-radius: 4px; }
+  .copyid:hover { color: var(--fg); background: var(--chip); }
+  .copyid.done { color: var(--accent); }
   .toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .split-toggle { margin-left: auto; }
   @media (max-width: 899px) {

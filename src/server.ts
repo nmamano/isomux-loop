@@ -2,7 +2,7 @@ import { CLASSIFY_MS, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, STATU
 import { ClosedTimes } from "./closed-times";
 import { type ImageDir } from "./images";
 import { dispatch, staleCards, status, tick, unclassified, type DispatchResult, type Status, type TickResult } from "./loop";
-import { httpOffice } from "./office";
+import { httpOffice, type Task } from "./office";
 import { page } from "./page";
 import { PacketStore, packetState } from "./packets";
 import { PauseFlag } from "./pause";
@@ -63,8 +63,9 @@ POST /api/settings                {"workers": 1-6}: the loop dispatches to Worke
                                   Lowering N takes no task away; a worker above N keeps its tick while it holds a loop task.
 POST /api/dispatch | /api/tick    run one now (both refuse while paused)
 POST /api/classify                run the curator wake now: every 10 minutes, also while paused, open P0-P3 tasks with no tag
-                                  and no card go to the curator (P4 is left out) (a task is announced again after an hour); the same run
-                                  withdraws undecided cards whose task is done, obsolete or gone
+                                  and no card go to the curator (P4 is left out) (a task is announced again after an hour).
+                                  Every board read (status, Triage list, packets, Backlog, this run; shared for 20 s) withdraws
+                                  the undecided cards and packets whose task is done, obsolete or gone
 
 Sign-off before the push:
 POST /api/signoff                 worker at hand-off: {"taskId","title","summary?","copy":[{"where","old","new"}]}
@@ -161,14 +162,8 @@ function signoffIds(): Set<string> {
 async function runClassify(): Promise<ClassifyRun> {
   const at = Date.now();
   try {
-    const all = await office.allTasks();
-    // The same run withdraws undecided cards whose task closed meanwhile.
-    const withdrawn = staleCards(store.list("open").map((i) => i.taskId), all);
-    for (const id of withdrawn) store.withdraw(id);
-    if (withdrawn.length) {
-      statusCache = null;
-      console.log(`withdrew cards of closed tasks: ${withdrawn.join(", ")}`);
-    }
+    const all = await boardTasks(true);
+    const withdrawn = lastWithdrawn;
     const found = unclassified(all, cardIds());
     const due = found.filter((t) => at - (announced.get(t.id) ?? 0) >= CLASSIFY_REMIND_MS);
     let sent: string | null = null;
@@ -209,6 +204,46 @@ async function notifyTriage(): Promise<void> {
 }
 setInterval(() => void notifyTriage(), 30_000);
 
+// --- board reads -------------------------------------------------------------
+// One read of the room's tasks, shared by the status, the Triage list and the
+// Backlog for STATUS_CACHE_MS. Every fresh read withdraws the undecided cards
+// (triage and packets) whose task is done, obsolete or gone, so a closed task
+// leaves Triage at the next read, not at the curator wake (Nil, 2026-10-19).
+
+let tasksCache: { at: number; value: Task[] } | null = null;
+let tasksRead: Promise<Task[]> | null = null;
+let lastWithdrawn: string[] = [];
+
+function boardTasks(fresh = false): Promise<Task[]> {
+  if (!fresh && tasksCache && Date.now() - tasksCache.at < STATUS_CACHE_MS) return Promise.resolve(tasksCache.value);
+  if (!tasksRead)
+    tasksRead = office
+      .allTasks()
+      .then((all) => {
+        tasksCache = { at: Date.now(), value: all };
+        lastWithdrawn = withdrawStale(all);
+        return all;
+      })
+      .finally(() => {
+        tasksRead = null;
+      });
+  return tasksRead;
+}
+
+function withdrawStale(all: Task[]): string[] {
+  const openPackets = packets.list().filter((p) => packetState(p) === "open").map((p) => p.taskId);
+  const ids = staleCards([...store.list("open").map((i) => i.taskId), ...openPackets], all);
+  for (const id of ids) {
+    store.withdraw(id);
+    if (openPackets.includes(id)) packets.withdraw(id);
+  }
+  if (ids.length) {
+    statusCache = null;
+    console.log(`withdrew cards of closed tasks: ${ids.join(", ")}`);
+  }
+  return ids;
+}
+
 // --- status ------------------------------------------------------------------
 
 type Board = Status & { states: Record<StateKey, StateView>; closedPending: number };
@@ -219,7 +254,7 @@ async function loopStatus(): Promise<Record<string, unknown>> {
   let error: string | undefined;
   try {
     if (!statusCache || Date.now() - statusCache.at > STATUS_CACHE_MS) {
-      const [agents, all] = await Promise.all([office.agents(), office.allTasks()]);
+      const [agents, all] = await Promise.all([office.agents(), boardTasks()]);
       // The dispatch view sees what dispatch sees: the board's default listing.
       const live = all.filter((t) => (t.status === "open" || t.status === "in_progress") && t.priority !== "P4");
       statusCache = {
@@ -250,9 +285,10 @@ async function loopStatus(): Promise<Record<string, unknown>> {
 let backlogCache: { at: number; value: unknown[] } | null = null;
 async function backlog(): Promise<unknown[]> {
   if (backlogCache && Date.now() - backlogCache.at < STATUS_CACHE_MS) return backlogCache.value;
+  const all = await boardTasks();
   const c = cards();
   const so = signoffIds();
-  const value = (await office.allTasks())
+  const value = all
     .filter((t) => (t.roomId ?? ROOM_ID) === ROOM_ID && classify(t, c.get(t.id) ?? null, so.has(t.id)) === "backlog")
     .sort((a, b) => a.createdAt - b.createdAt)
     .map((t) => ({ id: t.id, title: t.title, description: t.description ?? "", createdBy: (t as { createdBy?: string }).createdBy ?? "", createdAt: t.createdAt }));
@@ -356,7 +392,10 @@ async function route(req: Request): Promise<Response> {
     statusCache = null;
     return json({ ...p, url: publicUrl + "/" });
   }
-  if (m === "GET" && path === "/api/packets") return json(packets.list().map((p) => ({ ...p, state: packetState(p) })));
+  if (m === "GET" && path === "/api/packets") {
+    await boardTasks().catch(() => undefined);
+    return json(packets.list().map((p) => ({ ...p, state: packetState(p) })));
+  }
   const pk = path.match(/^\/api\/packets\/([^/]+)\/(images|decide|undo)$/);
   if (pk && m === "POST") {
     const taskId = decodeURIComponent(pk[1]);
@@ -463,6 +502,8 @@ async function route(req: Request): Promise<Response> {
     const state = url.searchParams.get("state") ?? "all";
     if (!["open", "decided", "applied", "failed", "all"].includes(state))
       throw new ValidationError("unknown state");
+    // A card whose task closed leaves before the list is served.
+    await boardTasks().catch(() => undefined);
     return json(store.list(state as "all"));
   }
   if (m === "POST" && path === "/api/proposals") {
@@ -514,7 +555,10 @@ Bun.serve({
     } finally {
       // Any write may move a task between diagram states (a decision, an
       // undo, a packet, a merge): the next status read is fresh.
-      if (req.method !== "GET") statusCache = null;
+      if (req.method !== "GET") {
+        statusCache = null;
+        tasksCache = null;
+      }
     }
   },
 });

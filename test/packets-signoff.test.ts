@@ -52,6 +52,17 @@ describe("packets", () => {
     expect(packetState(s.get("abc12345")!)).toBe("applied");
   });
 
+  test("withdraw: a packet whose task closed leaves with its images", () => {
+    const dir = tempDir();
+    const s = new PacketStore(dir);
+    s.put(packet(), task);
+    const file = join(dir, "images", "packets", "abc12345", s.addImage("abc12345", PNG, "shot").file);
+    expect(existsSync(file)).toBe(true);
+    expect(s.withdraw("abc12345")).toBe(true);
+    expect([s.get("abc12345"), s.withdraw("abc12345"), existsSync(file)]).toEqual([undefined, false, false]);
+    expect(new PacketStore(dir).get("abc12345")).toBeUndefined();
+  });
+
   test("a new packet replaces the old one, its decision and its images", () => {
     const dir = tempDir();
     const s = new PacketStore(dir);

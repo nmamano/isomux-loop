@@ -128,6 +128,15 @@ export class PacketStore {
     );
   }
 
+  // The task closed before Nil decided: the packet leaves Triage.
+  withdraw(taskId: string): boolean {
+    if (!this.items[taskId]) return false;
+    delete this.items[taskId];
+    this.images.clear(taskId);
+    this.save();
+    return true;
+  }
+
   decide(taskId: string, raw: unknown): Packet {
     const p = this.items[taskId];
     if (!p) throw new ValidationError("unknown packet");

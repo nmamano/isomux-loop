@@ -83,6 +83,7 @@ const HELP = {
   tabDecided: "Your decisions that the curator has not written to the board yet. You can undo them.",
   tabApplied: "Decisions the curator wrote to the board.",
   tabBacklog: "The Backlog state: P4 tasks with no card. The loop never picks them. Bring one in to give it a priority and a class.",
+  copyId: "Copy the task id.",
   toggleAll: "Expand or collapse every description and packet in this list at once.",
   splitView: "Show the task-state diagram beside Triage. It updates after each decision and every 15 s. Drag the line between them to change the widths. A narrow screen shows Triage only.",
   divider: "Drag to change the widths of the diagram and Triage.",
@@ -235,6 +236,30 @@ function syncToggleAll() {
   btn.hidden = all.length === 0;
   btn.textContent = all.length && all.every((d) => d.open) ? "Collapse all" : "Expand all";
 }
+// A task id with a button that copies it. SVG icons, not glyphs: iOS draws
+// glyphs as emoji.
+const COPY_ICON = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M11 3.5V3a1 1 0 0 0-1-1H3a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
+const DONE_ICON = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>';
+function idCopy(id) {
+  return esc(id) + '<button class="copyid" data-copy="' + esc(id) + '"' + tip("copyId") + ' aria-label="Copy the task id">' + COPY_ICON + "</button>";
+}
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // No clipboard API (an http page): a selected textarea and execCommand.
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  }
+}
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
@@ -326,7 +351,7 @@ function taskLine(t, who, extra) {
     '<div class="line">' +
     (who ? '<span class="who">' + esc(who) + "</span> · " : "") +
     '<span class="tag">' + esc(t.priority || "-") + "</span>" + tag + esc(m ? m[3] : t.title) +
-    ' <span class="small">' + esc(t.id) + esc(extra || "") + "</span></div>"
+    ' <span class="small">' + idCopy(t.id) + esc(extra || "") + "</span></div>"
   );
 }
 function section(title, key, lines, empty) {
@@ -403,7 +428,7 @@ function head(i, sel, showProposal) {
     "</b></span>" + (showProposal ? "<span>curator proposed: " + p.priority + " · " + label(p.class) + " · " + p.outcome + "</span>" : "") +
     q("head", i.taskId) + "</div>" + helpBox(["head"], "head", i.taskId) +
     '<div class="meta"' + tip("head") + "><span>Filed by " + esc(i.task.createdBy || "unknown") + "</span><span>" +
-    filed(i.task.createdAt) + "</span><span>Task " + esc(i.taskId) + "</span></div>" +
+    filed(i.task.createdAt) + "</span><span>Task " + idCopy(i.taskId) + "</span></div>" +
     '<div class="title">' + esc(i.task.title) + "</div>"
   );
 }
@@ -531,7 +556,7 @@ function imagesHtml(kind, taskId, images) {
 }
 function packetHead(p) {
   return (
-    '<div class="meta"' + tip("packet") + '><span class="badge">Design packet</span><span>' + esc(p.priority || "no priority") + "</span><span>Task " + esc(p.taskId) +
+    '<div class="meta"' + tip("packet") + '><span class="badge">Design packet</span><span>' + esc(p.priority || "no priority") + "</span><span>Task " + idCopy(p.taskId) +
     "</span><span>" + clock(p.createdAt) + "</span>" + q("packet", p.taskId) + "</div>" + helpBox(["packet"], "packet", p.taskId) +
     '<div class="title">' + esc(p.title.replace(/^\[[^\]]*\]\s*/, "")) + "</div>"
   );
@@ -622,7 +647,7 @@ function renderBacklog() {
   if (!backlogTasks.length) return h + '<div class="empty">The backlog is empty.</div>';
   for (const t of backlogTasks) {
     const k = backlogPicks[t.id];
-    h += '<div class="card"><div class="meta"><span>Filed by ' + esc(t.createdBy || "unknown") + "</span><span>" + filed(t.createdAt) + "</span><span>Task " + esc(t.id) + "</span></div>" +
+    h += '<div class="card"><div class="meta"><span>Filed by ' + esc(t.createdBy || "unknown") + "</span><span>" + filed(t.createdAt) + "</span><span>Task " + idCopy(t.id) + "</span></div>" +
       '<div class="title">' + esc(t.title) + "</div>" +
       (t.description ? details("bdesc:" + t.id, "description", "Description", '<div class="desc">' + esc(t.description) + "</div>") : "");
     if (!k) {
@@ -699,7 +724,7 @@ function renderSignoff() {
       : it.state === "rejected" ? '<span class="warn"' + tip("rejected") + ">Rejected, waiting for revert: " + esc(it.decision.note) + "</span>"
       : "<span" + tip("waitingSign") + ">Waiting for you</span>";
     h += '<div class="card signoff-card"><div class="sotitle">' + esc(it.title) + "</div>" +
-      '<div class="meta"><span>Task ' + esc(it.taskId) + "</span><span" + tip("sha") + ">commit <code>" + esc(it.merged.commit.slice(0, 10)) + "</code></span><span>merged " +
+      '<div class="meta"><span>Task ' + idCopy(it.taskId) + "</span><span" + tip("sha") + ">commit <code>" + esc(it.merged.commit.slice(0, 10)) + "</code></span><span>merged " +
       clock(it.merged.at) + "</span>" + stateText + "</div>";
     if (it.summary) h += '<div class="mdbody"' + tip("summary") + ">" + md(it.summary) + "</div>";
     it.copy.forEach((c, n) => {
@@ -835,6 +860,20 @@ function showErr(id, msg) {
   if (el) el.textContent = msg;
 }
 document.addEventListener("click", async (e) => {
+  const cp = e.target.closest("[data-copy]");
+  if (cp) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (await copyText(cp.dataset.copy)) {
+      cp.innerHTML = DONE_ICON;
+      cp.classList.add("done");
+      setTimeout(() => {
+        cp.innerHTML = COPY_ICON;
+        cp.classList.remove("done");
+      }, 1200);
+    }
+    return;
+  }
   if (e.target.closest("[data-split]")) {
     split.on = !split.on;
     saveSplit();
