@@ -4,7 +4,7 @@
 import { MAIN_NAME, ROOM_ID, WORKER_NAMES } from "./config";
 import type { Agent, Office, Task } from "./office";
 
-const DISPATCH_CLASSES = ["auto", "decide", "taste"];
+const DISPATCH_CLASSES = ["auto", "decide"];
 const LOOP_PRIORITIES = ["P0", "P1", "P2", "P3"];
 
 export type Tag = { class: string; state: string; rest: string };

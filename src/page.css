@@ -83,3 +83,24 @@
   .diagram .st-never rect, .diagram .st-backlog rect, .diagram .st-obsolete rect { fill: var(--chip); }
   .diagram .st.picked rect { stroke-width: 3; }
   .picked-list { margin-bottom: 8px; }
+  .badge { background: var(--accent); color: var(--accent-fg); border-radius: 6px; padding: 0 6px; font-weight: 600; }
+  .card.packet { border-color: var(--accent); }
+  .question { font-size: 16px; font-weight: 600; margin: 8px 0; overflow-wrap: anywhere; }
+  .options { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+  .option { position: relative; text-align: left; border: 1px solid var(--line); background: var(--chip); color: var(--fg);
+    border-radius: 10px; padding: 9px 12px; font: inherit; cursor: pointer; }
+  .option.on { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+  .option .cost { display: block; font-size: 13px; opacity: .85; margin-top: 2px; }
+  .option .dot { position: absolute; top: -3px; right: -3px; width: 10px; height: 10px; border-radius: 50%;
+    background: var(--warn); border: 2px solid var(--card); }
+  .thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 10px; }
+  .thumbs a { display: block; width: 120px; text-decoration: none; color: var(--muted); font-size: 12px; }
+  .thumbs img { width: 120px; height: 80px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); display: block; }
+  .links { display: flex; gap: 12px; font-size: 13px; margin: 6px 0; flex-wrap: wrap; }
+  .mdbody { font-size: 14px; overflow-wrap: anywhere; }
+  .mdbody p { margin: 6px 0; }
+  .mdbody .mdh { font-weight: 600; margin: 10px 0 4px; }
+  .mdbody pre.code, .mdbody code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .mdbody pre.code { background: var(--chip); padding: 8px; border-radius: 8px; overflow-x: auto; white-space: pre; }
+  .btn[disabled] { opacity: .45; cursor: not-allowed; }
+  .card > .label { display: block; margin-top: 8px; }

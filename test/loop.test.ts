@@ -19,6 +19,7 @@ function stubOffice(tasks: Task[], agents: Agent[], conflict: string[] = []) {
   const office: Office = {
     tasks: async () => tasks.map((t) => ({ ...t })),
     allTasks: async () => tasks.map((t) => ({ ...t })),
+    task: async (id) => ({ ...tasks.find((t) => t.id === id)! }),
     closedAt: async () => null,
     agents: async () => agents,
     async patchTask(id, body): Promise<PatchResult> {
@@ -49,7 +50,8 @@ describe("ready queue", () => {
   test("only open, unassigned P0-P3 tasks tagged ready in a dispatch class, by priority then age", () => {
     const tasks = [
       task({ title: "[auto | ready] p2 old", priority: "P2" }),
-      task({ title: "[taste | ready] p1 newer", priority: "P1" }),
+      task({ title: "[auto | ready] p1 newer", priority: "P1" }),
+      task({ title: "[taste | ready] no taste class any more", priority: "P0" }),
       task({ title: "[decide | ready] p1 newest", priority: "P1" }),
       task({ title: "[auto | ready] p4", priority: "P4" }),
       task({ title: "[auto | nil] parked", priority: "P0" }),
@@ -61,7 +63,7 @@ describe("ready queue", () => {
       task({ title: "[auto | ready] no priority", priority: null }),
     ];
     expect(readyQueue(tasks).map((t) => t.title)).toEqual([
-      "[taste | ready] p1 newer",
+      "[auto | ready] p1 newer",
       "[decide | ready] p1 newest",
       "[auto | ready] p2 old",
     ]);

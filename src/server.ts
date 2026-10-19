@@ -1,10 +1,12 @@
-import { DISPATCH_MS, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
+import { DISPATCH_MS, MAIN_NAME, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
 import { ClosedTimes } from "./closed-times";
-import { CopyStore } from "./copy";
+import { type ImageDir } from "./images";
 import { dispatch, status, tick, type DispatchResult, type Status, type TickResult } from "./loop";
 import { httpOffice } from "./office";
 import { page } from "./page";
+import { PacketStore, packetState } from "./packets";
 import { PauseFlag } from "./pause";
+import { SignoffStore, signoffState } from "./signoff";
 import { stateViews, type StateKey, type StateView } from "./states";
 import { itemState, Store, ValidationError } from "./store";
 
@@ -19,7 +21,8 @@ const publicUrl = (process.env.ISOMUX_APP_URL || local).replace(/\/$/, "");
 
 const office = httpOffice(appToken);
 const store = new Store(dataDir);
-const copy = new CopyStore(dataDir);
+const packets = new PacketStore(dataDir);
+const signoff = new SignoffStore(dataDir);
 const pause = new PauseFlag(dataDir);
 const closed = new ClosedTimes(dataDir, office);
 
@@ -28,13 +31,21 @@ const HELP = `Loop app API. Base: ${local}
 Triage (for the curator):
 GET  /api/summary                 counts per state
 GET  /api/items?state=open|decided|applied|failed|all
-POST /api/proposals               {"proposals":[{"taskId","task":{"title","description","priority","createdBy","createdAt"},"proposal":{"priority":"P0-P4","class":"auto|decide|taste|authority","outcome":"keep|rescope|obsolete","title?","scope?","why"}}]}
+POST /api/proposals               {"proposals":[{"taskId","task":{"title","description","priority","createdBy","createdAt"},"proposal":{"priority":"P0-P4","class":"auto|decide|authority","outcome":"keep|rescope|obsolete","title?","scope?","why"}}]}
                                   task.* is the board task as it is now. A rescope needs proposal.title and/or proposal.scope.
                                   An item with a decision not yet applied is skipped; an applied item gets the new proposal and reopens.
 DELETE /api/items/:taskId         withdraw a proposal (the task closed meanwhile)
-GET  /api/decisions               decisions to write to the board (decided, or failed earlier)
-POST /api/applied                 {"results":[{"taskId","decidedAt","ok":true|false,"error?"}]}
+GET  /api/decisions               decisions to write to the board (decided, or failed earlier), triage and packets:
+                                  each has "kind": "triage" (decision: priority, class, outcome, note) or
+                                  "packet" (decision: choice = an option label, "rescope", "obsolete" or "research more"; note)
+POST /api/applied                 {"results":[{"taskId","decidedAt","kind?":"triage|packet","ok":true|false,"error?"}]}
                                   decidedAt from /api/decisions; a decision Nil changed since then comes back as stale.
+
+Packets (for workers; a decision card for Nil in Triage):
+POST /api/packets                 {"taskId","question","options":[{"label","cost","recommended":true|false}] (2-4, at most one
+                                  recommended),"body":"markdown","branch?","diffUrl?"}. A new packet replaces the task's old one.
+POST /api/packets/:taskId/images  raw PNG/JPEG/WebP bytes, ?caption=..., one per call, at most 5 MB, 20 per packet
+GET  /api/packets                 all packets with their state
 
 Loop (for Isomux PM):
 GET  /api/status                  pause state, last dispatch and tick, ready queue, holders, merging, and the
@@ -44,10 +55,15 @@ POST /api/settings                {"workers": 1-6}: the loop dispatches to Worke
                                   Lowering N takes no task away; a worker above N keeps its tick while it holds a loop task.
 POST /api/dispatch | /api/tick    run one now (both refuse while paused)
 
-Copy sign-off (for Isomux PM):
-POST /api/copy                    {"taskId","title","old","new"}; old is "" for new copy. Answers {"url"}: the page for an ask.
-GET  /api/copy | /api/copy/:taskId
-DELETE /api/copy/:taskId          after Nil signed it off
+Sign-off before the push:
+POST /api/signoff                 worker at hand-off: {"taskId","title","summary?","copy":[{"where","old","new"}]}
+                                  (old "" for new copy). Replaces the task's item unless Nil rejected it and the revert is not reported.
+POST /api/signoff/:taskId/images  raw PNG/JPEG/WebP bytes, ?caption=..., as for packets
+POST /api/signoff/:taskId/merged  Isomux Main after EVERY merge, item or not: {"commit"}. The sha is what a push go names.
+POST /api/signoff/:taskId/reverted  Isomux Main after a revert Nil asked for: {"commit"}. The item leaves the list.
+GET  /api/signoff                 merged items, the main sha, and whether a push go is possible
+Nil's buttons on the Sign-off tab: approve, reject (a note; messages Main "/isomux-main revert ..."), and
+"Approve and push" (messages Main "/isomux-main push go ..."). The app cannot tell which member pressed them.
 `;
 
 // --- loop timers -----------------------------------------------------------
@@ -95,10 +111,10 @@ setInterval(() => void runTick(), TICK_MS);
 // --- triage notifications ------------------------------------------------------
 
 async function notifyTriage(): Promise<void> {
-  if (!store.shouldNotify(TRIAGE_QUIET_MS)) return;
-  const n = store.pending().length;
+  if (!store.shouldNotify(TRIAGE_QUIET_MS, packets.pending().length)) return;
+  const n = store.pending().length + packets.pending().length;
   const delivered = await office.message(
-    `${n} triage decision${n === 1 ? "" : "s"} from Nil wait to be written to the board. ` +
+    `${n} decision${n === 1 ? "" : "s"} from Nil (triage and packets) wait to be written to the board. ` +
       `Read them with curl -s ${local}/api/decisions, apply each one, then report with POST ${local}/api/applied. API: curl -s ${local}/api/help`,
   );
   // A rejection is not retried until the next decision.
@@ -120,12 +136,13 @@ async function loopStatus(): Promise<Record<string, unknown>> {
       const [agents, all] = await Promise.all([office.agents(), office.allTasks()]);
       // The dispatch view sees what dispatch sees: the board's default listing.
       const live = all.filter((t) => (t.status === "open" || t.status === "in_progress") && t.priority !== "P4");
-      const proposed = new Set(store.list("all").filter((i) => itemState(i) !== "applied").map((i) => i.taskId));
+      const cards = new Set(store.list("all").filter((i) => itemState(i) !== "applied").map((i) => i.taskId));
+      for (const id of packets.unapplied()) cards.add(id);
       statusCache = {
         at: Date.now(),
         value: {
           ...status(agents, live, pause.workers),
-          states: stateViews(all, proposed, (t) => closed.get(t)),
+          states: stateViews(all, cards, (t) => closed.get(t)),
           closedPending: closed.missing(all).length,
         },
       };
@@ -138,7 +155,8 @@ async function loopStatus(): Promise<Record<string, unknown>> {
   } catch (err) {
     error = String(err instanceof Error ? err.message : err);
   }
-  return { paused: pause.paused, pausedSince: pause.since, workers: pause.workers, lastDispatch, lastTick, board, error };
+  const signoffWaiting = signoff.visible().filter((i) => signoffState(i) === "waiting").length;
+  return { paused: pause.paused, pausedSince: pause.since, workers: pause.workers, lastDispatch, lastTick, board, error, signoffWaiting };
 }
 
 // --- HTTP --------------------------------------------------------------------
@@ -159,6 +177,25 @@ async function body(req: Request): Promise<Record<string, unknown>> {
   }
 }
 
+async function mainAgentId(): Promise<string> {
+  const main = (await office.agents()).find((a) => a.name === MAIN_NAME);
+  if (!main) throw new ValidationError(`${MAIN_NAME} is not in the office`);
+  return main.id;
+}
+
+async function imageUpload(req: Request, dir: { addImage: (id: string, b: Uint8Array, c: string) => unknown }, taskId: string) {
+  const bytes = new Uint8Array(await req.arrayBuffer());
+  const caption = new URL(req.url).searchParams.get("caption") ?? "";
+  return dir.addImage(taskId, bytes, caption);
+}
+
+function serveImage(images: ImageDir, taskId: string, file: string): Response {
+  const bytes = images.read(taskId, file);
+  if (!bytes) return json({ error: "not_found" }, 404);
+  const type = file.endsWith(".png") ? "image/png" : file.endsWith(".jpg") ? "image/jpeg" : "image/webp";
+  return new Response(new Blob([bytes as Uint8Array<ArrayBuffer>]), { headers: { "Content-Type": type, "Cache-Control": "private, max-age=86400" } });
+}
+
 const html = () => new Response(page, { headers: { "Content-Type": "text/html; charset=utf-8" } });
 
 async function route(req: Request): Promise<Response> {
@@ -166,7 +203,10 @@ async function route(req: Request): Promise<Response> {
   const path = url.pathname;
   const m = req.method;
 
-  if (m === "GET" && (path === "/" || path.startsWith("/copy/"))) return html();
+  if (m === "GET" && (path === "/" || path.startsWith("/signoff/"))) return html();
+  const img = path.match(/^\/img\/(packets|signoff)\/([^/]+)\/([^/]+)$/);
+  if (m === "GET" && img)
+    return serveImage(img[1] === "packets" ? packets.images : signoff.images, decodeURIComponent(img[2]), img[3]);
   if (path === "/favicon.ico") return new Response(null, { status: 204 });
   if (m === "GET" && path === "/api/help") return new Response(HELP);
 
@@ -197,17 +237,70 @@ async function route(req: Request): Promise<Response> {
     return run ? json(run) : json({ error: "busy" }, 409);
   }
 
-  // Copy
-  if (m === "POST" && path === "/api/copy") {
-    const item = copy.put(await body(req));
-    return json({ ...item, url: `${publicUrl}/copy/${item.taskId}` });
+  // Packets
+  if (m === "POST" && path === "/api/packets") {
+    const b = await body(req);
+    const taskId = String(b.taskId ?? "");
+    let task: { title: string; priority: string | null };
+    try {
+      const t = await office.task(taskId);
+      task = { title: t.title, priority: t.priority ?? null };
+    } catch {
+      throw new ValidationError(`task ${taskId} is not on the board (or the board is unreadable)`);
+    }
+    const p = packets.put(b, task);
+    statusCache = null;
+    return json({ ...p, url: publicUrl + "/" });
   }
-  if (m === "GET" && path === "/api/copy") return json(copy.list());
-  const c = path.match(/^\/api\/copy\/([^/]+)$/);
-  if (c) {
-    const taskId = decodeURIComponent(c[1]);
-    if (m === "GET") return copy.get(taskId) ? json(copy.get(taskId)) : json({ error: "not_found" }, 404);
-    if (m === "DELETE") return copy.remove(taskId) ? new Response(null, { status: 204 }) : json({ error: "not_found" }, 404);
+  if (m === "GET" && path === "/api/packets") return json(packets.list().map((p) => ({ ...p, state: packetState(p) })));
+  const pk = path.match(/^\/api\/packets\/([^/]+)\/(images|decide|undo)$/);
+  if (pk && m === "POST") {
+    const taskId = decodeURIComponent(pk[1]);
+    if (pk[2] === "images") return json(await imageUpload(req, packets, taskId));
+    if (pk[2] === "decide") {
+      const p = packets.decide(taskId, await body(req));
+      store.noteDecision(p.decision!.decidedAt);
+      return json(p);
+    }
+    return json(packets.undo(taskId));
+  }
+
+  // Sign-off
+  if (m === "GET" && path === "/api/signoff")
+    return json({ items: signoff.visible().map((i) => ({ ...i, state: signoffState(i) })), ...signoff.meta(), push: signoff.pushCheck() });
+  if (m === "POST" && path === "/api/signoff") return json(signoff.put(await body(req)));
+  if (m === "POST" && path === "/api/signoff/push") {
+    const check = signoff.pushCheck();
+    if (!check.ok) return json({ error: check.reason }, 409);
+    const text =
+      `/isomux-main push go from Nil through the loop app: push main at ${check.sha}. ` +
+      `Signed off: ${check.approved.length ? check.approved.join(", ") : "none (no copy or visible change waited)"}.`;
+    if (!(await office.message(text, await mainAgentId()))) return json({ error: "the message to Isomux Main failed; nothing changed" }, 502);
+    signoff.recordPushGo(check.sha!);
+    return json({ sent: text });
+  }
+  const so = path.match(/^\/api\/signoff\/([^/]+)\/(images|merged|reverted|approve|reject|undo)$/);
+  if (so && m === "POST") {
+    const taskId = decodeURIComponent(so[1]);
+    switch (so[2]) {
+      case "images":
+        return json(await imageUpload(req, signoff, taskId));
+      case "merged":
+        return json(signoff.merged(taskId, await body(req)));
+      case "reverted":
+        return json(signoff.reverted(taskId, await body(req)));
+      case "approve":
+        return json(signoff.approve(taskId));
+      case "undo":
+        return json(signoff.undo(taskId));
+      case "reject": {
+        const { item, note } = signoff.checkReject(taskId, await body(req));
+        const text = `/isomux-main revert ${taskId} (${item.merged!.commit}): Nil rejected it at sign-off: ${note}`;
+        if (!(await office.message(text, await mainAgentId())))
+          return json({ error: "the message to Isomux Main failed; the item is not rejected yet" }, 502);
+        return json(signoff.recordReject(taskId, note));
+      }
+    }
   }
 
   // Triage
@@ -223,11 +316,24 @@ async function route(req: Request): Promise<Response> {
     if (!Array.isArray(b.proposals)) throw new ValidationError("proposals must be an array");
     return json(store.propose(b.proposals));
   }
-  if (m === "GET" && path === "/api/decisions") return json(store.pending());
+  if (m === "GET" && path === "/api/decisions")
+    return json([
+      ...store.pending().map((i) => ({ kind: "triage", ...i })),
+      ...packets.pending().map((p) => ({ kind: "packet", ...p })),
+    ]);
   if (m === "POST" && path === "/api/applied") {
     const b = await body(req);
     if (!Array.isArray(b.results)) throw new ValidationError("results must be an array");
-    return json(store.markApplied(b.results));
+    const out = { recorded: [] as string[], stale: [] as string[] };
+    for (const r of b.results as Record<string, unknown>[]) {
+      const taskId = String(r?.taskId ?? "");
+      let ok = false;
+      if (r?.kind !== "packet") ok = store.markApplied([r]).recorded.length === 1;
+      if (!ok && r?.kind !== "triage")
+        ok = packets.markApplied(taskId, Number(r?.decidedAt), r?.ok !== false, typeof r?.error === "string" ? r.error : undefined);
+      (ok ? out.recorded : out.stale).push(taskId);
+    }
+    return json(out);
   }
   const item = path.match(/^\/api\/items\/([^/]+)(?:\/(decide|undo))?$/);
   if (item) {

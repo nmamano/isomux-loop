@@ -1,17 +1,18 @@
-// The ten task states of the loop, read from board facts (and, for Proposed,
-// from the triage proposals). Nothing here is stored: every read classifies
+// The task states of the loop, read from board facts (and, for Proposed,
+// from the triage cards). Nothing here is stored: every read classifies
 // the board as it is.
 
 import { WORKER_NAMES } from "./config";
 import { parseTag } from "./loop";
 import type { Task } from "./office";
 
+// Nil, 2026-10-18: no "waiting for Nil" state. A task that needs him is a card
+// in Triage (Proposed): a curator proposal or a worker's design packet.
 export const STATES = [
   "filed",
   "proposed",
   "ready",
   "working",
-  "waiting",
   "merging",
   "never",
   "backlog",
@@ -20,12 +21,13 @@ export const STATES = [
 ] as const;
 export type StateKey = (typeof STATES)[number] | "other";
 
-const LOOP_CLASSES = ["auto", "decide", "taste"];
+const LOOP_CLASSES = ["auto", "decide"];
 const LOOP_PRIORITIES = ["P0", "P1", "P2", "P3"];
 
 // First match wins, from the end of the path backwards, so a task never
-// counts in two states.
-export function classify(t: Task, hasProposal: boolean): StateKey {
+// counts in two states. hasCard: a triage proposal or a packet that is not
+// written to the board yet.
+export function classify(t: Task, hasCard: boolean): StateKey {
   if (t.status === "done") return "done";
   if (t.status === "obsolete") return "obsolete";
   if (t.priority === "P4") return "backlog";
@@ -33,7 +35,7 @@ export function classify(t: Task, hasProposal: boolean): StateKey {
   if (tag?.class === "authority") return "never";
   if (tag?.state === "merging") return "merging";
   if (t.status === "in_progress" && WORKER_NAMES.includes(t.assignee ?? "")) return "working";
-  if (tag && LOOP_CLASSES.includes(tag.class) && tag.state === "nil") return "waiting";
+  if (tag && LOOP_CLASSES.includes(tag.class) && tag.state === "nil") return hasCard ? "proposed" : "other";
   if (
     tag &&
     LOOP_CLASSES.includes(tag.class) &&
@@ -43,7 +45,7 @@ export function classify(t: Task, hasProposal: boolean): StateKey {
     LOOP_PRIORITIES.includes(t.priority ?? "")
   )
     return "ready";
-  if (!tag && t.status === "open") return hasProposal ? "proposed" : "filed";
+  if (!tag && t.status === "open") return hasCard ? "proposed" : "filed";
   return "other";
 }
 

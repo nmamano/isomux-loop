@@ -1,22 +1,26 @@
-// The loop app's page: status, triage and copy sign-off. Plain JS, no build.
+// The loop app's page: status, triage (proposals and packets) and sign-off. Plain JS, no build.
 const PRIORITIES = ["P0", "P1", "P2", "P3", "P4"];
-const CLASSES = ["auto", "decide", "taste", "authority"];
+// Nil, 2026-10-18: no taste class; an old taste proposal shows as decide.
+const CLASSES = ["auto", "decide", "authority"];
+const EXTRA_CHOICES = ["rescope", "obsolete", "research more"];
 const OUTCOMES = ["keep", "rescope", "obsolete"];
 const TABS = [
   ["status", "Status"],
   ["open", "To review"],
   ["decided", "Decided"],
   ["applied", "Applied"],
-  ["copy", "Copy"],
+  ["signoff", "Sign-off"],
 ];
 let tab = "status";
-let copyId = null;
 let items = [];
 let counts = {};
 let loopState = null;
-let copies = [];
+let packets = [];
+let signoffData = { items: [], push: { ok: false, reason: "" } };
 const later = new Set();
 const picks = {};
+const packetPicks = {};
+const rejectNotes = {};
 // Help rows opened with "?" (for phones, where hover does not exist).
 const openHelp = new Set();
 
@@ -28,7 +32,7 @@ const HELP = {
   P4: "P4: backlog. The loop never picks it.",
   auto: "auto: the loop does it from start to finish.",
   decide: "decide: needs your design go/no-go. The loop may research it and write a decision packet first.",
-  taste: "taste: copy or a look you approve before it merges.",
+  wasTaste: "The curator proposed taste, a class that no longer exists. It shows as decide; the curator will propose it again.",
   authority: "authority: the loop never touches it. Also for work run outside the loop.",
   keep: "keep: the task stays as it is, with the priority and class above.",
   rescope: "rescope: the task is rewritten to the proposed scope, or to the scope in your note.",
@@ -57,27 +61,46 @@ const HELP = {
   free: "Loop workers without a task. They get the next ready task at the next dispatch.",
   ready: "Tasks the loop can take now, in the order it takes them.",
   merging: "Approved work that Isomux Main merges after CI.",
-  waiting: "Waiting for Nil: tag [auto | nil], [decide | nil] or [taste | nil]. A packet, taste screenshots or a question waits for you (an ask in your Inbox).",
+  signoffLine: "Merged work with copy or a visible change that waits for your approve or reject before the push.",
   never: "Never picked: tag [authority | ...]. The loop never touches it; also for work run outside the loop.",
-  diagram: "Every task of the room is in exactly one of these ten states, read from the board now. Tap a state to list its tasks. Arrows show who moves a task on.",
-  other: "Tasks that fit none of the ten states, for example a tag the loop does not know or batch work outside the loop.",
+  diagram: "Every task of the room is in exactly one of these states, read from the board now. Tap a state to list its tasks. Arrows show who moves a task on.",
+  other: "Tasks that fit none of the states, for example a tag the loop does not know, a [<class> | nil] task without a card, or batch work outside the loop.",
   recentDone: "The last 20 tasks closed as done, newest first.",
   recentObsolete: "The last 20 tasks closed as obsolete, newest first.",
   tabStatus: "The loop now: pause, workers, queue, merges and what waits for you.",
-  tabOpen: "The curator's proposals that wait for your decision.",
+  tabOpen: "Cards that wait for your decision: workers' design packets first, then the curator's proposals.",
   tabDecided: "Your decisions that the curator has not written to the board yet. You can undo them.",
   tabApplied: "Decisions the curator wrote to the board.",
-  tabCopy: "Copy that waits for your sign-off, old next to new.",
-  old: "The text as it is now. Struck words go away.",
-  new: "The text as proposed. Marked words are new.",
+  tabSignoff: "Merged copy and visible changes: approve or reject each before the push, then give the push go.",
+  old: "The text before the change. Struck words went away.",
+  new: "The text after the change. Marked words are new.",
+  packet: "A design packet: a worker hit a decision that needs you. Pick an option (the dot marks the worker's recommendation), or rescope, obsolete, or research more.",
+  question: "The question the worker needs you to answer.",
+  options: "The options the worker found, with what each costs. The dot marks its recommendation.",
+  extras: "rescope: rewrite the task (your note says how). obsolete: close it. research more: the worker looks further (your note says what).",
+  "research more": "research more: the worker researches further before you decide; your note says what to look at.",
+  packetBody: "The worker's full packet: findings, details and trade-offs.",
+  images: "Screenshots from the worker. Tap one to open it full size.",
+  links: "The branch with the work, and the diff when there is one.",
+  packetConfirm: "Confirm saves your choice. The curator writes it to the task a few minutes after your last decision; until then you can undo it in Decided.",
+  approve: "Approve: this copy or change may go out with the next push.",
+  reject: "Reject: Isomux Main reverts the commit at once and the task goes back to ready with your note. Needs a note.",
+  rejectNote: "Why you reject it, and what to do instead. The worker reads it when the task comes back.",
+  undoApprove: "Undo the approval while the push go has not been given.",
+  push: "Approve and push: tells Isomux Main to push main at the sha below. Enabled when every item is approved or rejected and every rejection is reverted.",
+  sha: "The main commit from Isomux Main's latest merge or revert. The push go names this commit.",
+  rejected: "Rejected: Isomux Main was asked to revert it. It stays here until Main reports the revert.",
+  waitingSign: "Waiting for your approve or reject.",
+  approvedSign: "Approved: it goes out with the next push go.",
+  where: "Where this copy appears.",
+  summary: "What the worker says changed.",
 };
-// The ten states: label, definition (board facts), and place in the diagram.
+// The states: label, definition (board facts), and place in the diagram.
 const STATE_INFO = {
-  filed: ["Filed", "Open, no tag in the title, no proposal in the app yet. The loop never picks it."],
-  proposed: ["Proposed", "A curator proposal waits in triage for your decision."],
-  ready: ["Ready", "Tag [auto | ready], [decide | ready] or [taste | ready], open, no assignee, P0-P3. The loop picks these."],
+  filed: ["Filed", "Open, no tag in the title, no card in the app yet. The loop never picks it."],
+  proposed: ["Triage card", "A card waits in Triage for your decision: a curator proposal, or a worker's design packet on a [<class> | nil] task."],
+  ready: ["Ready", "Tag [auto | ready] or [decide | ready], open, no assignee, P0-P3. The loop picks these."],
   working: ["Working", "In progress, assigned to an Isomux Worker."],
-  waiting: ["Waiting for Nil", "Tag [auto | nil], [decide | nil] or [taste | nil]: a packet, taste screenshots or a question waits for you (an ask in your Inbox)."],
   merging: ["Merging", "Tag [<class> | merging], in progress, no assignee. Isomux Main merges it after CI."],
   never: ["Never picked", "Tag [authority | ...]. The loop never touches it."],
   backlog: ["Backlog", "P4. The loop never picks it."],
@@ -87,23 +110,21 @@ const STATE_INFO = {
 const BOX = {
   filed: [140, 10, 120], proposed: [140, 90, 120], ready: [140, 170, 120], working: [140, 250, 120],
   merging: [140, 330, 120], done: [140, 410, 120],
-  never: [0, 40, 100], backlog: [0, 110, 100], obsolete: [300, 90, 100], waiting: [300, 250, 100],
+  never: [0, 40, 100], backlog: [0, 110, 100], obsolete: [300, 90, 100],
 };
-// [path, label x, label y, anchor, label, help]
+// [path, label x, label y, anchor, label, help, label runs up the lane]
 const EDGES = [
-  ["M200,56 V88", 206, 76, "start", "curator", "Filed to Proposed: the curator proposes a review."],
-  ["M200,136 V168", 206, 156, "start", "Nil", "Proposed to Ready: you confirm it with a loop class."],
+  ["M200,56 V88", 206, 76, "start", "curator", "Filed to Triage card: the curator proposes a review."],
+  ["M200,136 V168", 206, 156, "start", "Nil", "Triage card to Ready: you confirm it with a loop class, or pick a packet option."],
   ["M200,216 V248", 206, 236, "start", "app", "Ready to Working: the app gives it to a free worker."],
   ["M200,296 V328", 206, 316, "start", "approved", "Working to Merging: the reviewer approved the work."],
   ["M200,376 V408", 206, 396, "start", "CI green", "Merging to Done: CI passed and Isomux Main merged it."],
-  ["M140,104 L102,68", 121, 115, "middle", "Nil", "Proposed to Never picked or Backlog: your decision."],
+  ["M140,104 L102,68", 121, 115, "middle", "Nil", "Triage card to Never picked or Backlog: your decision."],
   ["M140,120 L102,128", null],
-  ["M260,112 H298", 279, 106, "middle", "Nil", "Proposed to Obsolete: you close it."],
-  ["M260,272 H298", 279, 266, "middle", "to Nil", "Working to Waiting for Nil: a decision packet, taste screenshots or a scope question."],
-  ["M350,250 V136", 355, 196, "start", "Nil: no", "Waiting for Nil to Obsolete: you said no."],
-  ["M300,258 L262,206", 303, 234, "start", "Nil: go", "Waiting for Nil to Ready: you said go."],
-  ["M300,288 L262,344", 303, 322, "start", "Nil approves", "Waiting for Nil to Merging: you approved a taste branch."],
-  ["M140,352 H118 V192 H138", 114, 276, "end", "CI red", "Merging to Ready: CI failed because of the branch; it goes back to the queue."],
+  ["M260,112 H298", 279, 106, "middle", "Nil", "Triage card to Obsolete: you close it."],
+  ["M260,272 H284 V128 H262", 289, 200, "start", "packet", "Working to Triage card: the worker hit a design decision and sent you a packet."],
+  ["M140,352 H120 V204 H138", 116, 280, "middle", "CI red", "Merging to Ready: CI failed because of the branch; it goes back to the queue.", true],
+  ["M140,432 H106 V184 H138", 102, 330, "middle", "sign-off rejected", "Done to Ready: you rejected it at sign-off, Isomux Main reverted it, and it goes back to the queue with your note.", true],
 ];
 let pickedState = null;
 
@@ -111,10 +132,11 @@ function diagram(states) {
   const marker =
     '<defs><marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">' +
     '<path d="M0,0 L8,4 L0,8 z" style="fill:var(--muted)"/></marker></defs>';
-  const edges = EDGES.map(([d, x, y, anchor, label, help]) =>
+  const edges = EDGES.map(([d, x, y, anchor, label, help, up]) =>
     "<g>" + (help ? "<title>" + esc(help) + "</title>" : "") +
     '<path d="' + d + '" fill="none" style="stroke:var(--muted)" stroke-width="1.4" marker-end="url(#ah)"/>' +
-    (label ? '<text x="' + x + '" y="' + y + '" text-anchor="' + anchor + '" font-size="10" style="fill:var(--muted)">' + esc(label) + "</text>" : "") +
+    (label ? '<text x="' + x + '" y="' + y + '" text-anchor="' + anchor + '"' + (up ? ' transform="rotate(-90 ' + x + " " + y + ')"' : "") +
+      ' font-size="10" style="fill:var(--muted)">' + esc(label) + "</text>" : "") +
     "</g>").join("");
   const boxes = Object.entries(BOX).map(([k, [x, y, w]]) => {
     const [label, help] = STATE_INFO[k];
@@ -146,7 +168,7 @@ function renderStates(b) {
   return h;
 }
 
-const TAB_HELP = { status: "tabStatus", open: "tabOpen", decided: "tabDecided", applied: "tabApplied", copy: "tabCopy" };
+const TAB_HELP = { status: "tabStatus", open: "tabOpen", decided: "tabDecided", applied: "tabApplied", signoff: "tabSignoff" };
 
 // title="" for hover.
 function tip(key) {
@@ -184,18 +206,11 @@ async function api(path, opts) {
 // --- routing -------------------------------------------------------------------
 
 function readLocation() {
-  const m = location.pathname.match(/^\/copy\/([^/]+)/);
-  if (m) {
-    tab = "copy";
-    copyId = decodeURIComponent(m[1]);
-  } else if (location.pathname === "/") {
-    copyId = null;
-  }
+  if (location.pathname.startsWith("/signoff")) tab = "signoff";
 }
-function go(nextTab, nextCopyId) {
+function go(nextTab) {
   tab = nextTab;
-  copyId = nextCopyId ?? null;
-  const path = copyId ? "/copy/" + encodeURIComponent(copyId) : "/";
+  const path = tab === "signoff" ? "/signoff/" : "/";
   if (location.pathname !== path) history.pushState(null, "", path);
   render();
   window.scrollTo(0, 0);
@@ -206,16 +221,18 @@ window.addEventListener("popstate", () => {
 });
 
 async function load() {
-  const [c, i, s, cp] = await Promise.allSettled([
+  const [c, i, s, pk, so] = await Promise.allSettled([
     api("/api/summary"),
     api("/api/items?state=all"),
     api("/api/status"),
-    api("/api/copy"),
+    api("/api/packets"),
+    api("/api/signoff"),
   ]);
   if (c.status === "fulfilled") counts = c.value;
   if (i.status === "fulfilled") items = i.value;
   if (s.status === "fulfilled") loopState = s.value;
-  if (cp.status === "fulfilled") copies = cp.value;
+  if (pk.status === "fulfilled") packets = pk.value;
+  if (so.status === "fulfilled") signoffData = so.value;
   render();
 }
 
@@ -227,11 +244,12 @@ function itemState(i) {
   return "decided";
 }
 function renderTabs() {
+  const pc = (st) => packets.filter((p) => st.includes(p.state)).length;
   const n = {
-    open: counts.open || 0,
-    decided: (counts.decided || 0) + (counts.failed || 0),
-    applied: counts.applied || 0,
-    copy: copies.length,
+    open: (counts.open || 0) + pc(["open"]),
+    decided: (counts.decided || 0) + (counts.failed || 0) + pc(["decided", "failed"]),
+    applied: (counts.applied || 0) + pc(["applied"]),
+    signoff: signoffData.items.filter((x) => x.state === "waiting").length,
   };
   document.getElementById("tabs").innerHTML = TABS.map(
     ([k, label]) =>
@@ -278,6 +296,8 @@ function renderStatus() {
   h += "<br>Last tick: " + (t ? clock(t.at) : "not yet");
   if (t && t.error) h += ' · <span class="warn">' + esc(t.error) + "</span>";
   h += q("runs") + "</div>" + helpBox(["runs"], "runs");
+  const sw = s.signoffWaiting || 0;
+  h += '<div class="small"' + tip("signoffLine") + '>Sign-off: <a href="/signoff/" data-go="signoff">' + sw + " waiting</a> " + q("signoffLine") + "</div>" + helpBox(["signoffLine"], "signoffLine");
   if (s.error) return h + '<div class="err">Board unreadable: ' + esc(s.error) + "</div>";
   const b = s.board;
   h += renderStates(b);
@@ -286,7 +306,6 @@ function renderStatus() {
   h += section("Ready queue (" + b.ready.length + ")", "ready", b.ready.map((x) => taskLine(x)), "Nothing is ready.");
   h += section("Waiting to merge (" + b.merging.length + ")", "merging", b.merging.map((x) => taskLine(x)), "Nothing waits to merge.");
   const st = b.states;
-  h += section("Waiting for Nil (" + st.waiting.count + ")", "waiting", st.waiting.tasks.map(briefLine), "Nothing waits for you.");
   h += section("Never picked (" + st.never.count + ")", "never", st.never.tasks.map(briefLine), "No task is tagged authority.");
   h += section("Done (" + st.done.count + ") · last " + st.done.tasks.length, "recentDone", st.done.tasks.map(briefLine), "Nothing is done yet.");
   h += section("Obsolete (" + st.obsolete.count + ") · last " + st.obsolete.tasks.length, "recentObsolete", st.obsolete.tasks.map(briefLine), "Nothing is obsolete.");
@@ -344,12 +363,14 @@ function row(label, kind, list, k, p, id) {
   );
 }
 function openCard(i) {
-  const p = i.proposal;
+  const wasTaste = i.proposal.class === "taste";
+  const p = wasTaste ? { ...i.proposal, class: "decide" } : i.proposal;
   const k = picks[i.taskId] || (picks[i.taskId] = { priority: p.priority, class: p.class, outcome: p.outcome, note: "" });
   return (
     '<div class="card">' + head(i, k, false) + body(i) +
     row("Priority", "priority", PRIORITIES, k, p, i.taskId) +
     row("Class", "class", CLASSES, k, p, i.taskId) +
+    (wasTaste ? '<div class="small warn"' + tip("wasTaste") + ">was taste: shown as decide</div>" : "") +
     row("Outcome", "outcome", OUTCOMES, k, p, i.taskId) +
     '<textarea rows="1" placeholder="Note for the curator (optional)" data-note="' + esc(i.taskId) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
     '<div class="err" data-err="' + esc(i.taskId) + '"></div>' +
@@ -376,14 +397,126 @@ function decidedCard(i) {
   return h + "</div>";
 }
 function renderTriage() {
-  let shown = items.filter((i) => {
-    const s = itemState(i);
-    return tab === "decided" ? s === "decided" || s === "failed" : s === tab;
-  });
-  if (tab === "open") shown = shown.filter((i) => !later.has(i.taskId)).concat(shown.filter((i) => later.has(i.taskId)));
-  if (tab === "applied") shown.sort((a, b) => b.applied.at - a.applied.at);
-  if (!shown.length) return '<div class="empty">' + (tab === "open" ? "Nothing to review." : "Nothing here.") + "</div>";
-  return shown.map((i) => (tab === "open" ? openCard(i) : decidedCard(i))).join("");
+  const inTab = (s) => (tab === "decided" ? s === "decided" || s === "failed" : s === tab);
+  let shown = items.filter((i) => inTab(itemState(i))).map((i) => ({ kind: "triage", x: i }));
+  let pks = packets.filter((p) => inTab(p.state)).map((p) => ({ kind: "packet", x: p }));
+  const lastLater = (list) => list.filter((e) => !later.has(e.x.taskId)).concat(list.filter((e) => later.has(e.x.taskId)));
+  let all = pks.concat(shown);
+  if (tab === "open") all = lastLater(all);
+  if (tab === "applied") all.sort((a, b) => b.x.applied.at - a.x.applied.at);
+  if (!all.length) return '<div class="empty">' + (tab === "open" ? "Nothing to review." : "Nothing here.") + "</div>";
+  return all
+    .map((e) =>
+      e.kind === "packet" ? (tab === "open" ? packetCard(e.x) : decidedPacketCard(e.x)) : tab === "open" ? openCard(e.x) : decidedCard(e.x),
+    )
+    .join("");
+}
+
+// --- packets ------------------------------------------------------------------
+
+// A small markdown subset, escaped first: headings, bold, code, lists, links.
+function md(src) {
+  const lines = esc(src).split("\n");
+  let out = "";
+  let inList = false;
+  let inCode = false;
+  for (const raw of lines) {
+    if (raw.startsWith("```")) {
+      out += inCode ? "</pre>" : (inList ? "</ul>" : "") + '<pre class="code">';
+      inList = false;
+      inCode = !inCode;
+      continue;
+    }
+    if (inCode) {
+      out += raw + "\n";
+      continue;
+    }
+    let l = raw
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    const li = l.match(/^\s*[-*] (.*)$/);
+    if (li) {
+      out += (inList ? "" : "<ul>") + "<li>" + li[1] + "</li>";
+      inList = true;
+      continue;
+    }
+    if (inList) {
+      out += "</ul>";
+      inList = false;
+    }
+    const hd = l.match(/^(#{1,4}) (.*)$/);
+    out += hd ? '<div class="mdh">' + hd[2] + "</div>" : l.trim() ? "<p>" + l + "</p>" : "";
+  }
+  return out + (inList ? "</ul>" : "") + (inCode ? "</pre>" : "");
+}
+function imagesHtml(kind, taskId, images) {
+  if (!images || !images.length) return "";
+  return (
+    '<div class="label"' + tip("images") + ">Screenshots " + q("images", kind + taskId) + "</div>" + helpBox(["images"], "images", kind + taskId) +
+    '<div class="thumbs">' +
+    images
+      .map((im) => {
+        const url = "/img/" + kind + "/" + encodeURIComponent(taskId) + "/" + im.file;
+        return '<a href="' + url + '" target="_blank" rel="noopener" title="' + esc(im.caption || "Open full size") + '"><img src="' + url + '" alt="' + esc(im.caption) + '">' +
+          (im.caption ? "<span>" + esc(im.caption) + "</span>" : "") + "</a>";
+      })
+      .join("") +
+    "</div>"
+  );
+}
+function packetHead(p) {
+  return (
+    '<div class="meta"' + tip("packet") + '><span class="badge">Design packet</span><span>' + esc(p.priority || "no priority") + "</span><span>Task " + esc(p.taskId) +
+    "</span><span>" + clock(p.createdAt) + "</span>" + q("packet", p.taskId) + "</div>" + helpBox(["packet"], "packet", p.taskId) +
+    '<div class="title">' + esc(p.title.replace(/^\[[^\]]*\]\s*/, "")) + "</div>"
+  );
+}
+function packetCard(p) {
+  const rec = p.options.find((o) => o.recommended);
+  const k = packetPicks[p.taskId] || (packetPicks[p.taskId] = { choice: rec ? rec.label : null, note: "" });
+  const opt = (o) =>
+    '<button class="option' + (k.choice === o.label ? " on" : "") + '" data-pchoice="' + esc(o.label) + '" data-id="' + esc(p.taskId) + '"' +
+    ' title="' + esc(o.label + (o.cost ? ": " + o.cost : "") + (o.recommended ? " The worker recommends this." : "")) + '">' +
+    "<b>" + esc(o.label) + "</b>" + (o.recommended ? '<span class="dot"></span>' : "") + (o.cost ? '<span class="cost">' + esc(o.cost) + "</span>" : "") + "</button>";
+  const extra = (c) =>
+    '<button class="chip' + (k.choice === c ? " on" : "") + '" data-pchoice="' + c + '" data-id="' + esc(p.taskId) + '"' + tip(c) + ">" + c + "</button>";
+  let links = "";
+  if (p.branch) links += "<span>Branch <code>" + esc(p.branch) + "</code></span>";
+  if (p.diffUrl) links += '<a href="' + esc(p.diffUrl) + '" target="_blank" rel="noopener">Diff</a>';
+  return (
+    '<div class="card packet">' + packetHead(p) +
+    '<div class="question"' + tip("question") + ">" + esc(p.question) + "</div>" +
+    (p.body ? "<details><summary" + tip("packetBody") + ">The packet</summary><div class=\"mdbody\">" + md(p.body) + "</div></details>" : "") +
+    imagesHtml("packets", p.taskId, p.images) +
+    (links ? '<div class="links"' + tip("links") + ">" + links + "</div>" : "") +
+    '<div class="row"><span class="label"' + tip("options") + ">Options " + q("options", p.taskId) + "</span>" + helpBox(["options", "dot"], "options", p.taskId) +
+    '<div class="options">' + p.options.map(opt).join("") + "</div></div>" +
+    '<div class="row"><span class="label"' + tip("extras") + ">Or " + q("extras", p.taskId) + "</span>" + helpBox(["rescope", "obsolete", "research more"], "extras", p.taskId) +
+    EXTRA_CHOICES.map(extra).join("") + "</div>" +
+    '<textarea rows="1" placeholder="Note (needed for rescope)" data-pnote="' + esc(p.taskId) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
+    '<div class="err" data-err="' + esc(p.taskId) + '"></div>' +
+    '<div class="actions"><button class="btn primary" data-pdecide="' + esc(p.taskId) + '"' + tip("packetConfirm") + ">Confirm</button>" +
+    '<button class="btn ghost" data-later="' + esc(p.taskId) + '"' + tip("later") + ">Later</button>" + q("pactions", p.taskId) + "</div>" +
+    helpBox(["packetConfirm", "later", "note"], "pactions", p.taskId) + "</div>"
+  );
+}
+function decidedPacketCard(p) {
+  const d = p.decision;
+  const s = p.state;
+  const status =
+    s === "applied" ? '<span class="ok"' + tip("applied") + ">On the board</span>"
+    : s === "failed" ? '<span class="warn"' + tip("failed") + ">Failed: " + esc(p.applied.error || "no reason given") + "</span>"
+    : "<span" + tip("pending") + ">Waiting for the curator</span>";
+  const rec = p.options.find((o) => o.recommended);
+  let h =
+    '<div class="card packet">' + packetHead(p) + '<div class="question">' + esc(p.question) + "</div>" +
+    '<div class="why"><span class="label"' + tip("decision") + ">Your decision</span><br><b>" + esc(d.choice) + "</b>" +
+    (rec ? ' <span class="small">(worker recommended ' + esc(rec.label) + ")</span>" : "") + (d.note ? "<br>" + esc(d.note) : "") + "</div>" +
+    '<div class="meta">' + status + "</div>";
+  if (s !== "applied")
+    h += '<div class="err" data-err="' + esc(p.taskId) + '"></div><div class="actions"><button class="btn ghost" data-pundo="' + esc(p.taskId) + '"' + tip("undo") + ">Undo</button></div>";
+  return h + "</div>";
 }
 
 // --- copy -------------------------------------------------------------------
@@ -418,26 +551,44 @@ function diff(a, b) {
   }
   return [oldH, newH];
 }
-function renderCopy() {
-  if (copyId) {
-    const c = copies.find((x) => x.taskId === copyId);
-    if (!c) return '<p><a href="/" data-copy-list="1">All copy</a></p><div class="empty">No copy waits for this task.</div>';
-    const [o, n] = diff(c.old || "", c.new);
-    return (
-      '<p><a href="/" data-copy-list="1">All copy</a></p><div class="title">' + esc(c.title) + "</div>" +
-      '<div class="small">' + esc(c.taskId) + " · updated " + clock(c.updatedAt) + "</div>" +
-      '<div class="cols"><div><h2' + tip("old") + '>Old</h2><div class="copytext">' + (c.old ? o : '<span class="small">New copy</span>') +
-      '</div></div><div><h2' + tip("new") + '>New</h2><div class="copytext">' + n + "</div></div></div>"
-    );
+// --- sign-off -----------------------------------------------------------------
+
+function renderSignoff() {
+  const so = signoffData;
+  const sha = so.lastSha ? so.lastSha.commit : null;
+  let h =
+    '<div class="banner ' + (so.push.ok ? "run" : "paused") + '"><div><b' + tip("push") + ">Push go</b>" +
+    '<div class="small"' + tip("sha") + ">main " + (sha ? "<code>" + esc(sha.slice(0, 10)) + "</code> · " + clock(so.lastSha.at) : "not reported yet") + "</div>" +
+    (so.push.ok ? "" : '<div class="small">' + esc(so.push.reason) + "</div>") +
+    '</div><span><button class="btn primary" data-push="1"' + (so.push.ok ? "" : " disabled") + tip("push") + ">Approve and push</button> " + q("push") + "</span></div>" +
+    helpBox(["push", "sha"], "push") + '<div class="err" data-err="push"></div>';
+  if (!so.items.length) return h + '<div class="empty">No merged copy or visible change waits for sign-off.</div>';
+  for (const it of so.items) {
+    const stateText =
+      it.state === "approved" ? '<span class="ok"' + tip("approvedSign") + ">Approved</span>"
+      : it.state === "rejected" ? '<span class="warn"' + tip("rejected") + ">Rejected, waiting for revert: " + esc(it.decision.note) + "</span>"
+      : "<span" + tip("waitingSign") + ">Waiting for you</span>";
+    h += '<div class="card"><div class="meta"><span>Task ' + esc(it.taskId) + "</span><span" + tip("sha") + ">commit <code>" + esc(it.merged.commit.slice(0, 10)) + "</code></span><span>merged " +
+      clock(it.merged.at) + "</span>" + stateText + "</div>" + '<div class="title">' + esc(it.title) + "</div>";
+    if (it.summary) h += '<div class="mdbody"' + tip("summary") + ">" + md(it.summary) + "</div>";
+    for (const c of it.copy) {
+      const [o, n] = diff(c.old || "", c.new);
+      h += '<div class="label"' + tip("where") + ">" + esc(c.where) + "</div>" +
+        '<div class="cols"><div><h2' + tip("old") + '>Old</h2><div class="copytext">' + (c.old ? o : '<span class="small">New copy</span>') +
+        '</div></div><div><h2' + tip("new") + '>New</h2><div class="copytext">' + n + "</div></div></div>";
+    }
+    h += imagesHtml("signoff", it.taskId, it.images);
+    h += '<div class="err" data-err="' + esc(it.taskId) + '"></div>';
+    if (it.state === "waiting")
+      h += '<textarea rows="1" placeholder="Why you reject it (needed to reject)" data-rnote="' + esc(it.taskId) + '"' + tip("rejectNote") + ">" + esc(rejectNotes[it.taskId] || "") + "</textarea>" +
+        '<div class="actions"><button class="btn primary" data-approve="' + esc(it.taskId) + '"' + tip("approve") + ">Approve</button>" +
+        '<button class="btn ghost" data-reject="' + esc(it.taskId) + '"' + tip("reject") + ">Reject</button>" + q("sactions", it.taskId) + "</div>" +
+        helpBox(["approve", "reject", "rejectNote"], "sactions", it.taskId);
+    if (it.state === "approved")
+      h += '<div class="actions"><button class="btn ghost" data-sundo="' + esc(it.taskId) + '"' + tip("undoApprove") + ">Undo</button></div>";
+    h += "</div>";
   }
-  if (!copies.length) return '<div class="empty">No copy waits for sign-off.</div>';
-  return copies
-    .map(
-      (c) =>
-        '<div class="line"><a href="/copy/' + encodeURIComponent(c.taskId) + '" data-copy="' + esc(c.taskId) + '">' +
-        esc(c.title) + '</a> <span class="small">' + esc(c.taskId) + " · " + clock(c.updatedAt) + "</span></div>",
-    )
-    .join("");
+  return h;
 }
 
 // --- render and events ----------------------------------------------------------
@@ -445,7 +596,7 @@ function renderCopy() {
 function render() {
   renderTabs();
   const el = document.getElementById("list");
-  el.innerHTML = tab === "status" ? renderStatus() : tab === "copy" ? renderCopy() : renderTriage();
+  el.innerHTML = tab === "status" ? renderStatus() : tab === "signoff" ? renderSignoff() : renderTriage();
 }
 function showErr(id, msg) {
   const el = document.querySelector('[data-err="' + CSS.escape(id) + '"]');
@@ -461,10 +612,10 @@ document.addEventListener("click", async (e) => {
     if (list) list.scrollIntoView({ behavior: "smooth", block: "nearest" });
     return;
   }
-  const a = e.target.closest("a[data-copy], a[data-copy-list]");
+  const a = e.target.closest("a[data-go]");
   if (a) {
     e.preventDefault();
-    go("copy", a.dataset.copy || null);
+    go(a.dataset.go);
     return;
   }
   const t = e.target.closest("button");
@@ -476,6 +627,41 @@ document.addEventListener("click", async (e) => {
     return render();
   }
   if (d.tab) return go(d.tab);
+  const act = async (id, fn) => {
+    try {
+      t.disabled = true;
+      await fn();
+      await load();
+    } catch (err) {
+      t.disabled = false;
+      showErr(id, err.message);
+    }
+  };
+  if (d.pchoice) {
+    packetPicks[d.id].choice = d.pchoice;
+    return render();
+  }
+  if (d.pdecide) {
+    const k = packetPicks[d.pdecide];
+    if (!k.choice) return showErr(d.pdecide, "Pick an option first.");
+    if (k.choice === "rescope" && !k.note.trim()) return showErr(d.pdecide, "A rescope needs a note with the new scope.");
+    return act(d.pdecide, async () => {
+      await api("/api/packets/" + encodeURIComponent(d.pdecide) + "/decide", { method: "POST", body: k });
+      later.delete(d.pdecide);
+    });
+  }
+  if (d.pundo) return act(d.pundo, () => api("/api/packets/" + encodeURIComponent(d.pundo) + "/undo", { method: "POST" }));
+  if (d.approve) return act(d.approve, () => api("/api/signoff/" + encodeURIComponent(d.approve) + "/approve", { method: "POST" }));
+  if (d.sundo) return act(d.sundo, () => api("/api/signoff/" + encodeURIComponent(d.sundo) + "/undo", { method: "POST" }));
+  if (d.reject) {
+    const note = (rejectNotes[d.reject] || "").trim();
+    if (!note) return showErr(d.reject, "Write why you reject it first.");
+    return act(d.reject, async () => {
+      await api("/api/signoff/" + encodeURIComponent(d.reject) + "/reject", { method: "POST", body: { note } });
+      delete rejectNotes[d.reject];
+    });
+  }
+  if (d.push) return act("push", () => api("/api/signoff/push", { method: "POST" }));
   if (d.pick) {
     picks[d.id][d.pick] = d.v;
     return render();
@@ -529,13 +715,15 @@ document.addEventListener("click", async (e) => {
   }
 });
 document.addEventListener("input", (e) => {
-  const id = e.target.dataset && e.target.dataset.note;
-  if (id !== undefined && picks[id]) picks[id].note = e.target.value;
+  const ds = e.target.dataset || {};
+  if (ds.note !== undefined && picks[ds.note]) picks[ds.note].note = e.target.value;
+  if (ds.pnote !== undefined && packetPicks[ds.pnote]) packetPicks[ds.pnote].note = e.target.value;
+  if (ds.rnote !== undefined) rejectNotes[ds.rnote] = e.target.value;
 });
 readLocation();
 // Open on triage while proposals wait for Nil, else on the status.
 load().then(() => {
-  if (!copyId && tab === "status" && counts.open > 0) {
+  if (tab === "status" && (counts.open > 0 || packets.some((p) => p.state === "open"))) {
     tab = "open";
     render();
   }

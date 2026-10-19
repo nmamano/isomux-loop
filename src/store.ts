@@ -6,11 +6,13 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { join } from "node:path";
 
 export const PRIORITIES = ["P0", "P1", "P2", "P3", "P4"] as const;
-export const CLASSES = ["auto", "decide", "taste", "authority"] as const;
+// Nil, 2026-10-18: no taste class. A proposal stored before that may still say
+// taste; the page shows it as decide.
+export const CLASSES = ["auto", "decide", "authority"] as const;
 export const OUTCOMES = ["keep", "rescope", "obsolete"] as const;
 
 export type Priority = (typeof PRIORITIES)[number];
-export type TaskClass = (typeof CLASSES)[number];
+export type TaskClass = (typeof CLASSES)[number] | "taste";
 export type Outcome = (typeof OUTCOMES)[number];
 
 export type TaskSnapshot = {
@@ -242,12 +244,19 @@ export class Store {
     return out;
   }
 
+  // A packet decision counts toward the same burst as triage decisions.
+  noteDecision(at: number): void {
+    this.state.notify.lastDecisionAt = at;
+    this.save();
+  }
+
   // One message per burst of decisions: once Nil has been quiet for quietMs
-  // and nothing was sent since his last decision.
-  shouldNotify(quietMs: number): boolean {
+  // and nothing was sent since his last decision. otherPending: packet
+  // decisions waiting for the curator.
+  shouldNotify(quietMs: number, otherPending = 0): boolean {
     const n = this.state.notify;
     return (
-      this.pending().length > 0 &&
+      this.pending().length + otherPending > 0 &&
       n.lastDecisionAt > n.lastSentAt &&
       this.now() - n.lastDecisionAt >= quietMs
     );
