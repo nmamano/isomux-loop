@@ -152,4 +152,18 @@ describe("sign-off", () => {
     s.setComments("t1", { copy: { "0": "too long" } });
     expect(s.checkReject("t1", { note: "Wrong page." }).note).toBe("Wrong page. Comments: docs/features.md: too long");
   });
+
+  test("before/after pairs: one image per side, named pairs only on sign-off, one comment per pair", () => {
+    const s = new SignoffStore(tempDir());
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    expect(s.addImage("t1", PNG, "old", "Asks page", "before")).toMatchObject({ pair: "Asks page", side: "before" });
+    expect(() => s.addImage("t1", PNG, "", "Asks page", "before")).toThrow(ValidationError);
+    expect(() => s.addImage("t1", PNG, "", "Asks page", "middle")).toThrow(ValidationError);
+    expect(() => s.addImage("t1", PNG, "", "<b>", "after")).toThrow(ValidationError);
+    s.addImage("t1", PNG, "new", "Asks page", "after");
+    s.addImage("t1", PNG, "lone");
+    s.setComments("t1", { images: { "0": "too much padding" } });
+    expect(s.commentLines(s.get("t1")!, false)).toEqual(['screenshots "Asks page" (before and after): too much padding']);
+  });
 });

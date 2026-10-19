@@ -74,6 +74,9 @@ const HELP = {
   tabApplied: "Decisions the curator wrote to the board.",
   tabSignoff: "Merged copy and visible changes: approve or reject each before the push, then give the push go.",
   old: "The text before the change. Struck words went away.",
+  pairImages: "The same screen before and after the change. Tap an image to open it full size. One comment covers the pair.",
+  before: "The screen before the change.",
+  after: "The screen after the change.",
   new: "The text after the change. Marked words are new.",
   packet: "A design packet: a worker hit a decision that needs you. Pick an option (the dot marks the worker's recommendation), or rescope, obsolete, or research more.",
   question: "The question the worker needs you to answer.",
@@ -620,13 +623,35 @@ function renderSignoff() {
         '</div></div><div><h2' + tip("new") + '>New</h2><div class="copytext">' + nw + "</div></div></div>" +
         (waiting ? commentBox(it, "copy", n) : "") + "</div>";
     });
-    if (it.images.length) {
+    // Before/after pairs side by side (one comment each, kept on the pair's
+    // first image); lone images as thumbnails with their own comment.
+    const imgUrl = (im) => "/img/signoff/" + encodeURIComponent(it.taskId) + "/" + im.file;
+    const pairs = [];
+    const lone = [];
+    it.images.forEach((im, n) => {
+      if (!im.pair) return lone.push([im, n]);
+      let pr = pairs.find((x) => x.name === im.pair);
+      if (!pr) pairs.push((pr = { name: im.pair, first: n }));
+      pr[im.side] = im;
+    });
+    for (const pr of pairs) {
+      const side = (im, label, key) =>
+        "<div><h2" + tip(key) + ">" + label + "</h2>" +
+        (im
+          ? '<a class="pairimg" href="' + imgUrl(im) + '" target="_blank" rel="noopener" title="' + esc(im.caption || "Open full size") + '"><img src="' + imgUrl(im) + '" alt="' + esc(im.caption) + '"></a>' +
+            (im.caption ? '<div class="small">' + esc(im.caption) + "</div>" : "")
+          : '<div class="copytext small">No ' + label.toLowerCase() + " image</div>") +
+        "</div>";
+      h += '<div class="entry"><div class="where"' + tip("pairImages") + ">Screenshots: " + esc(pr.name) + " " + q("pairImages", it.taskId + pr.name) + "</div>" +
+        helpBox(["pairImages"], "pairImages", it.taskId + pr.name) +
+        '<div class="cols">' + side(pr.before, "Before", "before") + side(pr.after, "After", "after") + "</div>" +
+        (waiting ? commentBox(it, "images", pr.first) : "") + "</div>";
+    }
+    if (lone.length) {
       h += '<div class="entry"><div class="where"' + tip("images") + ">Screenshots " + q("images", "signoff" + it.taskId) + "</div>" + helpBox(["images"], "images", "signoff" + it.taskId) + '<div class="shots">';
-      it.images.forEach((im, n) => {
-        const url = "/img/signoff/" + encodeURIComponent(it.taskId) + "/" + im.file;
-        h += '<div class="shot"><a href="' + url + '" target="_blank" rel="noopener" title="' + esc(im.caption || "Open full size") + '"><img src="' + url + '" alt="' + esc(im.caption) + '"></a>' +
+      for (const [im, n] of lone)
+        h += '<div class="shot"><a href="' + imgUrl(im) + '" target="_blank" rel="noopener" title="' + esc(im.caption || "Open full size") + '"><img src="' + imgUrl(im) + '" alt="' + esc(im.caption) + '"></a>' +
           (im.caption ? '<div class="small">' + esc(im.caption) + "</div>" : "") + (waiting ? commentBox(it, "images", n) : "") + "</div>";
-      });
       h += "</div></div>";
     }
     h += '<div class="err" data-err="' + esc(it.taskId) + '"></div>';

@@ -4,7 +4,8 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { ValidationError } from "./store";
 
-export type Image = { file: string; caption: string; type: string };
+// pair/side: a before/after pair of sign-off screenshots, shown side by side.
+export type Image = { file: string; caption: string; type: string; pair?: string; side?: "before" | "after" };
 
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const MAX_IMAGES = 20;

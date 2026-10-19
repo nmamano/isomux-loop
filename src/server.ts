@@ -58,7 +58,8 @@ POST /api/dispatch | /api/tick    run one now (both refuse while paused)
 Sign-off before the push:
 POST /api/signoff                 worker at hand-off: {"taskId","title","summary?","copy":[{"where","old","new"}]}
                                   (old "" for new copy). Replaces the task's item unless Nil rejected it and the revert is not reported.
-POST /api/signoff/:taskId/images  raw PNG/JPEG/WebP bytes, ?caption=..., as for packets
+POST /api/signoff/:taskId/images  raw PNG/JPEG/WebP bytes, ?caption=..., as for packets. For a before/after pair add
+                                  ?pair=<short name>&side=before|after (one image per side); a pair shows side by side.
 POST /api/signoff/:taskId/merged  Isomux Main after EVERY merge, item or not: {"commit"}. The sha is what a push go names.
 POST /api/signoff/:taskId/reverted  Isomux Main after a revert Nil asked for: {"commit"}. The item leaves the list.
 GET  /api/signoff                 merged items, the main sha, and whether a push go is possible
@@ -192,10 +193,12 @@ async function mainAgentId(): Promise<string> {
   return main.id;
 }
 
-async function imageUpload(req: Request, dir: { addImage: (id: string, b: Uint8Array, c: string) => unknown }, taskId: string) {
+type ImageTarget = { addImage: (id: string, b: Uint8Array, c: string, pair?: string | null, side?: string | null) => unknown };
+async function imageUpload(req: Request, dir: ImageTarget, taskId: string, withPairs = false) {
   const bytes = new Uint8Array(await req.arrayBuffer());
-  const caption = new URL(req.url).searchParams.get("caption") ?? "";
-  return dir.addImage(taskId, bytes, caption);
+  const q = new URL(req.url).searchParams;
+  if (!withPairs && (q.has("pair") || q.has("side"))) throw new ValidationError("before/after pairs are for sign-off images");
+  return dir.addImage(taskId, bytes, q.get("caption") ?? "", q.get("pair"), q.get("side"));
 }
 
 function serveImage(images: ImageDir, taskId: string, file: string): Response {
@@ -297,7 +300,7 @@ async function route(req: Request): Promise<Response> {
     const taskId = decodeURIComponent(so[1]);
     switch (so[2]) {
       case "images":
-        return json(await imageUpload(req, signoff, taskId));
+        return json(await imageUpload(req, signoff, taskId, true));
       case "merged":
         return json(signoff.merged(taskId, await body(req)));
       case "reverted":

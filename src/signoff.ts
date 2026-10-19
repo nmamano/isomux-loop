@@ -109,10 +109,17 @@ export class SignoffStore {
     return item;
   }
 
-  addImage(taskId: string, bytes: Uint8Array, caption: string): Image {
+  // pair and side are optional: a pair is one before and one after image.
+  addImage(taskId: string, bytes: Uint8Array, caption: string, pair?: string | null, side?: string | null): Image {
     const i = this.state.items[taskId];
     if (!i) throw new ValidationError("no sign-off item for this task");
+    if (pair || side) {
+      if (!pair || !/^[A-Za-z0-9 _.-]{1,60}$/.test(pair)) throw new ValidationError("pair must be a short name (letters, digits, space, _ . -)");
+      if (side !== "before" && side !== "after") throw new ValidationError("side must be before or after");
+      if (i.images.some((im) => im.pair === pair && im.side === side)) throw new ValidationError(`pair "${pair}" already has its ${side} image`);
+    }
     const img = this.images.save(taskId, i.images, bytes, caption);
+    if (pair) Object.assign(img, { pair, side });
     i.images.push(img);
     this.save();
     return img;
@@ -194,7 +201,8 @@ export class SignoffStore {
     i.images.forEach((im, n) => {
       const note = c.images[String(n)];
       if (!note) return;
-      const name = `image ${n + 1}${im.caption ? ` (${im.caption})` : ""}`;
+      // A pair's one comment is kept on its first image.
+      const name = im.pair ? `screenshots "${im.pair}" (before and after)` : `image ${n + 1}${im.caption ? ` (${im.caption})` : ""}`;
       lines.push(withCurrent ? `- ${name}\n  Nil's comment: ${note}` : `${name}: ${note}`);
     });
     return lines;
