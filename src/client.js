@@ -55,8 +55,8 @@ const HELP = {
   why: "The curator's reason for its proposal.",
   scope: "The new title and description the curator proposes for this task. go, design or on hold accepts them; your note can change them.",
   description: "The task's description on the board today.",
-  note: "Optional words for the curator. A note can change anything, for example the scope; the curator applies it when it writes your decision to the board. Shift+Enter confirms; Enter adds a line.",
-  confirm: "Confirm (or Shift+Enter) saves your choice in the rows above. The curator writes it to the board a few minutes after your last decision. Undo is in the notice that follows, on the Decided tab, and after it is applied on the Past decisions tab.",
+  note: "Optional words for the curator. A note can change anything, for example the scope; the curator applies it when it writes your decision to the board. Ctrl+Enter (Cmd+Enter on a Mac) confirms; Enter adds a line.",
+  confirm: "Confirm (or Ctrl+Enter / Cmd+Enter) saves your choice in the rows above. The curator writes it to the board a few minutes after your last decision. Undo is in the notice that follows, on the Decided tab, and after it is applied on the Past decisions tab.",
   later: "Later moves this card to the end of the list. Nothing is saved; the notice that follows has Undo.",
   undo: "Undo puts the card back in Triage with your choice and note filled in. The curator has not written it to the board yet. A Bring in goes back to the Backlog.",
   reopen: "Undo reopens the card in Triage with your choice and note filled in. The board keeps this decision until you decide again; the curator writes your next decision over it, so no separate revert is needed.",
@@ -232,7 +232,7 @@ const KEY_HELP = [
   ["1-4, o, r, s", "packet: an option, obsolete, research more, none: see note"],
   ["e", "expand or collapse the description"],
   ["n", "write in the note; Esc leaves it"],
-  ["Shift+Enter", "confirm (Backlog: bring in), in the note or not; the next card becomes current. Plain Enter never confirms"],
+  ["Ctrl+Enter / Cmd+Enter", "confirm (Backlog: bring in), in the note or not; the next card becomes current. Enter and Shift+Enter never confirm"],
   ["Ctrl+Z / Cmd+Z", "undo the last confirm or Later while its notice shows"],
   ["?", "show or hide this list"],
 ];
@@ -443,7 +443,7 @@ function onKey(e) {
   }
   return false;
 }
-// While a note has the cursor, only Shift+Enter (above) and Esc count.
+// While a note has the cursor, only Ctrl/Cmd+Enter (below) and Esc count.
 document.addEventListener("keydown", (e) => {
   const t = e.target;
   const typing = t.tagName === "TEXTAREA" || t.tagName === "INPUT";
@@ -452,12 +452,13 @@ document.addEventListener("keydown", (e) => {
     runToastUndo();
     return;
   }
-  if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
-  // Shift+Enter is the one confirm key; in a note the listener above has it.
-  if (e.key === "Enter" && e.shiftKey && !typing) {
+  // Ctrl+Enter (Cmd+Enter on a Mac) is the one confirm key (Nil,
+  // 2026-10-19); in a note the listener below has it.
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && !typing && !e.isComposing) {
     if (keyTabs() && press("[data-decide], [data-pdecide], [data-bconfirm]")) e.preventDefault();
     return;
   }
+  if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
   if (t.tagName === "TEXTAREA" || t.tagName === "INPUT") {
     if (e.key === "Escape") {
       t.blur();
@@ -1315,11 +1316,11 @@ document.addEventListener("click", async (e) => {
   }
   if (d.undo) return undoTriage(d.undo);
 });
-// Shift+Enter in a note presses the card's Confirm (or Bring in) button, so
-// the same checks and errors apply. Plain Enter adds a line.
+// Ctrl+Enter (Cmd+Enter) in a note presses the card's Confirm (or Bring in)
+// button, so the same checks and errors apply. Enter and Shift+Enter add a line.
 const NOTE_CONFIRM = { note: "decide", pnote: "pdecide", bnote: "bconfirm" };
 document.addEventListener("keydown", (e) => {
-  if (e.key !== "Enter" || !e.shiftKey || e.isComposing || e.target.tagName !== "TEXTAREA") return;
+  if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.isComposing || e.target.tagName !== "TEXTAREA") return;
   for (const [field, button] of Object.entries(NOTE_CONFIRM)) {
     const id = e.target.dataset[field];
     if (id === undefined) continue;
