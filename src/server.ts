@@ -511,6 +511,10 @@ Bun.serve({
       if (err instanceof ValidationError) return json({ error: err.message }, 400);
       console.error(err);
       return json({ error: "internal" }, 500);
+    } finally {
+      // Any write may move a task between diagram states (a decision, an
+      // undo, a packet, a merge): the next status read is fresh.
+      if (req.method !== "GET") statusCache = null;
     }
   },
 });

@@ -30,6 +30,11 @@ const rejectNotes = {};
 const openHelp = new Set();
 // Descriptions the reader opened, by key: a render keeps them open.
 const openDetails = new Set();
+// The diagram beside Triage, and its width in percent; kept in this browser.
+const split = Object.assign({ on: false, pct: 38 }, JSON.parse(localStorage.getItem("loop.split") || "{}"));
+const saveSplit = () => localStorage.setItem("loop.split", JSON.stringify(split));
+// Below this width the page shows one view; the CSS uses the same number.
+const wideScreen = window.matchMedia("(min-width: 900px)");
 
 const HELP = {
   P0: "P0: most urgent. The loop takes P0 tasks first.",
@@ -79,6 +84,8 @@ const HELP = {
   tabApplied: "Decisions the curator wrote to the board.",
   tabBacklog: "The Backlog state: P4 tasks with no card. The loop never picks them. Bring one in to give it a priority and a class.",
   toggleAll: "Expand or collapse every description and packet in this list at once.",
+  splitView: "Show the task-state diagram beside Triage. It updates after each decision and every 15 s. Drag the line between them to change the widths. A narrow screen shows Triage only.",
+  divider: "Drag to change the widths of the diagram and Triage.",
   bringIn: "Bring in: give this backlog task a priority (P0-P3) and a class. It goes to the curator like any triage decision, and you can undo it in Decided until then.",
   tabSignoff: "Merged copy and visible changes: approve or reject each, then press Approve and push.",
   old: "The text before the change. Struck words went away.",
@@ -214,8 +221,12 @@ function details(key, summaryTip, summary, body) {
   return '<details data-dkey="' + esc(key) + '"' + (openDetails.has(key) ? " open" : "") + "><summary" + tip(summaryTip) + ">" + summary + "</summary>" + body + "</details>";
 }
 // The label is set after each render, from what the list shows.
-function toggleAll() {
-  return '<div class="small"><button class="btn ghost" data-dall="1"' + tip("toggleAll") + ">Expand all</button> " + q("toggleAll") + "</div>" + helpBox(["toggleAll"], "toggleAll");
+function toggleAll(withSplit) {
+  const sp = withSplit
+    ? ' <span class="split-toggle"><button class="btn ghost" data-split="1"' + tip("splitView") + ">" + (split.on ? "Hide diagram" : "Diagram beside") + "</button> " + q("splitView") + "</span>"
+    : "";
+  return '<div class="small toolbar"><button class="btn ghost" data-dall="1"' + tip("toggleAll") + ">Expand all</button> " + q("toggleAll") + sp + "</div>" +
+    helpBox(["toggleAll"], "toggleAll") + helpBox(["splitView"], "splitView");
 }
 function syncToggleAll() {
   const btn = document.querySelector("[data-dall]");
@@ -458,7 +469,7 @@ function renderTriage() {
   if (tab === "open") all = lastLater(all);
   if (tab === "applied") all.sort((a, b) => b.x.applied.at - a.x.applied.at);
   if (!all.length) return '<div class="empty">' + (tab === "open" ? "Nothing in Triage." : "Nothing here.") + "</div>";
-  return (tab === "open" ? toggleAll() : "") + all
+  return (tab === "open" ? toggleAll(true) : "") + all
     .map((e) =>
       e.kind === "packet" ? (tab === "open" ? packetCard(e.x) : decidedPacketCard(e.x)) : tab === "open" ? openCard(e.x) : decidedCard(e.x),
     )
@@ -749,10 +760,64 @@ function render() {
   const el = document.getElementById("list");
   // Sign-off and Triage use a wide screen; the status page keeps its column.
   el.className = tab === "signoff" ? "wide" : tab === "status" ? "" : "medium";
-  el.innerHTML =
-    tab === "status" ? renderStatus() : tab === "signoff" ? renderSignoff() : tab === "backlog" ? renderBacklog() : renderTriage();
+  const splitOn = tab === "open" && split.on;
+  if (splitOn) el.className = "split-main";
+  el.innerHTML = splitOn
+    ? '<div class="split" style="--split:' + split.pct + '%"><div class="side" id="side">' + sidePane() + "</div>" +
+      '<div class="divider" role="separator" aria-orientation="vertical"' + tip("divider") + "></div>" +
+      '<div class="pane">' + renderTriage() + "</div></div>"
+    : tab === "status" ? renderStatus() : tab === "signoff" ? renderSignoff() : tab === "backlog" ? renderBacklog() : renderTriage();
   syncToggleAll();
 }
+function sidePane() {
+  const s = loopState;
+  if (!s) return '<div class="empty">Loading.</div>';
+  if (s.error || !s.board) return '<div class="err">Board unreadable: ' + esc(s.error || "no data") + "</div>";
+  return renderStates(s.board);
+}
+// The diagram beside Triage, and the tab counts, read the app every 15 s
+// while the page shows them.
+async function refreshSide() {
+  if (document.hidden || tab !== "open" || !split.on || !wideScreen.matches) return;
+  try {
+    [loopState, items, packets] = await Promise.all([api("/api/status"), api("/api/items?state=all"), api("/api/packets")]);
+  } catch {
+    return;
+  }
+  // The list itself waits for the next full render, so a note being typed stays.
+  renderTabs();
+  const side = document.getElementById("side");
+  if (side) side.innerHTML = sidePane();
+}
+setInterval(refreshSide, 15000);
+document.addEventListener("visibilitychange", refreshSide);
+// Dragging the divider sets the width split. CSS clamps it so neither pane
+// gets too narrow; the saved value is clamped the same way here.
+document.addEventListener("pointerdown", (e) => {
+  const div = e.target.closest && e.target.closest(".divider");
+  if (!div) return;
+  e.preventDefault();
+  const box = div.parentElement;
+  div.setPointerCapture(e.pointerId);
+  div.classList.add("dragging");
+  const move = (ev) => {
+    const r = box.getBoundingClientRect();
+    const min = (260 / r.width) * 100;
+    const max = ((r.width - 430) / r.width) * 100;
+    split.pct = Math.round(Math.min(Math.max(((ev.clientX - r.left) / r.width) * 100, min), Math.max(min, max)) * 10) / 10;
+    box.style.setProperty("--split", split.pct + "%");
+  };
+  const up = () => {
+    div.removeEventListener("pointermove", move);
+    div.removeEventListener("pointerup", up);
+    div.removeEventListener("pointercancel", up);
+    div.classList.remove("dragging");
+    saveSplit();
+  };
+  div.addEventListener("pointermove", move);
+  div.addEventListener("pointerup", up);
+  div.addEventListener("pointercancel", up);
+});
 // toggle does not bubble: listen in the capture phase.
 document.addEventListener(
   "toggle",
@@ -770,6 +835,12 @@ function showErr(id, msg) {
   if (el) el.textContent = msg;
 }
 document.addEventListener("click", async (e) => {
+  if (e.target.closest("[data-split]")) {
+    split.on = !split.on;
+    saveSplit();
+    render();
+    return;
+  }
   if (e.target.closest("[data-dall]")) {
     const all = [...document.querySelectorAll("#list details[data-dkey]")];
     const open = !all.every((d) => d.open);
