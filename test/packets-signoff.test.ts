@@ -52,6 +52,23 @@ describe("packets", () => {
     expect(packetState(s.get("abc12345")!)).toBe("applied");
   });
 
+  test("undo: before and after the apply; a report of an undone decision still counts", () => {
+    let t = 1;
+    const s = new PacketStore(tempDir(), () => t++);
+    s.put(packet(), task);
+    s.decide("abc12345", { choice: "Grid" });
+    const at = s.get("abc12345")!.decision!.decidedAt;
+    s.undo("abc12345");
+    expect(packetState(s.get("abc12345")!)).toBe("open");
+    expect(s.markApplied("abc12345", at, true)).toBe(true);
+    expect([packetState(s.get("abc12345")!), typeof s.get("abc12345")!.reopenedAt]).toEqual(["open", "number"]);
+    s.decide("abc12345", { choice: "List" });
+    s.markApplied("abc12345", s.get("abc12345")!.decision!.decidedAt, true);
+    expect([packetState(s.get("abc12345")!), s.get("abc12345")!.reopenedAt]).toEqual(["applied", undefined]);
+    s.undo("abc12345");
+    expect([packetState(s.get("abc12345")!), typeof s.get("abc12345")!.reopenedAt]).toEqual(["open", "number"]);
+  });
+
   test("withdraw: a packet whose task closed leaves with its images", () => {
     const dir = tempDir();
     const s = new PacketStore(dir);

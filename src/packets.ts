@@ -27,6 +27,9 @@ export type Packet = {
   createdAt: number;
   decision: PacketDecision | null;
   applied: { at: number; ok: boolean; error?: string; decidedAt: number } | null;
+  // As for triage cards (store.ts): the undone decision, and reopenedAt.
+  undone?: PacketDecision | null;
+  reopenedAt?: number;
 };
 export type PacketState = "open" | "decided" | "applied" | "failed";
 
@@ -153,12 +156,14 @@ export class PacketStore {
     return p;
   }
 
+  // Undo puts the packet back in Triage, also after the curator applied it.
   undo(taskId: string): Packet {
     const p = this.items[taskId];
     if (!p) throw new ValidationError("unknown packet");
-    if (packetState(p) === "applied") throw new ValidationError("already applied");
+    if (!p.decision) throw new ValidationError("nothing to undo");
+    if (packetState(p) === "applied") p.reopenedAt = this.now();
+    p.undone = p.decision;
     p.decision = null;
-    p.applied = null;
     this.save();
     return p;
   }
@@ -170,7 +175,14 @@ export class PacketStore {
   // Same contract as the triage store: decidedAt must match the current decision.
   markApplied(taskId: string, decidedAt: number, ok: boolean, error?: string): boolean {
     const p = this.items[taskId];
+    if (p && !p.decision && p.undone?.decidedAt === decidedAt) {
+      p.applied = { at: this.now(), ok, error, decidedAt };
+      p.reopenedAt = this.now();
+      this.save();
+      return true;
+    }
     if (!p?.decision || p.decision.decidedAt !== decidedAt) return false;
+    delete p.reopenedAt;
     p.applied = { at: this.now(), ok, error, decidedAt };
     this.save();
     return true;

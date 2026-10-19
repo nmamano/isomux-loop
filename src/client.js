@@ -56,9 +56,11 @@ const HELP = {
   scope: "The new title and description the curator proposes for this task. go, design or on hold accepts them; your note can change them.",
   description: "The task's description on the board today.",
   note: "Optional words for the curator. A note can change anything, for example the scope; the curator applies it when it writes your decision to the board. Shift+Enter confirms; Enter adds a line.",
-  confirm: "Confirm saves your choice in the rows above. The curator writes it to the board a few minutes after your last decision; until then you can undo it in Decided.",
-  later: "Later moves this card to the end of the list. Nothing is saved.",
-  undo: "Undo takes the decision back while the curator has not written it to the board yet.",
+  confirm: "Confirm (or Shift+Enter) saves your choice in the rows above. The curator writes it to the board a few minutes after your last decision. Undo is in the notice that follows, on the Decided tab, and after it is applied on the Applied tab.",
+  later: "Later moves this card to the end of the list. Nothing is saved; the notice that follows has Undo.",
+  undo: "Undo puts the card back in Triage with your choice and note filled in. The curator has not written it to the board yet. A Bring in goes back to the Backlog.",
+  reopen: "Undo reopens the card in Triage with your choice and note filled in. The board keeps this decision until you decide again; the curator writes your next decision over it, so no separate revert is needed.",
+  toastUndo: "Undo this (or Ctrl+Z / Cmd+Z while this notice shows): the card comes back with your choice and note filled in.",
   decision: "What you chose for this task.",
   applied: "Applied: the curator wrote your decision to the board.",
   pending: "Decided: saved here; the curator writes it to the board a few minutes after your last decision.",
@@ -224,14 +226,111 @@ const KEY_HELP = [
   ["j / ↓, k / ↑", "next / previous card"],
   ["g d h b o", "go, design, on hold, backlog, obsolete"],
   ["0 1 2 3", "priority P0-P3 (go, design, on hold)"],
-  ["a", "accept the curator's proposal as is (confirms)"],
+  ["a", "fill in the curator's proposal (does not confirm)"],
   ["1-4, o, r, s", "packet: an option, obsolete, research more, none: see note"],
   ["e", "expand or collapse the description"],
   ["n", "write in the note; Esc leaves it"],
-  ["Enter, or Shift+Enter in the note", "confirm (Backlog: bring in); the next card becomes current"],
+  ["Shift+Enter", "confirm (Backlog: bring in), in the note or not; the next card becomes current. Plain Enter never confirms"],
+  ["Ctrl+Z / Cmd+Z", "undo the last confirm or Later while its notice shows"],
   ["?", "show or hide this list"],
 ];
 let keysOpen = false;
+
+// --- leaving cards, the undo notice (Nil, 2026-10-19) --------------------------
+// A confirmed (or Later) card slides out and collapses; the card that takes
+// its place flashes. A notice offers Undo for 8 s.
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+let arriving = false;
+let pulsing = false;
+let toast = null;
+function leave(el) {
+  if (!el) return Promise.resolve();
+  el.style.overflow = "hidden";
+  if (reduceMotion.matches) return el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 120, fill: "forwards" }).finished.catch(() => {});
+  const h = el.offsetHeight;
+  const mb = getComputedStyle(el).marginBottom;
+  // Toward the diagram in the split view, else to the right.
+  const x = split.on && tab === "open" && wideScreen.matches ? "-80px" : "80px";
+  return el
+    .animate(
+      [
+        { transform: "translateX(0)", opacity: 1, height: h + "px", marginBottom: mb },
+        { transform: "translateX(" + x + ")", opacity: 0, height: h + "px", marginBottom: mb, offset: 0.55 },
+        { transform: "translateX(" + x + ")", opacity: 0, height: "0px", marginBottom: "0px", paddingTop: "0px", paddingBottom: "0px", borderWidth: "0px" },
+      ],
+      { duration: 280, easing: "ease-in", fill: "forwards" },
+    )
+    .finished.catch(() => {});
+}
+function cardById(id) {
+  return document.querySelector('#list [data-card="' + CSS.escape(id) + '"]');
+}
+// call saves (it throws on a refusal: the card stays, with the error); then
+// the card leaves, the notice shows and the list reloads.
+async function sendOff(id, button, call, notice, undo, reload = true) {
+  try {
+    if (button) button.disabled = true;
+    await call();
+  } catch (err) {
+    if (button) button.disabled = false;
+    showErr(id, err.message);
+    return;
+  }
+  await leave(cardById(id));
+  arriving = true;
+  pulsing = true;
+  showToast(notice, undo);
+  if (reload) await load();
+  else render();
+}
+function showToast(text, undo) {
+  hideToast();
+  let el = document.getElementById("toast");
+  if (!el) {
+    document.body.insertAdjacentHTML("beforeend", '<div class="toast" id="toast" role="status" hidden></div>');
+    el = document.getElementById("toast");
+  }
+  el.innerHTML = "<span>" + esc(text) + '</span><button class="btn ghost" data-toastundo="1"' + tip("toastUndo") + ">Undo</button>";
+  el.hidden = false;
+  toast = { undo, timer: setTimeout(hideToast, 8000) };
+}
+function hideToast() {
+  if (toast) clearTimeout(toast.timer);
+  toast = null;
+  const el = document.getElementById("toast");
+  if (el) el.hidden = true;
+}
+async function runToastUndo() {
+  if (!toast) return;
+  const undo = toast.undo;
+  hideToast();
+  await undo();
+}
+// Undo a triage decision: back in Triage with Nil's picks and note filled in
+// (a Bring in the curator has not applied: back in the Backlog).
+async function undoTriage(id) {
+  const i = items.find((x) => x.taskId === id);
+  const d = i && i.decision;
+  try {
+    const res = await api("/api/items/" + encodeURIComponent(id) + "/undo", { method: "POST" });
+    if (d && res && res.withdrawn) backlogPicks[id] = { choice: d.choice, priority: d.priority, note: d.note };
+    else if (d) picks[id] = { choice: d.choice, priority: d.priority, note: d.note };
+  } catch (err) {
+    showErr(id, err.message);
+  }
+  await load();
+}
+async function undoPacket(id) {
+  const p = packets.find((x) => x.taskId === id);
+  const d = p && p.decision;
+  try {
+    await api("/api/packets/" + encodeURIComponent(id) + "/undo", { method: "POST" });
+    if (d) packetPicks[id] = { choice: d.choice, note: d.note };
+  } catch (err) {
+    showErr(id, err.message);
+  }
+  await load();
+}
 function cardOpen(id, extra) {
   return '<div class="card' + (extra ? " " + extra : "") + '" data-card="' + esc(id) + '">';
 }
@@ -254,6 +353,11 @@ function syncCurrent() {
   currentIndex = i;
   currentId = els[i].dataset.card;
   els[i].classList.add("current");
+  if (arriving) {
+    arriving = false;
+    els[i].classList.add("arrived");
+    els[i].scrollIntoView({ block: "nearest" });
+  }
 }
 function setCurrent(i) {
   const els = cardEls();
@@ -310,7 +414,6 @@ function onKey(e) {
       if (k === "n") currentEl()?.querySelector("textarea")?.focus();
       return true;
     }
-    if (k === "Enter") return press("[data-bconfirm]");
     if (k === "Escape") return press("[data-bcancel]");
     return false;
   }
@@ -320,7 +423,6 @@ function onKey(e) {
     if (ta) ta.focus();
     return Boolean(ta);
   }
-  if (k === "Enter") return press("[data-decide], [data-pdecide]");
   if (el.classList.contains("packet")) {
     if (/^[1-4]$/.test(k)) return press(".options [data-pchoice]:nth-child(" + k + ")");
     const extra = { o: "obsolete", r: "research more", s: NOTE_ONLY }[k];
@@ -334,14 +436,26 @@ function onKey(e) {
     const p = i.proposal;
     const board = PRIORITIES.includes(i.task.priority) ? i.task.priority : null;
     picks[id] = { choice: p.choice, priority: p.priority || board, note: picks[id] ? picks[id].note : "" };
-    return press("[data-decide]");
+    render();
+    return true;
   }
   return false;
 }
 // While a note has the cursor, only Shift+Enter (above) and Esc count.
 document.addEventListener("keydown", (e) => {
-  if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
   const t = e.target;
+  const typing = t.tagName === "TEXTAREA" || t.tagName === "INPUT";
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z" && toast && !typing) {
+    e.preventDefault();
+    runToastUndo();
+    return;
+  }
+  if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+  // Shift+Enter is the one confirm key; in a note the listener above has it.
+  if (e.key === "Enter" && e.shiftKey && !typing) {
+    if (keyTabs() && press("[data-decide], [data-pdecide], [data-bconfirm]")) e.preventDefault();
+    return;
+  }
   if (t.tagName === "TEXTAREA" || t.tagName === "INPUT") {
     if (e.key === "Escape") {
       t.blur();
@@ -629,9 +743,8 @@ function decidedCard(i) {
     cardOpen(i.taskId) + head(i, d, true) +
     '<div class="why"><span class="label"' + tip("decision") + ">Your decision</span><br><b>" + esc(summary(d)) + "</b>" +
     (d.note ? "<br>" + esc(d.note) : "") + "</div>" + '<div class="meta">' + status + q("state", i.taskId) + "</div>" +
-    helpBox(s === "applied" ? [stateKey] : [stateKey, "undo"], "state", i.taskId);
-  if (s !== "applied")
-    h += '<div class="err" data-err="' + esc(i.taskId) + '"></div><div class="actions"><button class="btn ghost" data-undo="' + esc(i.taskId) + '"' + tip("undo") + ">Undo</button></div>";
+    helpBox([stateKey, s === "applied" ? "reopen" : "undo"], "state", i.taskId);
+  h += '<div class="err" data-err="' + esc(i.taskId) + '"></div><div class="actions"><button class="btn ghost" data-undo="' + esc(i.taskId) + '"' + tip(s === "applied" ? "reopen" : "undo") + ">Undo</button></div>";
   return h + "</div>";
 }
 function renderTriage() {
@@ -752,8 +865,7 @@ function decidedPacketCard(p) {
     '<div class="why"><span class="label"' + tip("decision") + ">Your decision</span><br><b>" + esc(d.choice) + "</b>" +
     (rec ? ' <span class="small">(worker recommended ' + esc(rec.label) + ")</span>" : "") + (d.note ? "<br>" + esc(d.note) : "") + "</div>" +
     '<div class="meta">' + status + "</div>";
-  if (s !== "applied")
-    h += '<div class="err" data-err="' + esc(p.taskId) + '"></div><div class="actions"><button class="btn ghost" data-pundo="' + esc(p.taskId) + '"' + tip("undo") + ">Undo</button></div>";
+  h += '<div class="err" data-err="' + esc(p.taskId) + '"></div><div class="actions"><button class="btn ghost" data-pundo="' + esc(p.taskId) + '"' + tip(s === "applied" ? "reopen" : "undo") + ">Undo</button></div>";
   return h + "</div>";
 }
 
@@ -945,6 +1057,11 @@ function render() {
       '<div class="pane">' + renderTriage() + "</div></div>"
     : tab === "status" ? renderStatus() : tab === "signoff" ? renderSignoff() : tab === "backlog" ? renderBacklog() : renderTriage();
   syncCurrent();
+  if (pulsing) {
+    pulsing = false;
+    for (const sel of ["#side g.st-triage", '#tabs button[data-tab="open"]', '#tabs button[data-tab="decided"]', '#tabs button[data-tab="backlog"]'])
+      document.querySelector(sel)?.classList.add("pulse");
+  }
   document.body.insertAdjacentHTML("beforeend", document.getElementById("keys") ? "" : keysBox());
   if (splitOn)
     [".split .side", ".split .pane"].forEach((sel, n) => {
@@ -1019,6 +1136,7 @@ function showErr(id, msg) {
   if (el) el.textContent = msg;
 }
 document.addEventListener("click", async (e) => {
+  if (e.target.closest("[data-toastundo]")) return runToastUndo();
   // A click on a card makes it current, as for the keys.
   const cardEl = e.target.closest("#list [data-card]");
   if (cardEl) {
@@ -1109,12 +1227,13 @@ document.addEventListener("click", async (e) => {
     return render();
   }
   if (d.bconfirm) {
-    const k = backlogPicks[d.bconfirm];
-    if (!k.choice || !k.priority) return showErr(d.bconfirm, "Pick a choice and a priority first.");
-    return act(d.bconfirm, async () => {
-      await api("/api/backlog/" + encodeURIComponent(d.bconfirm) + "/bring", { method: "POST", body: k });
-      delete backlogPicks[d.bconfirm];
-    });
+    const id = d.bconfirm;
+    const k = backlogPicks[id];
+    if (!k.choice || !k.priority) return showErr(id, "Pick a choice and a priority first.");
+    return sendOff(id, t, async () => {
+      await api("/api/backlog/" + encodeURIComponent(id) + "/bring", { method: "POST", body: k });
+      delete backlogPicks[id];
+    }, "Brought in: " + id, () => undoTriage(id));
   }
   if (d.pchoice) {
     packetPicks[d.id].choice = d.pchoice;
@@ -1124,12 +1243,13 @@ document.addEventListener("click", async (e) => {
     const k = packetPicks[d.pdecide];
     if (!k.choice) return showErr(d.pdecide, "Pick an option first.");
     if (k.choice === NOTE_ONLY && !k.note.trim()) return showErr(d.pdecide, "Write the note first.");
-    return act(d.pdecide, async () => {
-      await api("/api/packets/" + encodeURIComponent(d.pdecide) + "/decide", { method: "POST", body: k });
-      later.delete(d.pdecide);
-    });
+    const id = d.pdecide;
+    return sendOff(id, t, async () => {
+      await api("/api/packets/" + encodeURIComponent(id) + "/decide", { method: "POST", body: k });
+      later.delete(id);
+    }, "Decided: " + id, () => undoPacket(id));
   }
-  if (d.pundo) return act(d.pundo, () => api("/api/packets/" + encodeURIComponent(d.pundo) + "/undo", { method: "POST" }));
+  if (d.pundo) return undoPacket(d.pundo);
   if (d.approve)
     return act(d.approve, async () => {
       clearTimeout(commentTimers[d.approve]);
@@ -1153,8 +1273,11 @@ document.addEventListener("click", async (e) => {
     return render();
   }
   if (d.later) {
-    later.add(d.later);
-    return render();
+    const id = d.later;
+    return sendOff(id, null, async () => later.add(id), "Moved to the end: " + id, async () => {
+      later.delete(id);
+      render();
+    }, false);
   }
   if (d.workers) {
     try {
@@ -1175,27 +1298,15 @@ document.addEventListener("click", async (e) => {
     return;
   }
   if (d.decide) {
-    const k = picks[d.decide];
-    if (tagged(k.choice) && !k.priority) return showErr(d.decide, "Pick a priority first.");
-    try {
-      t.disabled = true;
-      await api("/api/items/" + encodeURIComponent(d.decide) + "/decide", { method: "POST", body: k });
-      later.delete(d.decide);
-      await load();
-    } catch (err) {
-      t.disabled = false;
-      showErr(d.decide, err.message);
-    }
-    return;
+    const id = d.decide;
+    const k = picks[id];
+    if (tagged(k.choice) && !k.priority) return showErr(id, "Pick a priority first.");
+    return sendOff(id, t, async () => {
+      await api("/api/items/" + encodeURIComponent(id) + "/decide", { method: "POST", body: k });
+      later.delete(id);
+    }, "Decided: " + id, () => undoTriage(id));
   }
-  if (d.undo) {
-    try {
-      await api("/api/items/" + encodeURIComponent(d.undo) + "/undo", { method: "POST" });
-      await load();
-    } catch (err) {
-      showErr(d.undo, err.message);
-    }
-  }
+  if (d.undo) return undoTriage(d.undo);
 });
 // Shift+Enter in a note presses the card's Confirm (or Bring in) button, so
 // the same checks and errors apply. Plain Enter adds a line.

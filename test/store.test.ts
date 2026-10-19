@@ -75,6 +75,42 @@ describe("store", () => {
     expect(store.pending().map((i) => i.taskId)).toEqual(["a"]);
   });
 
+  test("undo: back in Triage before and after the apply; a report of an undone decision still counts", () => {
+    const { store, clock } = setup();
+    store.propose([proposal("a"), proposal("b")]);
+    store.decide("a", { choice: "obsolete", note: "dup" });
+    expect(itemState(store.undo("a") as never)).toBe("open");
+    expect(store.get("a")!.reopenedAt).toBeUndefined();
+    // The curator read the decision before the undo, then reports it.
+    const undoneAt = store.get("a")!.undone!.decidedAt;
+    expect(store.markApplied([{ taskId: "a", decidedAt: undoneAt, ok: true }]).recorded).toEqual(["a"]);
+    expect([itemState(store.get("a")!), typeof store.get("a")!.reopenedAt]).toEqual(["open", "number"]);
+    // After the apply: undo reopens the card.
+    store.decide("b", decision);
+    clock.advance(10);
+    store.markApplied([{ taskId: "b", decidedAt: store.get("b")!.decision!.decidedAt, ok: true }]);
+    expect(itemState(store.get("b")!)).toBe("applied");
+    store.undo("b");
+    expect([itemState(store.get("b")!), typeof store.get("b")!.reopenedAt]).toEqual(["open", "number"]);
+    expect(() => store.undo("b")).toThrow(ValidationError);
+    // His next decision applies as usual and clears the mark.
+    store.decide("b", { choice: "design", priority: "P2", note: "" });
+    store.markApplied([{ taskId: "b", decidedAt: store.get("b")!.decision!.decidedAt, ok: true }]);
+    expect([itemState(store.get("b")!), store.get("b")!.reopenedAt]).toEqual(["applied", undefined]);
+  });
+
+  test("undo of a Bring in: back to the Backlog before the apply, back in Triage after it", () => {
+    const { store } = setup();
+    const snap = { title: "Old idea", description: "", priority: "P4" as const, createdBy: "Nil", createdAt: 1 };
+    store.bringIn(snap, "b1", { choice: "go", priority: "P2" });
+    expect(store.undo("b1")).toEqual({ withdrawn: true });
+    expect(store.get("b1")).toBeUndefined();
+    store.bringIn(snap, "b1", { choice: "go", priority: "P2" });
+    store.markApplied([{ taskId: "b1", decidedAt: store.get("b1")!.decision!.decidedAt, ok: true }]);
+    store.undo("b1");
+    expect(itemState(store.get("b1")!)).toBe("open");
+  });
+
   test("one notification per burst, after the quiet time", () => {
     const { store, clock } = setup();
     store.propose([proposal("a"), proposal("b")]);

@@ -47,6 +47,9 @@ GET  /api/decisions               decisions to write to the board (decided, or f
                                   Nil's note can change anything; apply it with judgement (isomux-curator skill)
 POST /api/applied                 {"results":[{"taskId","decidedAt","kind?":"triage|packet","ok":true|false,"error?"}]}
                                   decidedAt from /api/decisions; a decision Nil changed since then comes back as stale.
+                                  Nil can undo a decision, also after it was applied: the card reopens in Triage and his
+                                  next decision overwrites the board (an obsolete task is reopened, backlog moves it to P4).
+                                  A decision he undid after you read it still counts when you report it.
 
 Packets (for workers; a card for Nil in Triage):
 POST /api/packets                 {"taskId","question","options":[{"label","cost","recommended":true|false}] (2-4, at most one
@@ -256,8 +259,10 @@ function boardTasks(fresh = false): Promise<Task[]> {
 }
 
 function withdrawStale(all: Task[]): string[] {
-  const openPackets = packets.list().filter((p) => packetState(p) === "open").map((p) => p.taskId);
-  const ids = staleCards([...store.list("open").map((i) => i.taskId), ...openPackets], all);
+  // A card Nil reopened after its decision reached the board stays, even when
+  // that decision closed the task (obsolete).
+  const openPackets = packets.list().filter((p) => packetState(p) === "open" && !p.reopenedAt).map((p) => p.taskId);
+  const ids = staleCards([...store.list("open").filter((i) => !i.reopenedAt).map((i) => i.taskId), ...openPackets], all);
   for (const id of ids) {
     store.withdraw(id);
     if (openPackets.includes(id)) packets.withdraw(id);
@@ -583,6 +588,7 @@ Bun.serve({
       if (req.method !== "GET") {
         statusCache = null;
         tasksCache = null;
+        backlogCache = null;
       }
     }
   },

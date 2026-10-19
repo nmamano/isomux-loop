@@ -56,6 +56,13 @@ export type Item = {
   proposedAt: number;
   decision: Decision | null;
   applied: Applied | null;
+  // Undo (Nil, 2026-10-19): the decision Nil took back, so a report from a
+  // curator that had already read it still counts; reopenedAt: the card came
+  // back to Triage after its decision reached the board, so a closed task
+  // (an obsolete decision) does not withdraw it; fromBacklog: Bring in.
+  undone?: Decision | null;
+  reopenedAt?: number;
+  fromBacklog?: boolean;
 };
 
 export type ItemState = "open" | "decided" | "applied" | "failed";
@@ -227,6 +234,7 @@ export class Store {
       proposedAt: at,
       decision: { ...c, note: str(r.note, "note", 4000, true) ?? "", decidedAt: at },
       applied: null,
+      fromBacklog: true,
     };
     this.state.notify.lastDecisionAt = at;
     this.save();
@@ -257,12 +265,22 @@ export class Store {
     return item;
   }
 
-  undo(taskId: string): Item {
+  // Undo puts the card back in Triage, also after the curator applied it: the
+  // board keeps that decision until Nil's next one overwrites it. A Bring in
+  // that the curator has not applied goes back to the Backlog (no card).
+  undo(taskId: string): Item | { withdrawn: true } {
     const item = this.state.items[taskId];
     if (!item) throw new ValidationError("unknown task");
-    if (itemState(item) === "applied") throw new ValidationError("already applied");
+    if (!item.decision) throw new ValidationError("nothing to undo");
+    const state = itemState(item);
+    if (item.fromBacklog && state !== "applied") {
+      delete this.state.items[taskId];
+      this.save();
+      return { withdrawn: true };
+    }
+    item.undone = item.decision;
     item.decision = null;
-    item.applied = null;
+    if (state === "applied") item.reopenedAt = this.now();
     this.save();
     return item;
   }
@@ -285,10 +303,19 @@ export class Store {
       const taskId = str(r.taskId, "taskId", 64)!;
       const decidedAt = Number(r.decidedAt);
       const item = this.state.items[taskId];
+      // The curator applied a decision Nil undid meanwhile: the board has it,
+      // so it counts, and the card stays open as reopened.
+      if (item && !item.decision && item.undone?.decidedAt === decidedAt) {
+        item.applied = { at, ok: r.ok !== false, error: str(r.error, "error", 2000, true), decidedAt };
+        item.reopenedAt = at;
+        out.recorded.push(taskId);
+        continue;
+      }
       if (!item?.decision || item.decision.decidedAt !== decidedAt) {
         out.stale.push(taskId);
         continue;
       }
+      delete item.reopenedAt;
       item.applied = {
         at,
         ok: r.ok !== false,
