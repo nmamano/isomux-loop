@@ -82,6 +82,9 @@ POST /api/signoff                 worker at hand-off: {"taskId","title","summary
 POST /api/signoff/:taskId/images  raw PNG/JPEG/WebP bytes, ?caption=..., as for packets. For a before/after pair add
                                   ?pair=<short name>&side=before|after (one image per side); a pair shows side by side.
 POST /api/signoff/:taskId/merged  Isomux Main after EVERY merge, item or not: {"commit"}. The sha is what a push go names.
+                                  Only merged items show, so an item waits unseen until this call. A task with no code
+                                  (copy only, for example a comment draft) has nothing to merge: Main reports it with the
+                                  current main sha when it closes the task, and the item shows then.
 POST /api/signoff/:taskId/reverted  Isomux Main after a revert Nil asked for: {"commit"}. The item leaves the list.
 POST /api/signoff/pushed          Isomux Main after every push: {"commit"} (the sha it pushed). Every merge reported up to
                                   that sha leaves the Push state; returns {"pushed":[taskIds]}.
