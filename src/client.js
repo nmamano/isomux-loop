@@ -36,7 +36,8 @@ const HELP = {
   priority: "Which priority the task gets. The loop takes P0 first, then P1 to P3, oldest first within one. P4 is backlog: never picked.",
   class: "What kind of work it is, which decides how far the loop goes alone.",
   outcome: "What happens to the task itself.",
-  head: "Facts about the task and the curator's proposal; nothing here needs you. \"Proposed\" is the curator's suggestion, already selected in the rows below. You decide with those rows.",
+  head: "Board: the task's priority and tag on the board now. Yours: what is selected in the rows below; it changes as you tap. The dot on a chip marks the curator's proposal. Nothing in these lines needs you: you decide with the rows below.",
+  dot: "The dot marks the curator's proposal.",
   why: "The curator's reason for its proposal.",
   scope: "The new title and description the curator proposes for this task.",
   description: "The task's description on the board today.",
@@ -46,7 +47,7 @@ const HELP = {
   undo: "Undo takes the decision back while the curator has not written it to the board yet.",
   decision: "What you chose for this task.",
   applied: "On the board: the curator wrote your decision to the board.",
-  waiting: "Waiting for the curator: saved here; the curator writes it to the board a few minutes after your last decision.",
+  pending: "Waiting for the curator: saved here; the curator writes it to the board a few minutes after your last decision.",
   failed: "Failed: the curator could not write it to the board. It tries again with the next batch.",
   pause: "Pause stops dispatch and the hourly tick. Workers keep the tasks they hold.",
   resume: "Resume starts dispatch (every 2 minutes) and the hourly tick again.",
@@ -299,7 +300,8 @@ function chips(kind, list, chosen, proposed, id) {
     .map(
       (v) =>
         '<button class="chip' + (v === chosen ? " on" : "") + (v === proposed ? " proposed" : "") +
-        '" data-pick="' + kind + '" data-id="' + esc(id) + '" data-v="' + v + '"' + tip(v) + ">" + v + "</button>",
+        '" data-pick="' + kind + '" data-id="' + esc(id) + '" data-v="' + v + '" title="' + esc(HELP[v] + (v === proposed ? " The curator proposes this." : "")) + '">' + v +
+        (v === proposed ? '<span class="dot" aria-label="curator\'s proposal"></span>' : "") + "</button>",
     )
     .join("");
 }
@@ -308,12 +310,15 @@ function filed(ms) {
   const d = Math.floor((Date.now() - ms) / 86400000);
   return d < 1 ? "today" : d === 1 ? "1 day ago" : d + " days ago";
 }
-function head(i) {
+// sel: the selection (open card) or the decision (decided card).
+function head(i, sel, showProposal) {
   const p = i.proposal;
-  const now = i.task.priority ? "now " + esc(i.task.priority) : "no priority now";
+  const m = i.task.title.match(/^\[\s*([a-z]+)\s*\|\s*([^\]]*?)\s*\]/);
+  const board = (i.task.priority || "no priority") + " · " + (m ? m[1] + " | " + m[2] : "no tag");
   return (
-    '<div class="meta"' + tip("head") + "><span>Proposed: <b>" + p.priority + " · " + p.class + " · " + p.outcome +
-    "</b> (" + now + ")</span>" + q("head", i.taskId) + "</div>" + helpBox(["head"], "head", i.taskId) +
+    '<div class="meta"' + tip("head") + "><span>Board: " + esc(board) + " → yours: <b>" + sel.priority + " · " + sel.class + " · " + sel.outcome +
+    "</b></span>" + (showProposal ? "<span>curator proposed: " + p.priority + " · " + p.class + " · " + p.outcome + "</span>" : "") +
+    q("head", i.taskId) + "</div>" + helpBox(["head"], "head", i.taskId) +
     '<div class="meta"' + tip("head") + "><span>Filed by " + esc(i.task.createdBy || "unknown") + "</span><span>" +
     filed(i.task.createdAt) + "</span><span>Task " + esc(i.taskId) + "</span></div>" +
     '<div class="title">' + esc(i.task.title) + "</div>"
@@ -335,14 +340,14 @@ function body(i) {
 function row(label, kind, list, k, p, id) {
   return (
     '<div class="row"><span class="label"' + tip(kind) + ">" + label + " " + q(kind, id) + "</span>" +
-    helpBox([kind].concat(list), kind, id) + chips(kind, list, k[kind], p[kind], id) + "</div>"
+    helpBox([kind].concat(list, ["dot"]), kind, id) + chips(kind, list, k[kind], p[kind], id) + "</div>"
   );
 }
 function openCard(i) {
   const p = i.proposal;
   const k = picks[i.taskId] || (picks[i.taskId] = { priority: p.priority, class: p.class, outcome: p.outcome, note: "" });
   return (
-    '<div class="card">' + head(i) + body(i) +
+    '<div class="card">' + head(i, k, false) + body(i) +
     row("Priority", "priority", PRIORITIES, k, p, i.taskId) +
     row("Class", "class", CLASSES, k, p, i.taskId) +
     row("Outcome", "outcome", OUTCOMES, k, p, i.taskId) +
@@ -359,10 +364,10 @@ function decidedCard(i) {
   const status =
     s === "applied" ? '<span class="ok"' + tip("applied") + ">On the board</span>"
     : s === "failed" ? '<span class="warn"' + tip("failed") + ">Failed: " + esc(i.applied.error || "no reason given") + "</span>"
-    : "<span" + tip("waiting") + ">Waiting for the curator</span>";
-  const stateKey = s === "applied" ? "applied" : s === "failed" ? "failed" : "waiting";
+    : "<span" + tip("pending") + ">Waiting for the curator</span>";
+  const stateKey = s === "applied" ? "applied" : s === "failed" ? "failed" : "pending";
   let h =
-    '<div class="card">' + head(i) +
+    '<div class="card">' + head(i, d, true) +
     '<div class="why"><span class="label"' + tip("decision") + ">Your decision</span><br><b>" + d.priority + " · " + d.class + " · " + d.outcome + "</b>" +
     (d.note ? "<br>" + esc(d.note) : "") + "</div>" + '<div class="meta">' + status + q("state", i.taskId) + "</div>" +
     helpBox(s === "applied" ? [stateKey] : [stateKey, "undo"], "state", i.taskId);
