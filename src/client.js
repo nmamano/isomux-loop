@@ -98,7 +98,7 @@ const HELP = {
   editsFiled: "Approved, and your comments became a copy-edits task. This commit goes out with the next push; the edits follow as their own commit.",
   rejectNote: "Why you reject it, and what to do instead. The worker reads it when the task comes back.",
   undoApprove: "Undo the approval until you press Approve and push.",
-  push: "Approve and push: tells Isomux Main to push main at the sha below. Enabled when every item is approved or rejected and every rejection is reverted.",
+  push: "Approve and push: tells Isomux Main to push main at the sha below, which sends every task in Push. Enabled when every item is approved or rejected and every rejection is reverted.",
   sha: "The main commit from Isomux Main's latest merge or revert. Approve and push names this commit.",
   rejected: "Rejected: Isomux Main was asked to revert it. It stays here until Main reports the revert.",
   waitingSign: "Waiting for your approve or reject.",
@@ -116,12 +116,13 @@ const STATE_INFO = {
   signoff: ["Sign-off", "Merged, with copy or a visible change: its item on the Sign-off tab waits for your approve or reject, or for its revert. The board already says done."],
   hold: ["On hold", "Tag [hold | ...]. The loop never touches it."],
   backlog: ["Backlog", "P4. The loop never picks it."],
-  done: ["Done", "Status done."],
+  push: ["Push", "Merged and done on the board, not pushed yet: Approve and push sends it, and it leaves when Isomux Main reports the push."],
+  done: ["Done", "Status done, with no merge that waits for the push."],
   obsolete: ["Obsolete", "Status obsolete: closed, and reversible."],
 };
 const BOX = {
   filed: [140, 10, 120], triage: [140, 90, 120], ready: [140, 170, 120], working: [140, 250, 120],
-  merging: [140, 330, 120], signoff: [140, 410, 120], done: [140, 490, 120],
+  merging: [140, 330, 120], signoff: [140, 410, 120], push: [140, 490, 120], done: [140, 570, 120],
   hold: [0, 40, 100], backlog: [0, 110, 100], obsolete: [300, 90, 100],
 };
 // [path, label x, label y, anchor, label, help, label runs up the lane, dashed]
@@ -131,8 +132,9 @@ const EDGES = [
   ["M200,216 V248", 206, 236, "start", "app", "Ready to Working: the app gives it to a free worker."],
   ["M200,296 V328", 206, 316, "start", "approved", "Working to Merging: the reviewer approved the work."],
   ["M200,376 V408", 206, 396, "start", "to sign off", "Merging to Sign-off: merged, and it has copy or a visible change."],
-  ["M260,352 H290 V512 H262", 295, 440, "start", "nothing to sign off", "Merging to Done: merged, with nothing to sign off."],
-  ["M200,456 V488", 206, 476, "start", "approved", "Sign-off to Done: approved; it goes out with the next push, and comments become a copy-edits task."],
+  ["M260,352 H290 V512 H262", 295, 440, "start", "nothing to sign off", "Merging to Push: merged, with nothing to sign off."],
+  ["M200,456 V488", 206, 476, "start", "approved", "Sign-off to Push: approved; comments become a copy-edits task."],
+  ["M200,536 V568", 206, 556, "start", "pushed", "Push to Done: Isomux Main reported the push."],
   ["M140,104 L102,68", 121, 115, "middle", "Nil", "Triage to On hold or Backlog: your decision."],
   ["M140,120 L102,128", null],
   ["M260,112 H298", 279, 106, "middle", "Nil", "Triage to Obsolete: you close it."],
@@ -162,7 +164,7 @@ function diagram(states) {
       '<text x="' + (x + w / 2) + '" y="' + (y + 19) + '" text-anchor="middle" font-size="12" font-weight="600">' + esc(label) + "</text>" +
       '<text x="' + (x + w / 2) + '" y="' + (y + 36) + '" text-anchor="middle" font-size="13">' + n + "</text></g>";
   }).join("");
-  return '<svg class="diagram" viewBox="0 0 400 536" role="img" aria-label="Task states">' + marker + edges + boxes + "</svg>";
+  return '<svg class="diagram" viewBox="0 0 400 616" role="img" aria-label="Task states">' + marker + edges + boxes + "</svg>";
 }
 function briefLine(t) {
   const when = t.closedAt ? " · closed " + clock(t.closedAt) : "";
@@ -652,7 +654,7 @@ function renderSignoff() {
   const so = signoffData;
   const sha = so.lastSha ? so.lastSha.commit : null;
   let h =
-    '<div class="banner ' + (so.push.ok ? "run" : "paused") + '"><div><b' + tip("push") + ">Push</b>" +
+    '<div class="banner ' + (so.push.ok ? "run" : "paused") + '"><div><b' + tip("push") + ">Push" + (loopState && loopState.board ? " (" + loopState.board.states.push.count + ")" : "") + "</b>" +
     '<div class="small"' + tip("sha") + ">main " + (sha ? "<code>" + esc(sha.slice(0, 10)) + "</code> · " + clock(so.lastSha.at) : "not reported yet") + "</div>" +
     (so.push.ok ? "" : '<div class="small">' + esc(so.push.reason) + "</div>") +
     '</div><span><button class="btn primary" data-push="1"' + (so.push.ok ? "" : " disabled") + tip("push") + ">Approve and push</button> " + q("push") + "</span></div>" +

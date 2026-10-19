@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { sniff } from "../src/images";
 import { PacketStore, packetState } from "../src/packets";
@@ -102,6 +102,46 @@ describe("sign-off", () => {
     expect(s.pushCheck().ok).toBe(false);
     s.merged("t3", { commit: "ddddddd4" });
     expect(s.pushCheck()).toMatchObject({ ok: true, sha: "ddddddd4", approved: [] });
+  });
+
+  test("every merge waits in Push until Main reports a push that includes it; a revert takes the task out", () => {
+    const dir = tempDir();
+    const s = new SignoffStore(dir);
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.merged("plain", { commit: "bbbbbbb2" });
+    s.approve("t1");
+    s.recordPushGo("bbbbbbb2");
+    // The push go alone pushes nothing: Main reports the push.
+    expect([...s.unpushedIds()].sort()).toEqual(["plain", "t1"]);
+    s.merged("later", { commit: "ccccccc3" });
+    s.merged("gone", { commit: "ddddddd4" });
+    s.reverted("gone", { commit: "eeeeeee5" });
+    expect(() => s.pushed({ commit: "fffffff6" })).toThrow(ValidationError);
+    expect(s.pushed({ commit: "bbbbbbb2" }).pushed.sort()).toEqual(["plain", "t1"]);
+    expect([...new SignoffStore(dir).unpushedIds()]).toEqual(["later"]);
+    expect(s.pushed({ commit: "eeeeeee" }).pushed).toEqual(["later"]);
+    expect(s.unpushedIds().size).toBe(0);
+  });
+
+  test("data from before the push record: merged items that are not rejected count as not pushed", () => {
+    const dir = tempDir();
+    const old = new SignoffStore(dir);
+    old.put(item);
+    old.put({ ...item, taskId: "t2" });
+    old.merged("t1", { commit: "aaaaaaa1" });
+    old.merged("t2", { commit: "bbbbbbb2" });
+    old.approve("t1");
+    old.recordReject("t2", "no");
+    const file = join(dir, "signoff.json");
+    const raw = JSON.parse(readFileSync(file, "utf8"));
+    delete raw.unpushed;
+    delete raw.shas;
+    delete raw.seq;
+    writeFileSync(file, JSON.stringify(raw));
+    const s = new SignoffStore(dir);
+    expect([...s.unpushedIds()]).toEqual(["t1"]);
+    expect(s.pushed({ commit: "bbbbbbb2" }).pushed).toEqual(["t1"]);
   });
 
   test("an approval can be undone; a rejection cannot", () => {

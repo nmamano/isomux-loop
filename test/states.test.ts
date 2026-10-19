@@ -39,6 +39,10 @@ describe("classify", () => {
     for (const [over, card, state] of cases) expect([over.title, classify(task(over), card)]).toEqual([over.title, state]);
     // A merged task whose sign-off item waits counts there, though the board says done.
     expect(classify(task({ title: "[auto | merging] x", status: "done" }), null, true)).toBe("signoff");
+    // Merged and not pushed: Push, after Sign-off; a task back at work is not in Push.
+    expect(classify(task({ title: "x", status: "done" }), null, false, true)).toBe("push");
+    expect(classify(task({ title: "x", status: "done" }), null, true, true)).toBe("signoff");
+    expect(classify(task({ title: "[auto | ready] x" }), null, false, true)).toBe("ready");
   });
 });
 

@@ -33,6 +33,12 @@ type State = {
   // Nil gave a push go for.
   lastSha: { commit: string; at: number } | null;
   lastPushGo: { commit: string; at: number } | null;
+  // Every merge Main reported that is not pushed yet, by task (an item or
+  // not), and every sha Main reported since the last push, in order: a push
+  // of one sha takes everything reported up to it (Nil, 2026-10-19).
+  unpushed?: Record<string, { commit: string; at: number; seq: number }>;
+  shas?: { commit: string; seq: number }[];
+  seq?: number;
 };
 
 export function signoffState(i: SignoffItem): SignoffState {
@@ -69,6 +75,30 @@ export class SignoffStore {
     this.file = join(dataDir, "signoff.json");
     this.state = readJson<State>(this.file, { items: {}, lastSha: null, lastPushGo: null });
     this.images = new ImageDir(join(dataDir, "images", "signoff"));
+    if (!this.state.unpushed) this.seedUnpushed();
+  }
+
+  // Data from before the push record: merged items that are not rejected,
+  // then Main's last sha, count as not pushed.
+  private seedUnpushed(): void {
+    this.state.unpushed = {};
+    this.state.shas = [];
+    this.state.seq = 0;
+    for (const i of this.visible())
+      if (signoffState(i) !== "rejected") this.record(i.taskId, i.merged!.commit, i.merged!.at);
+    if (this.state.lastSha) this.state.shas.push({ commit: this.state.lastSha.commit, seq: ++this.state.seq });
+    this.save();
+  }
+
+  private record(taskId: string | null, commit: string, at: number): void {
+    const seq = (this.state.seq = (this.state.seq ?? 0) + 1);
+    if (taskId) this.state.unpushed![taskId] = { commit, at, seq };
+    this.state.shas!.push({ commit, seq });
+  }
+
+  // Task ids merged and not pushed yet.
+  unpushedIds(): Set<string> {
+    return new Set(Object.keys(this.state.unpushed ?? {}));
   }
 
   private save(): void {
@@ -132,6 +162,7 @@ export class SignoffStore {
     const commit = commitOf(raw);
     const at = this.now();
     this.state.lastSha = { commit, at };
+    this.record(taskId, commit, at);
     const i = this.state.items[taskId];
     // A re-merge (after a red CI, say) moves the item to the new commit.
     if (i && signoffState(i) !== "rejected") i.merged = { commit, at };
@@ -143,6 +174,10 @@ export class SignoffStore {
     checkTaskId(taskId);
     const commit = commitOf(raw);
     this.state.lastSha = { commit, at: this.now() };
+    // The revert commit goes out with the next push; the task itself left
+    // main and goes back to ready.
+    this.record(null, commit, this.now());
+    delete this.state.unpushed![taskId];
     const i = this.state.items[taskId];
     const removed = Boolean(i && signoffState(i) === "rejected");
     if (removed) {
@@ -276,6 +311,23 @@ export class SignoffStore {
     }
     this.state.lastPushGo = { commit: sha, at: this.now() };
     this.save();
+  }
+
+  // Main pushed this sha: every merge and revert reported up to it is pushed.
+  pushed(raw: unknown): { pushed: string[] } {
+    const commit = commitOf(raw);
+    const same = (a: string) => a.startsWith(commit) || commit.startsWith(a);
+    const hit = [...this.state.shas!].reverse().find((x) => same(x.commit));
+    if (!hit) throw new ValidationError("no merge or revert reported this commit; push the sha of the push go");
+    const out: string[] = [];
+    for (const [id, u] of Object.entries(this.state.unpushed!))
+      if (u.seq <= hit.seq) {
+        delete this.state.unpushed![id];
+        out.push(id);
+      }
+    this.state.shas = this.state.shas!.filter((x) => x.seq > hit.seq);
+    this.save();
+    return { pushed: out };
   }
 
   meta(): { lastSha: State["lastSha"]; lastPushGo: State["lastPushGo"] } {

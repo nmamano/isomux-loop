@@ -72,6 +72,8 @@ POST /api/signoff/:taskId/images  raw PNG/JPEG/WebP bytes, ?caption=..., as for 
                                   ?pair=<short name>&side=before|after (one image per side); a pair shows side by side.
 POST /api/signoff/:taskId/merged  Isomux Main after EVERY merge, item or not: {"commit"}. The sha is what a push go names.
 POST /api/signoff/:taskId/reverted  Isomux Main after a revert Nil asked for: {"commit"}. The item leaves the list.
+POST /api/signoff/pushed          Isomux Main after every push: {"commit"} (the sha it pushed). Every merge reported up to
+                                  that sha leaves the Push state; returns {"pushed":[taskIds]}.
 GET  /api/signoff                 merged items, the main sha, and whether a push go is possible
 Nil's buttons on the Sign-off tab: approve (with comments on any entry it also files a P0
 "[auto | ready] Copy edits: <title>" task with them; the merged commit still goes out with the next push);
@@ -223,7 +225,7 @@ async function loopStatus(): Promise<Record<string, unknown>> {
         at: Date.now(),
         value: {
           ...status(agents, live, pause.workers),
-          states: stateViews(all, cards(), (t) => closed.get(t), signoffIds()),
+          states: stateViews(all, cards(), (t) => closed.get(t), signoffIds(), signoff.unpushedIds()),
           closedPending: closed.missing(all).length,
         },
       };
@@ -374,6 +376,11 @@ async function route(req: Request): Promise<Response> {
       push: signoff.pushCheck(),
     });
   if (m === "POST" && path === "/api/signoff") return json(signoff.put(await body(req)));
+  if (m === "POST" && path === "/api/signoff/pushed") {
+    const out = signoff.pushed(await body(req));
+    statusCache = null;
+    return json(out);
+  }
   if (m === "POST" && path === "/api/signoff/push") {
     const check = signoff.pushCheck();
     if (!check.ok) return json({ error: check.reason }, 409);
@@ -387,6 +394,8 @@ async function route(req: Request): Promise<Response> {
   const so = path.match(/^\/api\/signoff\/([^/]+)\/(images|merged|reverted|approve|reject|undo|comments)$/);
   if (so && m === "POST") {
     const taskId = decodeURIComponent(so[1]);
+    // Merges, reverts and Nil's buttons move tasks between diagram states.
+    if (so[2] !== "images" && so[2] !== "comments") statusCache = null;
     switch (so[2]) {
       case "images":
         return json(await imageUpload(req, signoff, taskId, true));

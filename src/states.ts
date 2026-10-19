@@ -15,6 +15,7 @@ export const STATES = [
   "working",
   "merging",
   "signoff",
+  "push",
   "hold",
   "backlog",
   "done",
@@ -32,12 +33,13 @@ export type Card = "open" | "decided" | null;
 // First match wins, from the end of the path backwards, so a task never
 // counts in two states. needsSignoff: the app holds a merged sign-off item
 // for it that waits for Nil or waits for its revert (the board already says
-// done).
-export function classify(t: Task, card: Card, needsSignoff = false): StateKey {
+// done). unpushed: Main reported its merge, and no push since.
+export function classify(t: Task, card: Card, needsSignoff = false, unpushed = false): StateKey {
   // An open card is Triage whatever the board says, so the Triage state and
   // the Triage tab count the same cards.
   if (card === "open") return "triage";
   if (needsSignoff) return "signoff";
+  if (unpushed && t.status === "done") return "push";
   if (t.status === "done") return "done";
   if (t.status === "obsolete") return "obsolete";
   // Filed and Backlog mean no card: a decided card waits for the curator.
@@ -79,10 +81,11 @@ export function stateViews(
   cards: Map<string, Card>,
   closedAt: (t: Task) => number | undefined,
   signoff: Set<string> = new Set(),
+  unpushed: Set<string> = new Set(),
 ): Record<StateKey, StateView> {
   const groups = {} as Record<StateKey, Task[]>;
   for (const k of [...STATES, "other" as const]) groups[k] = [];
-  for (const t of tasks) groups[classify(t, cards.get(t.id) ?? null, signoff.has(t.id))].push(t);
+  for (const t of tasks) groups[classify(t, cards.get(t.id) ?? null, signoff.has(t.id), unpushed.has(t.id))].push(t);
   const out = {} as Record<StateKey, StateView>;
   for (const [k, list] of Object.entries(groups) as [StateKey, Task[]][]) {
     if (k === "done" || k === "obsolete") {
