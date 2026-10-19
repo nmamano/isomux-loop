@@ -82,6 +82,25 @@
   .entry.agent { opacity: .7; }
   .entry.agent > details > summary { font-size: 13px; color: var(--muted); cursor: pointer; }
   .entry.agent:has(details[open]) { opacity: .9; }
+  /* Image viewer */
+  body.lb-open { overflow: hidden; }
+  .lb { position: fixed; inset: 0; z-index: 20; background: rgba(12, 12, 14, .95); backdrop-filter: blur(4px); display: flex; flex-direction: column; }
+  .lb[hidden] { display: none; }
+  .lb-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; color: #eee; font-size: 14px; }
+  .lb-bar span { flex: 1; }
+  .lb-bar .btn { padding: 6px 12px; }
+  .lb-body { flex: 1; min-height: 0; overflow: auto; display: flex; align-items: center; justify-content: center; gap: 12px; padding: 0 12px 12px; touch-action: pinch-zoom pan-x pan-y; }
+  .lb-body figure { margin: 0; display: flex; flex-direction: column; align-items: center; min-width: 0; max-height: 100%; }
+  .lb-body.pair figure { flex: 1; }
+  .lb-body img { max-width: 100%; max-height: calc(100vh - 110px); max-height: calc(100dvh - 110px); object-fit: contain; cursor: zoom-in; background: #fff; border-radius: 4px; }
+  .lb.zoom .lb-body { align-items: flex-start; justify-content: flex-start; }
+  .lb.zoom .lb-body img { max-width: none; max-height: none; cursor: zoom-out; }
+  .lb-body figcaption { color: #ddd; font-size: 13px; margin-top: 6px; text-align: center; }
+  .lb-label { color: #bbb; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+  @media (max-width: 700px) {
+    .lb-body.pair { flex-direction: column; justify-content: flex-start; }
+    .lb-body.pair img { max-height: calc(50vh - 80px); max-height: calc(50dvh - 80px); }
+  }
   .toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
   .split-toggle { margin-left: auto; }
   @media (max-width: 899px) {

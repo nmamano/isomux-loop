@@ -103,7 +103,7 @@ const HELP = {
   waitsBehind: "Merges after an item that still waits in Sign-off (or for its revert). They go out once that item is approved; approve Sign-off from the top to move the push point.",
   waitsFor: "The oldest item in Sign-off before this merge. Approve it to let this one go out.",
   old: "The text before the change. Struck words went away.",
-  pairImages: "The same screen before and after the change. Tap an image to open it full size. One comment covers the pair.",
+  pairImages: "The same screen before and after the change. Tap an image to open the pair in the viewer. One comment covers the pair.",
   before: "The screen before the change.",
   after: "The screen after the change.",
   new: "The text after the change. Marked words are new.",
@@ -114,7 +114,7 @@ const HELP = {
   [NOTE_ONLY]: "none: see note: you pick no option; the curator applies your note to the task.",
   "research more": "research more: the worker researches further before you decide; your note says what to look at.",
   packetBody: "The worker's full packet: findings, details and trade-offs.",
-  images: "Screenshots from the worker. Tap one to open it full size.",
+  images: "Screenshots from the worker. Tap one to open it in the viewer: a tap on the image zooms to 100%, arrows or a swipe go to the next, Esc or a tap outside closes.",
   links: "The branch with the work, and the diff when there is one.",
   packetConfirm: "Confirm saves your choice. The curator writes it to the task a few minutes after your last decision; until then you can undo it in Decided.",
   approve: "Approve: this copy or change goes out with the next push. If you wrote comments, Approve also files a P0 copy-edits task with them; the edits come later as their own commit and sign-off item.",
@@ -1033,15 +1033,122 @@ function md(src) {
   }
   return out + (inList ? "</ul>" : "") + (inCode ? "</pre>" : "");
 }
+// --- image viewer (Nil, 2026-10-20) ---------------------------------------------
+// Images open in place, over the page: fit to the screen, a click or tap
+// toggles 100% (scroll to pan), Esc / the backdrop / Close dismiss, arrows or
+// a swipe move through the item's images. A before/after pair opens as the
+// pair. Triage keys are off while it is open.
+const lbGroups = {};
+let lb = null;
+function lbAttr(group, i, caption) {
+  return ' data-lb="' + esc(group) + '" data-lbi="' + i + '" title="' + esc((caption ? caption + ". " : "") + "Open in the viewer") + '"';
+}
+function lbFigure(im, label) {
+  if (!im) return '<figure class="lb-missing"><figcaption>' + esc("No " + label.toLowerCase() + " image") + "</figcaption></figure>";
+  return "<figure>" + (label ? '<div class="lb-label">' + esc(label) + "</div>" : "") + '<img src="' + esc(im.url) + '" alt="' + esc(im.caption) + '">' +
+    (im.caption ? "<figcaption>" + esc(im.caption) + "</figcaption>" : "") + "</figure>";
+}
+function renderLb() {
+  let el = document.getElementById("lb");
+  if (!el) {
+    document.body.insertAdjacentHTML("beforeend", '<div class="lb" id="lb" role="dialog" aria-modal="true" hidden></div>');
+    el = document.getElementById("lb");
+  }
+  if (!lb) {
+    el.hidden = true;
+    document.body.classList.remove("lb-open");
+    return;
+  }
+  const slides = lbGroups[lb.group] || [];
+  const sl = slides[lb.i];
+  if (!sl) return closeLb();
+  const many = slides.length > 1;
+  el.className = "lb" + (lb.zoom ? " zoom" : "");
+  el.innerHTML =
+    '<div class="lb-bar"><span>' + (sl.pair ? esc("Screenshots: " + sl.pair.name) : "") + (many ? " " + (lb.i + 1) + " / " + slides.length : "") + "</span>" +
+    (many ? '<button class="btn ghost" data-lbprev="1" title="Previous (Left arrow)" aria-label="Previous">‹</button><button class="btn ghost" data-lbnext="1" title="Next (Right arrow)" aria-label="Next">›</button>' : "") +
+    '<button class="btn ghost" data-lbclose="1" title="Close (Esc)" aria-label="Close">Close</button></div>' +
+    '<div class="lb-body' + (sl.pair ? " pair" : "") + '">' + (sl.pair ? lbFigure(sl.pair.before, "Before") + lbFigure(sl.pair.after, "After") : lbFigure(sl.one, "")) + "</div>";
+  el.hidden = false;
+  document.body.classList.add("lb-open");
+}
+function openLb(group, i) {
+  lb = { group, i, zoom: false };
+  renderLb();
+}
+function closeLb() {
+  lb = null;
+  renderLb();
+}
+function stepLb(d) {
+  const n = (lbGroups[lb.group] || []).length;
+  if (n < 2) return;
+  lb = { group: lb.group, i: (lb.i + d + n) % n, zoom: false };
+  renderLb();
+}
+// Capture phase: the viewer gets clicks and keys before the rest of the page.
+document.addEventListener(
+  "click",
+  (e) => {
+    const open = e.target.closest && e.target.closest("[data-lb]");
+    if (open && !lb) {
+      e.preventDefault();
+      e.stopPropagation();
+      return openLb(open.dataset.lb, Number(open.dataset.lbi));
+    }
+    if (!lb || !e.target.closest("#lb")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.target.closest("[data-lbclose]")) return closeLb();
+    if (e.target.closest("[data-lbprev]")) return stepLb(-1);
+    if (e.target.closest("[data-lbnext]")) return stepLb(1);
+    if (e.target.tagName === "IMG") {
+      lb.zoom = !lb.zoom;
+      return renderLb();
+    }
+    // The backdrop: anything that is not the bar, an image or a caption.
+    if (!e.target.closest(".lb-bar, figure")) closeLb();
+  },
+  true,
+);
+document.addEventListener(
+  "keydown",
+  (e) => {
+    if (!lb) return;
+    e.stopPropagation();
+    if (e.key === "Escape") closeLb();
+    else if (e.key === "ArrowLeft") stepLb(-1);
+    else if (e.key === "ArrowRight") stepLb(1);
+    else return;
+    e.preventDefault();
+  },
+  true,
+);
+let lbTouch = null;
+document.addEventListener("touchstart", (e) => {
+  if (lb && !lb.zoom && e.touches.length === 1) lbTouch = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  else lbTouch = null;
+}, { passive: true });
+document.addEventListener("touchend", (e) => {
+  if (!lb || !lbTouch || lb.zoom) return;
+  const t = e.changedTouches[0];
+  const dx = t.clientX - lbTouch.x;
+  const dy = t.clientY - lbTouch.y;
+  lbTouch = null;
+  if (Math.abs(dx) > 60 && Math.abs(dy) < 60) stepLb(dx < 0 ? 1 : -1);
+});
+
 function imagesHtml(kind, taskId, images) {
   if (!images || !images.length) return "";
+  const group = kind + ":" + taskId;
+  lbGroups[group] = images.map((im) => ({ one: { url: "/img/" + kind + "/" + encodeURIComponent(taskId) + "/" + im.file, caption: im.caption } }));
   return (
     '<div class="label"' + tip("images") + ">Screenshots " + q("images", kind + taskId) + "</div>" + helpBox(["images"], "images", kind + taskId) +
     '<div class="thumbs">' +
     images
-      .map((im) => {
+      .map((im, n) => {
         const url = "/img/" + kind + "/" + encodeURIComponent(taskId) + "/" + im.file;
-        return '<a href="' + url + '" target="_blank" rel="noopener" title="' + esc(im.caption || "Open full size") + '"><img src="' + url + '" alt="' + esc(im.caption) + '">' +
+        return '<a href="' + url + '"' + lbAttr(group, n, im.caption) + '><img src="' + url + '" alt="' + esc(im.caption) + '">' +
           (im.caption ? "<span>" + esc(im.caption) + "</span>" : "") + "</a>";
       })
       .join("") +
@@ -1311,11 +1418,15 @@ function renderSignoff() {
       if (!pr) pairs.push((pr = { name: im.pair, first: n }));
       pr[im.side] = im;
     });
-    for (const pr of pairs) {
+    // The item's images as one series in the viewer: each pair, then each lone image.
+    const group = "signoff:" + it.taskId;
+    const one = (im) => im && { url: imgUrl(im), caption: im.caption };
+    lbGroups[group] = pairs.map((pr) => ({ pair: { name: pr.name, before: one(pr.before), after: one(pr.after) } })).concat(lone.map(([im]) => ({ one: one(im) })));
+    for (const [k, pr] of pairs.entries()) {
       const side = (im, label, key) =>
         "<div><h2" + tip(key) + ">" + label + "</h2>" +
         (im
-          ? '<a class="pairimg" href="' + imgUrl(im) + '" target="_blank" rel="noopener" title="' + esc(im.caption || "Open full size") + '"><img src="' + imgUrl(im) + '" alt="' + esc(im.caption) + '"></a>' +
+          ? '<a class="pairimg" href="' + imgUrl(im) + '"' + lbAttr(group, k, im.caption) + '><img src="' + imgUrl(im) + '" alt="' + esc(im.caption) + '"></a>' +
             (im.caption ? '<div class="small">' + esc(im.caption) + "</div>" : "")
           : '<div class="copytext small">No ' + label.toLowerCase() + " image</div>") +
         "</div>";
@@ -1326,8 +1437,8 @@ function renderSignoff() {
     }
     if (lone.length) {
       h += '<div class="entry"><div class="where"' + tip("images") + ">Screenshots " + q("images", "signoff" + it.taskId) + "</div>" + helpBox(["images"], "images", "signoff" + it.taskId) + '<div class="shots">';
-      for (const [im, n] of lone)
-        h += '<div class="shot"><a href="' + imgUrl(im) + '" target="_blank" rel="noopener" title="' + esc(im.caption || "Open full size") + '"><img src="' + imgUrl(im) + '" alt="' + esc(im.caption) + '"></a>' +
+      for (const [j, [im, n]] of lone.entries())
+        h += '<div class="shot"><a href="' + imgUrl(im) + '"' + lbAttr(group, pairs.length + j, im.caption) + '><img src="' + imgUrl(im) + '" alt="' + esc(im.caption) + '"></a>' +
           (im.caption ? '<div class="small">' + esc(im.caption) + "</div>" : "") + (waiting ? commentBox(it, "images", n) : "") + "</div>";
       h += "</div></div>";
     }
