@@ -1,13 +1,13 @@
 // The loop app's page: status, triage (proposals and packets) and sign-off. Plain JS, no build.
 const PRIORITIES = ["P0", "P1", "P2", "P3", "P4"];
 // Nil, 2026-10-18: no taste class; an old taste proposal shows as decide.
-const CLASSES = ["auto", "decide", "authority"];
+const CLASSES = ["auto", "decide", "hold"];
 const EXTRA_CHOICES = ["rescope", "obsolete", "research more"];
-const CLASS_LABEL = {};
+const CLASS_LABEL = { hold: "on hold" };
 const OUTCOMES = ["keep", "rescope", "obsolete"];
 const TABS = [
   ["status", "Status"],
-  ["open", "To review"],
+  ["open", "Triage"],
   ["decided", "Decided"],
   ["applied", "Applied"],
   ["backlog", "Backlog"],
@@ -37,7 +37,7 @@ const HELP = {
   auto: "auto: the loop does it from start to finish.",
   decide: "decide: needs your design go/no-go. The loop may research it and write a decision packet first.",
   wasTaste: "The curator proposed taste, a class that no longer exists. It shows as decide; the curator will propose it again.",
-  authority: "authority: the loop never touches it. Also for work run outside the loop.",
+  hold: "On hold (tag [hold | ...]): the loop never touches it. Also for work run outside the loop.",
   keep: "keep: the task stays as it is, with the priority and class above.",
   rescope: "rescope: the task is rewritten to the proposed scope, or to the scope in your note.",
   obsolete: "obsolete: the task is closed, with the reason. Reversible: it can be reopened.",
@@ -54,8 +54,8 @@ const HELP = {
   later: "Later moves this card to the end of the list. Nothing is saved.",
   undo: "Undo takes the decision back while the curator has not written it to the board yet.",
   decision: "What you chose for this task.",
-  applied: "On the board: the curator wrote your decision to the board.",
-  pending: "Waiting for the curator: saved here; the curator writes it to the board a few minutes after your last decision.",
+  applied: "Applied: the curator wrote your decision to the board.",
+  pending: "Decided: saved here; the curator writes it to the board a few minutes after your last decision.",
   failed: "Failed: the curator could not write it to the board. It tries again with the next batch.",
   pause: "Pause stops dispatch and the hourly tick. Workers keep the tasks they hold.",
   resume: "Resume starts dispatch (every 2 minutes) and the hourly tick again.",
@@ -66,20 +66,18 @@ const HELP = {
   free: "Loop workers without a task. They get the next ready task at the next dispatch.",
   ready: "Tasks the loop can take now, in the order it takes them.",
   merging: "Approved work that Isomux Main merges after CI.",
-  signoffLine: "Merged work with copy or a visible change that waits for your approve or reject before the push.",
-  signoff: "Needs your sign-off: merged work whose item on the Sign-off tab waits for you, or waits for its revert.",
-  never: "Never picked: tag [authority | ...]. The loop never touches it; also for work run outside the loop.",
+  signoff: "Sign-off: merged work with copy or a visible change whose item on the Sign-off tab waits for your approve or reject, or for its revert.",
   diagram: "Every task of the room is in exactly one of these states, read from the board now. Tap a state to list its tasks. Arrows show who moves a task on.",
-  other: "Tasks that fit none of the states, for example a tag the loop does not know, a [<class> | nil] task without a card, or batch work outside the loop.",
+  other: "Tasks that fit none of the states, for example a tag the loop does not know, a [<class> | nil] task without a card, a decision that waits for the curator (Decided tab), or batch work outside the loop.",
   recentDone: "The last 20 tasks closed as done, newest first.",
   recentObsolete: "The last 20 tasks closed as obsolete, newest first.",
   tabStatus: "The loop now: pause, workers, queue, merges and what waits for you.",
   tabOpen: "Cards that wait for your decision: workers' design packets first, then the curator's proposals.",
   tabDecided: "Your decisions that the curator has not written to the board yet. You can undo them.",
   tabApplied: "Decisions the curator wrote to the board.",
-  tabBacklog: "Open P4 tasks: the loop never picks them. Bring one in to give it a priority and a class.",
+  tabBacklog: "The Backlog state: P4 tasks with no card. The loop never picks them. Bring one in to give it a priority and a class.",
   bringIn: "Bring in: give this backlog task a priority (P0-P3) and a class. It goes to the curator like any triage decision, and you can undo it in Decided until then.",
-  tabSignoff: "Merged copy and visible changes: approve or reject each before the push, then give the push go.",
+  tabSignoff: "Merged copy and visible changes: approve or reject each, then press Approve and push.",
   old: "The text before the change. Struck words went away.",
   pairImages: "The same screen before and after the change. Tap an image to open it full size. One comment covers the pair.",
   before: "The screen before the change.",
@@ -99,48 +97,48 @@ const HELP = {
   comment: "Optional. A note (\"shorter\"), or the exact new text in quotes. Saved as you type. Approve turns comments into a copy-edits task; Reject adds them to its note.",
   editsFiled: "Approved, and your comments became a copy-edits task. This commit goes out with the next push; the edits follow as their own commit.",
   rejectNote: "Why you reject it, and what to do instead. The worker reads it when the task comes back.",
-  undoApprove: "Undo the approval while the push go has not been given.",
+  undoApprove: "Undo the approval until you press Approve and push.",
   push: "Approve and push: tells Isomux Main to push main at the sha below. Enabled when every item is approved or rejected and every rejection is reverted.",
-  sha: "The main commit from Isomux Main's latest merge or revert. The push go names this commit.",
+  sha: "The main commit from Isomux Main's latest merge or revert. Approve and push names this commit.",
   rejected: "Rejected: Isomux Main was asked to revert it. It stays here until Main reports the revert.",
   waitingSign: "Waiting for your approve or reject.",
-  approvedSign: "Approved: it goes out with the next push go.",
+  approvedSign: "Approved: it goes out with the next push.",
   where: "Where this copy appears.",
   summary: "What the worker says changed.",
 };
 // The states: label, definition (board facts), and place in the diagram.
 const STATE_INFO = {
   filed: ["Filed", "Open, no tag in the title, no card in the app yet. The loop never picks it."],
-  proposed: ["Triage card", "A card waits in Triage for your decision: a curator proposal, or a worker's design packet on a [<class> | nil] task."],
+  triage: ["Triage", "An open card in the Triage tab: a curator proposal, or a worker's design packet. A task with an open card counts here whatever the board says."],
   ready: ["Ready", "Tag [auto | ready] or [decide | ready], open, no assignee, P0-P3. The loop picks these."],
   working: ["Working", "In progress, assigned to an Isomux Worker."],
   merging: ["Merging", "Tag [<class> | merging], in progress, no assignee. Isomux Main merges it after CI."],
-  signoff: ["Needs your sign-off", "Merged, with copy or a visible change: its item on the Sign-off tab waits for you, or waits for its revert. The board already says done."],
-  never: ["Never picked", "Tag [authority | ...]. The loop never touches it."],
+  signoff: ["Sign-off", "Merged, with copy or a visible change: its item on the Sign-off tab waits for your approve or reject, or for its revert. The board already says done."],
+  hold: ["On hold", "Tag [hold | ...]. The loop never touches it."],
   backlog: ["Backlog", "P4. The loop never picks it."],
   done: ["Done", "Status done."],
   obsolete: ["Obsolete", "Status obsolete: closed, and reversible."],
 };
 const BOX = {
-  filed: [140, 10, 120], proposed: [140, 90, 120], ready: [140, 170, 120], working: [140, 250, 120],
+  filed: [140, 10, 120], triage: [140, 90, 120], ready: [140, 170, 120], working: [140, 250, 120],
   merging: [140, 330, 120], signoff: [140, 410, 120], done: [140, 490, 120],
-  never: [0, 40, 100], backlog: [0, 110, 100], obsolete: [300, 90, 100],
+  hold: [0, 40, 100], backlog: [0, 110, 100], obsolete: [300, 90, 100],
 };
 // [path, label x, label y, anchor, label, help, label runs up the lane, dashed]
 const EDGES = [
-  ["M200,56 V88", 206, 76, "start", "curator", "Filed to Triage card: the curator proposes a review."],
-  ["M200,136 V168", 206, 156, "start", "Nil", "Triage card to Ready: you confirm it with a loop class, or pick a packet option."],
+  ["M200,56 V88", 206, 76, "start", "curator", "Filed to Triage: the curator proposes a review."],
+  ["M200,136 V168", 206, 156, "start", "Nil", "Triage to Ready: you confirm it with a loop class, or pick a packet option."],
   ["M200,216 V248", 206, 236, "start", "app", "Ready to Working: the app gives it to a free worker."],
   ["M200,296 V328", 206, 316, "start", "approved", "Working to Merging: the reviewer approved the work."],
-  ["M200,376 V408", 206, 396, "start", "to sign off", "Merging to Needs your sign-off: merged, and it has copy or a visible change."],
+  ["M200,376 V408", 206, 396, "start", "to sign off", "Merging to Sign-off: merged, and it has copy or a visible change."],
   ["M260,352 H290 V512 H262", 295, 440, "start", "nothing to sign off", "Merging to Done: merged, with nothing to sign off."],
-  ["M200,456 V488", 206, 476, "start", "approved", "Needs your sign-off to Done: approved; comments become a copy-edits task. It is done once you give the push go."],
-  ["M140,104 L102,68", 121, 115, "middle", "Nil", "Triage card to Never picked or Backlog: your decision."],
+  ["M200,456 V488", 206, 476, "start", "approved", "Sign-off to Done: approved; it goes out with the next push, and comments become a copy-edits task."],
+  ["M140,104 L102,68", 121, 115, "middle", "Nil", "Triage to On hold or Backlog: your decision."],
   ["M140,120 L102,128", null],
-  ["M260,112 H298", 279, 106, "middle", "Nil", "Triage card to Obsolete: you close it."],
-  ["M260,272 H284 V128 H262", 289, 200, "start", "packet", "Working to Triage card: the worker hit a design decision and sent you a packet."],
+  ["M260,112 H298", 279, 106, "middle", "Nil", "Triage to Obsolete: you close it."],
+  ["M260,272 H284 V128 H262", 289, 200, "start", "packet", "Working to Triage: the worker hit a design decision and sent you a packet."],
   ["M140,352 H120 V204 H138", 116, 280, "middle", "CI red", "Merging to Ready: CI failed because of the branch; it goes back to the queue.", true],
-  ["M140,432 H108 V190 H138", 104, 330, "middle", "rejected, reverted", "Needs your sign-off to Ready: you rejected it, Isomux Main reverted it, and it goes back to the queue with your note.", true],
+  ["M140,432 H108 V190 H138", 104, 330, "middle", "rejected, reverted", "Sign-off to Ready: you rejected it, Isomux Main reverted it, and it goes back to the queue with your note.", true],
   ["M140,444 H94 V176 H138", 90, 330, "middle", "files a task", "Approving with comments files a new copy-edits task, which enters Ready. The approved task itself goes on to Done.", true, true],
 ];
 let pickedState = null;
@@ -202,6 +200,10 @@ function helpBox(keys, key, id) {
   return '<div class="helpbox">' + keys.map((k) => "<div>" + esc(HELP[k]) + "</div>").join("") + "</div>";
 }
 
+// Chip and summary text for a value: a class may read differently from its tag.
+function label(v) {
+  return CLASS_LABEL[v] || v;
+}
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
@@ -262,13 +264,23 @@ function itemState(i) {
   if (i.applied && i.applied.decidedAt === i.decision.decidedAt) return i.applied.ok ? "applied" : "failed";
   return "decided";
 }
+// The same sets as the diagram's Triage and Sign-off states (src/states.ts):
+// a task counts once.
+function triageCount() {
+  const ids = new Set(items.filter((i) => itemState(i) === "open").map((i) => i.taskId));
+  for (const p of packets) if (p.state === "open") ids.add(p.taskId);
+  return ids.size;
+}
+function signoffCount() {
+  return signoffData.items.filter((x) => x.state === "waiting" || x.state === "rejected").length;
+}
 function renderTabs() {
   const pc = (st) => packets.filter((p) => st.includes(p.state)).length;
   const n = {
-    open: (counts.open || 0) + pc(["open"]),
+    open: triageCount(),
     decided: (counts.decided || 0) + (counts.failed || 0) + pc(["decided", "failed"]),
     applied: (counts.applied || 0) + pc(["applied"]),
-    signoff: signoffData.items.filter((x) => x.state === "waiting").length,
+    signoff: signoffCount(),
     backlog: backlogTasks.length,
   };
   document.getElementById("tabs").innerHTML = TABS.map(
@@ -318,17 +330,16 @@ function renderStatus() {
   const c = s.lastClassify;
   h += "<br><span" + tip("classify") + ">Curator wake: " + (c ? clock(c.at) + " · " + (c.error ? '<span class="warn">' + esc(c.error) + "</span>" : c.found.length + " to classify") : "not yet") + "</span>";
   h += q("runs") + "</div>" + helpBox(["runs", "classify"], "runs");
-  const sw = s.signoffWaiting || 0;
-  h += '<div class="small"' + tip("signoffLine") + '>Sign-off: <a href="/signoff/" data-go="signoff">' + sw + " waiting</a> " + q("signoffLine") + "</div>" + helpBox(["signoffLine"], "signoffLine");
+  h += '<div class="small"' + tip("signoff") + '>Sign-off: <a href="/signoff/" data-go="signoff">' + signoffCount() + "</a> " + q("signoff") + "</div>" + helpBox(["signoff"], "signoff");
   if (s.error) return h + '<div class="err">Board unreadable: ' + esc(s.error) + "</div>";
   const b = s.board;
   h += renderStates(b);
   h += section("Working", "working", b.holding.map((x) => taskLine(x.task, x.worker)), "No worker holds a task.");
   h += '<div class="small" style="margin-top:6px"' + tip("free") + ">Free: " + (b.freeWorkers.length ? esc(b.freeWorkers.join(", ")) : "none") + " " + q("free") + "</div>" + helpBox(["free"], "free");
   h += section("Ready queue (" + b.ready.length + ")", "ready", b.ready.map((x) => taskLine(x)), "Nothing is ready.");
-  h += section("Waiting to merge (" + b.merging.length + ")", "merging", b.merging.map((x) => taskLine(x)), "Nothing waits to merge.");
+  h += section("Merging (" + b.merging.length + ")", "merging", b.merging.map((x) => taskLine(x)), "Nothing is merging.");
   const st = b.states;
-  h += section("Never picked (" + st.never.count + ")", "never", st.never.tasks.map(briefLine), "No task is tagged authority.");
+  h += section("On hold (" + st.hold.count + ")", "hold", st.hold.tasks.map(briefLine), "No task is on hold.");
   h += section("Done (" + st.done.count + ") · last " + st.done.tasks.length, "recentDone", st.done.tasks.map(briefLine), "Nothing is done yet.");
   h += section("Obsolete (" + st.obsolete.count + ") · last " + st.obsolete.tasks.length, "recentObsolete", st.obsolete.tasks.map(briefLine), "Nothing is obsolete.");
   return h;
@@ -341,7 +352,7 @@ function chips(kind, list, chosen, proposed, id) {
     .map(
       (v) =>
         '<button class="chip' + (v === chosen ? " on" : "") + (v === proposed ? " proposed" : "") +
-        '" data-pick="' + kind + '" data-id="' + esc(id) + '" data-v="' + v + '" title="' + esc(HELP[v] + (v === proposed ? " The curator proposes this." : "")) + '">' + v +
+        '" data-pick="' + kind + '" data-id="' + esc(id) + '" data-v="' + v + '" title="' + esc(HELP[v] + (v === proposed ? " The curator proposes this." : "")) + '">' + label(v) +
         (v === proposed ? '<span class="dot" aria-label="curator\'s proposal"></span>' : "") + "</button>",
     )
     .join("");
@@ -357,8 +368,8 @@ function head(i, sel, showProposal) {
   const m = i.task.title.match(/^\[\s*([a-z]+)\s*\|\s*([^\]]*?)\s*\]/);
   const board = (i.task.priority || "no priority") + " · " + (m ? m[1] + " | " + m[2] : "no tag");
   return (
-    '<div class="meta"' + tip("head") + "><span>Board: " + esc(board) + " → yours: <b>" + sel.priority + " · " + sel.class + " · " + sel.outcome +
-    "</b></span>" + (showProposal ? "<span>curator proposed: " + p.priority + " · " + p.class + " · " + p.outcome + "</span>" : "") +
+    '<div class="meta"' + tip("head") + "><span>Board: " + esc(board) + " → yours: <b>" + sel.priority + " · " + label(sel.class) + " · " + sel.outcome +
+    "</b></span>" + (showProposal ? "<span>curator proposed: " + p.priority + " · " + label(p.class) + " · " + p.outcome + "</span>" : "") +
     q("head", i.taskId) + "</div>" + helpBox(["head"], "head", i.taskId) +
     '<div class="meta"' + tip("head") + "><span>Filed by " + esc(i.task.createdBy || "unknown") + "</span><span>" +
     filed(i.task.createdAt) + "</span><span>Task " + esc(i.taskId) + "</span></div>" +
@@ -405,13 +416,13 @@ function decidedCard(i) {
   const d = i.decision;
   const s = itemState(i);
   const status =
-    s === "applied" ? '<span class="ok"' + tip("applied") + ">On the board</span>"
+    s === "applied" ? '<span class="ok"' + tip("applied") + ">Applied</span>"
     : s === "failed" ? '<span class="warn"' + tip("failed") + ">Failed: " + esc(i.applied.error || "no reason given") + "</span>"
-    : "<span" + tip("pending") + ">Waiting for the curator</span>";
+    : "<span" + tip("pending") + ">Decided: waiting for the curator</span>";
   const stateKey = s === "applied" ? "applied" : s === "failed" ? "failed" : "pending";
   let h =
     '<div class="card">' + head(i, d, true) +
-    '<div class="why"><span class="label"' + tip("decision") + ">Your decision</span><br><b>" + d.priority + " · " + d.class + " · " + d.outcome + "</b>" +
+    '<div class="why"><span class="label"' + tip("decision") + ">Your decision</span><br><b>" + d.priority + " · " + label(d.class) + " · " + d.outcome + "</b>" +
     (d.note ? "<br>" + esc(d.note) : "") + "</div>" + '<div class="meta">' + status + q("state", i.taskId) + "</div>" +
     helpBox(s === "applied" ? [stateKey] : [stateKey, "undo"], "state", i.taskId);
   if (s !== "applied")
@@ -426,7 +437,7 @@ function renderTriage() {
   let all = pks.concat(shown);
   if (tab === "open") all = lastLater(all);
   if (tab === "applied") all.sort((a, b) => b.x.applied.at - a.x.applied.at);
-  if (!all.length) return '<div class="empty">' + (tab === "open" ? "Nothing to review." : "Nothing here.") + "</div>";
+  if (!all.length) return '<div class="empty">' + (tab === "open" ? "Nothing in Triage." : "Nothing here.") + "</div>";
   return all
     .map((e) =>
       e.kind === "packet" ? (tab === "open" ? packetCard(e.x) : decidedPacketCard(e.x)) : tab === "open" ? openCard(e.x) : decidedCard(e.x),
@@ -527,9 +538,9 @@ function decidedPacketCard(p) {
   const d = p.decision;
   const s = p.state;
   const status =
-    s === "applied" ? '<span class="ok"' + tip("applied") + ">On the board</span>"
+    s === "applied" ? '<span class="ok"' + tip("applied") + ">Applied</span>"
     : s === "failed" ? '<span class="warn"' + tip("failed") + ">Failed: " + esc(p.applied.error || "no reason given") + "</span>"
-    : "<span" + tip("pending") + ">Waiting for the curator</span>";
+    : "<span" + tip("pending") + ">Decided: waiting for the curator</span>";
   const rec = p.options.find((o) => o.recommended);
   let h =
     '<div class="card packet">' + packetHead(p) + '<div class="question">' + esc(p.question) + "</div>" +
@@ -576,7 +587,7 @@ function diff(a, b) {
 // --- backlog ------------------------------------------------------------------
 
 function renderBacklog() {
-  let h = '<div class="small"' + tip("tabBacklog") + ">" + backlogTasks.length + " open P4 tasks, oldest first. The loop never picks them. " + q("tabBacklog") + "</div>" + helpBox(["tabBacklog", "bringIn"], "tabBacklog");
+  let h = '<div class="small"' + tip("tabBacklog") + ">" + backlogTasks.length + " P4 tasks with no card, oldest first. The loop never picks them. " + q("tabBacklog") + "</div>" + helpBox(["tabBacklog", "bringIn"], "tabBacklog");
   if (!backlogTasks.length) return h + '<div class="empty">The backlog is empty.</div>';
   for (const t of backlogTasks) {
     const k = backlogPicks[t.id];
@@ -587,7 +598,7 @@ function renderBacklog() {
       h += '<div class="actions"><button class="btn ghost" data-bring="' + esc(t.id) + '"' + tip("bringIn") + ">Bring in</button></div>";
     } else {
       const chipRow = (kind, list) =>
-        list.map((v) => '<button class="chip' + (k[kind] === v ? " on" : "") + '" data-bpick="' + kind + '" data-id="' + esc(t.id) + '" data-v="' + v + '"' + tip(v) + ">" + (CLASS_LABEL[v] || v) + "</button>").join("");
+        list.map((v) => '<button class="chip' + (k[kind] === v ? " on" : "") + '" data-bpick="' + kind + '" data-id="' + esc(t.id) + '" data-v="' + v + '"' + tip(v) + ">" + label(v) + "</button>").join("");
       h += '<div class="row"><span class="label"' + tip("priority") + ">Priority</span>" + chipRow("priority", ["P0", "P1", "P2", "P3"]) + "</div>" +
         '<div class="row"><span class="label"' + tip("class") + ">Class</span>" + chipRow("class", CLASSES) + "</div>" +
         '<textarea rows="1" placeholder="Note for the curator (optional)" data-bnote="' + esc(t.id) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
@@ -641,7 +652,7 @@ function renderSignoff() {
   const so = signoffData;
   const sha = so.lastSha ? so.lastSha.commit : null;
   let h =
-    '<div class="banner ' + (so.push.ok ? "run" : "paused") + '"><div><b' + tip("push") + ">Push go</b>" +
+    '<div class="banner ' + (so.push.ok ? "run" : "paused") + '"><div><b' + tip("push") + ">Push</b>" +
     '<div class="small"' + tip("sha") + ">main " + (sha ? "<code>" + esc(sha.slice(0, 10)) + "</code> · " + clock(so.lastSha.at) : "not reported yet") + "</div>" +
     (so.push.ok ? "" : '<div class="small">' + esc(so.push.reason) + "</div>") +
     '</div><span><button class="btn primary" data-push="1"' + (so.push.ok ? "" : " disabled") + tip("push") + ">Approve and push</button> " + q("push") + "</span></div>" +
@@ -884,9 +895,9 @@ document.addEventListener("input", (e) => {
   }
 });
 readLocation();
-// Open on triage while proposals wait for Nil, else on the status.
+// Open on Triage while cards wait for Nil, else on the status.
 load().then(() => {
-  if (tab === "status" && (counts.open > 0 || packets.some((p) => p.state === "open"))) {
+  if (tab === "status" && triageCount() > 0) {
     tab = "open";
     render();
   }

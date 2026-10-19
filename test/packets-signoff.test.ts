@@ -41,7 +41,6 @@ describe("packets", () => {
     expect(s.markApplied("abc12345", 6, true)).toBe(false);
     expect(s.markApplied("abc12345", 7, true)).toBe(true);
     expect(packetState(s.get("abc12345")!)).toBe("applied");
-    expect(s.unapplied().size).toBe(0);
   });
 
   test("a new packet replaces the old one, its decision and its images", () => {

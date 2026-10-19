@@ -1,5 +1,5 @@
-// The task states of the loop, read from board facts (and, for Proposed,
-// from the triage cards). Nothing here is stored: every read classifies
+// The task states of the loop, read from board facts (and, for Triage,
+// from the app's cards). Nothing here is stored: every read classifies
 // the board as it is.
 
 import { WORKER_NAMES } from "./config";
@@ -7,15 +7,15 @@ import { parseTag } from "./loop";
 import type { Task } from "./office";
 
 // Nil, 2026-10-18: no "waiting for Nil" state. A task that needs him is a card
-// in Triage (Proposed): a curator proposal or a worker's design packet.
+// in Triage: a curator proposal or a worker's design packet.
 export const STATES = [
   "filed",
-  "proposed",
+  "triage",
   "ready",
   "working",
   "merging",
   "signoff",
-  "never",
+  "hold",
   "backlog",
   "done",
   "obsolete",
@@ -25,22 +25,28 @@ export type StateKey = (typeof STATES)[number] | "other";
 const LOOP_CLASSES = ["auto", "decide"];
 const LOOP_PRIORITIES = ["P0", "P1", "P2", "P3"];
 
+// The task's card in the app: "open" waits for Nil in the Triage tab;
+// "decided" waits for the curator to write Nil's decision to the board.
+export type Card = "open" | "decided" | null;
+
 // First match wins, from the end of the path backwards, so a task never
-// counts in two states. hasCard: a triage proposal or a packet that is not
-// written to the board yet. needsSignoff: the app holds a merged sign-off
-// item for it that waits for Nil or waits for its revert (the board already
-// says done).
-export function classify(t: Task, hasCard: boolean, needsSignoff = false): StateKey {
+// counts in two states. needsSignoff: the app holds a merged sign-off item
+// for it that waits for Nil or waits for its revert (the board already says
+// done).
+export function classify(t: Task, card: Card, needsSignoff = false): StateKey {
+  // An open card is Triage whatever the board says, so the Triage state and
+  // the Triage tab count the same cards.
+  if (card === "open") return "triage";
   if (needsSignoff) return "signoff";
   if (t.status === "done") return "done";
   if (t.status === "obsolete") return "obsolete";
-  // A P4 task with a card is a proposal to promote it: it waits in Triage.
-  if (t.priority === "P4") return hasCard ? "proposed" : "backlog";
+  // Filed and Backlog mean no card: a decided card waits for the curator.
+  if (t.priority === "P4") return card ? "other" : "backlog";
   const tag = parseTag(t.title);
-  if (tag?.class === "authority") return "never";
+  // "authority" is the class's old name (2026-10-19).
+  if (tag?.class === "hold" || tag?.class === "authority") return "hold";
   if (tag?.state === "merging") return "merging";
   if (t.status === "in_progress" && WORKER_NAMES.includes(t.assignee ?? "")) return "working";
-  if (tag && LOOP_CLASSES.includes(tag.class) && tag.state === "nil") return hasCard ? "proposed" : "other";
   if (
     tag &&
     LOOP_CLASSES.includes(tag.class) &&
@@ -50,7 +56,7 @@ export function classify(t: Task, hasCard: boolean, needsSignoff = false): State
     LOOP_PRIORITIES.includes(t.priority ?? "")
   )
     return "ready";
-  if (!tag && t.status === "open") return hasCard ? "proposed" : "filed";
+  if (!tag && t.status === "open") return card ? "other" : "filed";
   return "other";
 }
 
@@ -70,13 +76,13 @@ const byQueue = (a: Task, b: Task) =>
 // every other state lists all its tasks in queue order.
 export function stateViews(
   tasks: Task[],
-  proposed: Set<string>,
+  cards: Map<string, Card>,
   closedAt: (t: Task) => number | undefined,
   signoff: Set<string> = new Set(),
 ): Record<StateKey, StateView> {
   const groups = {} as Record<StateKey, Task[]>;
   for (const k of [...STATES, "other" as const]) groups[k] = [];
-  for (const t of tasks) groups[classify(t, proposed.has(t.id), signoff.has(t.id))].push(t);
+  for (const t of tasks) groups[classify(t, cards.get(t.id) ?? null, signoff.has(t.id))].push(t);
   const out = {} as Record<StateKey, StateView>;
   for (const [k, list] of Object.entries(groups) as [StateKey, Task[]][]) {
     if (k === "done" || k === "obsolete") {

@@ -58,7 +58,7 @@ describe("ready queue", () => {
       task({ title: "[decide | ready] p1 newest", priority: "P1" }),
       task({ title: "[auto | ready] p4", priority: "P4" }),
       task({ title: "[auto | nil] parked", priority: "P0" }),
-      task({ title: "[authority | ready] never", priority: "P0" }),
+      task({ title: "[hold | ready] on hold", priority: "P0" }),
       task({ title: "[auto | ready] taken", priority: "P0", assignee: "Isomux Worker 1" }),
       task({ title: "[auto | ready] in progress", priority: "P0", status: "in_progress" }),
       task({ title: "untagged", priority: "P0" }),

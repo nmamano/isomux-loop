@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store, ValidationError, itemState } from "../src/store";
@@ -130,5 +130,20 @@ describe("store", () => {
     expect([itemState(i), i.decision!.priority, i.decision!.class, i.decision!.outcome, i.decision!.note]).toEqual(["decided", "P2", "decide", "keep", "now matters"]);
     expect(store.pending().map((x) => x.taskId)).toEqual(["b1"]);
     expect(() => store.bringIn(snap, "b1", { priority: "P1", class: "auto" })).toThrow(ValidationError);
+  });
+
+  test("the class authority is now hold: stored cards migrate, new ones take hold only", () => {
+    const { store, dir } = setup();
+    store.propose([proposal("old", { class: "hold" })]);
+    store.decide("old", { ...decision, class: "hold" });
+    const file = join(dir, "triage.json");
+    const raw = JSON.parse(readFileSync(file, "utf8"));
+    raw.items.old.proposal.class = "authority";
+    raw.items.old.decision.class = "authority";
+    writeFileSync(file, JSON.stringify(raw));
+    const again = new Store(dir);
+    expect([again.get("old")!.proposal.class, again.get("old")!.decision!.class]).toEqual(["hold", "hold"]);
+    expect(JSON.parse(readFileSync(file, "utf8")).items.old.proposal.class).toBe("hold");
+    expect(() => again.propose([proposal("new", { class: "authority" })])).toThrow(ValidationError);
   });
 });

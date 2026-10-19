@@ -7,8 +7,9 @@ import { join } from "node:path";
 
 export const PRIORITIES = ["P0", "P1", "P2", "P3", "P4"] as const;
 // Nil, 2026-10-18: no taste class. A proposal stored before that may still say
-// taste; the page shows it as decide.
-export const CLASSES = ["auto", "decide", "authority"] as const;
+// taste; the page shows it as decide. Nil, 2026-10-19: "authority" is now
+// "hold" (the loop never touches it); stored cards are migrated on load.
+export const CLASSES = ["auto", "decide", "hold"] as const;
 export const OUTCOMES = ["keep", "rescope", "obsolete"] as const;
 
 export type Priority = (typeof PRIORITIES)[number];
@@ -112,6 +113,17 @@ export function parseProposal(raw: unknown): Pick<Item, "taskId" | "task" | "pro
   return { taskId, task, proposal };
 }
 
+function migrateAuthority(state: State): boolean {
+  let changed = false;
+  for (const i of Object.values(state.items))
+    for (const x of [i.proposal, i.decision] as { class: string }[])
+      if (x?.class === "authority") {
+        x.class = "hold";
+        changed = true;
+      }
+  return changed;
+}
+
 export class Store {
   private state: State;
   private file: string;
@@ -125,6 +137,7 @@ export class Store {
     this.state = existsSync(this.file)
       ? (JSON.parse(readFileSync(this.file, "utf8")) as State)
       : { items: {}, notify: { lastDecisionAt: 0, lastSentAt: 0 } };
+    if (migrateAuthority(this.state)) this.save();
   }
 
   private save(): void {
@@ -184,7 +197,7 @@ export class Store {
   // curator like any other triage decision.
   bringIn(task: TaskSnapshot, taskId: string, raw: unknown): Item {
     const existing = this.state.items[taskId];
-    if (existing && itemState(existing) !== "applied") throw new ValidationError("this task already has a card in Triage");
+    if (existing && itemState(existing) !== "applied") throw new ValidationError("this task already has a card");
     const r = (raw ?? {}) as Record<string, unknown>;
     const priority = oneOf(r.priority, PRIORITIES, "priority");
     if (priority === "P4") throw new ValidationError("bring it in at P0 to P3");

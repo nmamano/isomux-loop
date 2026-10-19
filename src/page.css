@@ -79,10 +79,10 @@
   .diagram text { fill: var(--fg); pointer-events: none; }
   .diagram .st { cursor: pointer; }
   .diagram .st rect { fill: var(--card); stroke: var(--line); stroke-width: 1.4; }
-  .diagram .st-filed rect, .diagram .st-proposed rect, .diagram .st-ready rect, .diagram .st-working rect,
+  .diagram .st-filed rect, .diagram .st-triage rect, .diagram .st-ready rect, .diagram .st-working rect,
   .diagram .st-merging rect, .diagram .st-done rect { stroke: var(--accent); }
   .diagram .st-waiting rect { fill: color-mix(in srgb, var(--warn) 14%, var(--card)); stroke: var(--warn); }
-  .diagram .st-never rect, .diagram .st-backlog rect, .diagram .st-obsolete rect { fill: var(--chip); }
+  .diagram .st-hold rect, .diagram .st-backlog rect, .diagram .st-obsolete rect { fill: var(--chip); }
   .diagram .st.picked rect { stroke-width: 3; }
   .picked-list { margin-bottom: 8px; }
   .badge { background: var(--accent); color: var(--accent-fg); border-radius: 6px; padding: 0 6px; font-weight: 600; }

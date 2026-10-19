@@ -7,7 +7,7 @@ import { page } from "./page";
 import { PacketStore, packetState } from "./packets";
 import { PauseFlag } from "./pause";
 import { SignoffStore, signoffState } from "./signoff";
-import { stateViews, type StateKey, type StateView } from "./states";
+import { classify, stateViews, type Card, type StateKey, type StateView } from "./states";
 import { itemState, Store, ValidationError } from "./store";
 
 const port = Number(process.env.PORT);
@@ -31,38 +31,39 @@ const HELP = `Loop app API. Base: ${local}
 Triage (for the curator):
 GET  /api/summary                 counts per state
 GET  /api/items?state=open|decided|applied|failed|all
-POST /api/proposals               {"proposals":[{"taskId","task":{"title","description","priority","createdBy","createdAt"},"proposal":{"priority":"P0-P4","class":"auto|decide|authority","outcome":"keep|rescope|obsolete","title?","scope?","why"}}]}
+POST /api/proposals               {"proposals":[{"taskId","task":{"title","description","priority","createdBy","createdAt"},"proposal":{"priority":"P0-P4","class":"auto|decide|hold","outcome":"keep|rescope|obsolete","title?","scope?","why"}}]}
                                   task.* is the board task as it is now. A rescope needs proposal.title and/or proposal.scope.
                                   An item with a decision not yet applied is skipped; an applied item gets the new proposal and reopens.
                                   A P4 task is proposed only to promote it: a proposal keeping it at P4 comes back under "refused".
-DELETE /api/items/:taskId         withdraw a proposal (the task closed meanwhile)
+DELETE /api/items/:taskId         withdraw a card (the task closed meanwhile)
 GET  /api/decisions               decisions to write to the board (decided, or failed earlier), triage and packets:
                                   each has "kind": "triage" (decision: priority, class, outcome, note) or
                                   "packet" (decision: choice = an option label, "rescope", "obsolete" or "research more"; note)
 POST /api/applied                 {"results":[{"taskId","decidedAt","kind?":"triage|packet","ok":true|false,"error?"}]}
                                   decidedAt from /api/decisions; a decision Nil changed since then comes back as stale.
 
-Packets (for workers; a decision card for Nil in Triage):
+Packets (for workers; a card for Nil in Triage):
 POST /api/packets                 {"taskId","question","options":[{"label","cost","recommended":true|false}] (2-4, at most one
                                   recommended),"body":"markdown","branch?","diffUrl?"}. A new packet replaces the task's old one.
 POST /api/packets/:taskId/images  raw PNG/JPEG/WebP bytes, ?caption=..., one per call, at most 5 MB, 20 per packet
 GET  /api/packets                 all packets with their state
 
 Backlog (Nil's tab):
-GET  /api/backlog                 open P4 tasks with no card, oldest first
-POST /api/backlog/:taskId/bring   {"priority":"P0-P3","class","note?"}: a decided triage card that goes to the curator
+GET  /api/backlog                 the tasks of the Backlog state (P4, no card), oldest first
+POST /api/backlog/:taskId/bring   {"priority":"P0-P3","class","note?"}: a decided card that goes to the curator
                                   with the next burst, like any triage decision
 
 Loop (for Isomux PM):
 GET  /api/status                  pause state, last dispatch and tick, ready queue, holders, merging, and the
-                                  ten task states (board.states) with counts and tasks; done/obsolete list the last 20
+                                  ten task states (board.states) with counts and tasks; done/obsolete list the last 20;
+                                  board.states.triage is the open cards of the Triage tab
 POST /api/pause | /api/resume     pause stops dispatch and the tick; the first tick after a resume catches what stopped meanwhile
 POST /api/settings                {"workers": 1-6}: the loop dispatches to Workers 1..N (also on the status page).
                                   Lowering N takes no task away; a worker above N keeps its tick while it holds a loop task.
 POST /api/dispatch | /api/tick    run one now (both refuse while paused)
 POST /api/classify                run the curator wake now: every 10 minutes, also while paused, open P0-P3 tasks with no tag
                                   and no card go to the curator (P4 is left out) (a task is announced again after an hour); the same run
-                                  withdraws undecided triage cards whose task is done, obsolete or gone
+                                  withdraws undecided cards whose task is done, obsolete or gone
 
 Sign-off before the push:
 POST /api/signoff                 worker at hand-off: {"taskId","title","summary?","copy":[{"where","old","new"}]}
@@ -130,9 +131,28 @@ let lastClassify: ClassifyRun | null = null;
 const announced = new Map<string, number>();
 
 function cardIds(): Set<string> {
-  const ids = new Set(store.list("all").filter((i) => itemState(i) !== "applied").map((i) => i.taskId));
-  for (const id of packets.unapplied()) ids.add(id);
-  return ids;
+  return new Set(cards().keys());
+}
+
+// Every card not yet on the board: "open" is in the Triage tab, "decided"
+// waits for the curator. The diagram reads the same map, so the Triage state
+// and the Triage tab count the same cards.
+function cards(): Map<string, Card> {
+  const out = new Map<string, Card>();
+  for (const i of store.list("all")) {
+    const s = itemState(i);
+    if (s !== "applied") out.set(i.taskId, s === "open" ? "open" : "decided");
+  }
+  for (const p of packets.list()) {
+    const s = packetState(p);
+    if (s !== "applied") out.set(p.taskId, s === "open" ? "open" : out.get(p.taskId) ?? "decided");
+  }
+  return out;
+}
+
+// Merged sign-off items that wait for Nil or for their revert.
+function signoffIds(): Set<string> {
+  return new Set(signoff.visible().filter((i) => ["waiting", "rejected"].includes(signoffState(i))).map((i) => i.taskId));
 }
 
 async function runClassify(): Promise<ClassifyRun> {
@@ -199,17 +219,11 @@ async function loopStatus(): Promise<Record<string, unknown>> {
       const [agents, all] = await Promise.all([office.agents(), office.allTasks()]);
       // The dispatch view sees what dispatch sees: the board's default listing.
       const live = all.filter((t) => (t.status === "open" || t.status === "in_progress") && t.priority !== "P4");
-      const cards = cardIds();
       statusCache = {
         at: Date.now(),
         value: {
           ...status(agents, live, pause.workers),
-          states: stateViews(
-            all,
-            cards,
-            (t) => closed.get(t),
-            new Set(signoff.visible().filter((i) => ["waiting", "rejected"].includes(signoffState(i))).map((i) => i.taskId)),
-          ),
+          states: stateViews(all, cards(), (t) => closed.get(t), signoffIds()),
           closedPending: closed.missing(all).length,
         },
       };
@@ -227,14 +241,16 @@ async function loopStatus(): Promise<Record<string, unknown>> {
 }
 
 // --- backlog -------------------------------------------------------------------
-// Open P4 tasks with no card, oldest first; Nil can bring one in from here.
+// The tasks of the diagram's Backlog state (P4, no card), oldest first; Nil
+// can bring one in from here.
 
 let backlogCache: { at: number; value: unknown[] } | null = null;
 async function backlog(): Promise<unknown[]> {
   if (backlogCache && Date.now() - backlogCache.at < STATUS_CACHE_MS) return backlogCache.value;
-  const cards = cardIds();
+  const c = cards();
+  const so = signoffIds();
   const value = (await office.allTasks())
-    .filter((t) => t.status === "open" && t.priority === "P4" && (t.roomId ?? ROOM_ID) === ROOM_ID && !cards.has(t.id))
+    .filter((t) => (t.roomId ?? ROOM_ID) === ROOM_ID && classify(t, c.get(t.id) ?? null, so.has(t.id)) === "backlog")
     .sort((a, b) => a.createdAt - b.createdAt)
     .map((t) => ({ id: t.id, title: t.title, description: t.description ?? "", createdBy: (t as { createdBy?: string }).createdBy ?? "", createdAt: t.createdAt }));
   backlogCache = { at: Date.now(), value };

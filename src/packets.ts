@@ -160,9 +160,4 @@ export class PacketStore {
     this.save();
     return true;
   }
-
-  // Task ids with a packet that still needs Nil or the curator.
-  unapplied(): Set<string> {
-    return new Set(this.list().filter((p) => packetState(p) !== "applied").map((p) => p.taskId));
-  }
 }
