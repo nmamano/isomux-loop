@@ -313,6 +313,17 @@ export class SignoffStore {
     this.save();
   }
 
+  // The merges not pushed yet (the diagram's Push stage), oldest first. sent:
+  // the last push go included it, so it waits for Main's push report.
+  unpushedList(): { taskId: string; commit: string; at: number; sent: boolean }[] {
+    const go = this.state.lastPushGo?.commit;
+    const same = (a: string) => Boolean(go) && (a.startsWith(go!) || go!.startsWith(a));
+    const goSeq = [...(this.state.shas ?? [])].reverse().find((x) => same(x.commit))?.seq;
+    return Object.entries(this.state.unpushed ?? {})
+      .sort((a, b) => a[1].seq - b[1].seq)
+      .map(([taskId, u]) => ({ taskId, commit: u.commit, at: u.at, sent: goSeq !== undefined && u.seq <= goSeq }));
+  }
+
   // Main pushed this sha: every merge and revert reported up to it is pushed.
   pushed(raw: unknown): { pushed: string[] } {
     const commit = commitOf(raw);

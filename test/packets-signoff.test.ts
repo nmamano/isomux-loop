@@ -161,6 +161,18 @@ describe("sign-off", () => {
     expect(s.unpushedIds().size).toBe(0);
   });
 
+  test("the unpushed list is in merge order; a merge the last push go included is marked sent", () => {
+    const s = new SignoffStore(tempDir());
+    s.merged("a", { commit: "aaaaaaa1" });
+    s.merged("b", { commit: "bbbbbbb2" });
+    expect(s.unpushedList().map((u) => [u.taskId, u.sent])).toEqual([["a", false], ["b", false]]);
+    s.recordPushGo("aaaaaaa1");
+    s.merged("c", { commit: "ccccccc3" });
+    expect(s.unpushedList().map((u) => [u.taskId, u.sent])).toEqual([["a", true], ["b", false], ["c", false]]);
+    s.pushed({ commit: "aaaaaaa1" });
+    expect(s.unpushedList().map((u) => u.taskId)).toEqual(["b", "c"]);
+  });
+
   test("data from before the push record: merged items that are not rejected count as not pushed", () => {
     const dir = tempDir();
     const old = new SignoffStore(dir);

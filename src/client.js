@@ -15,6 +15,7 @@ const TABS = [
   ["applied", "Past decisions"],
   ["backlog", "Backlog"],
   ["signoff", "Sign-off"],
+  ["push", "Push"],
 ];
 let tab = "status";
 let items = [];
@@ -94,7 +95,8 @@ const HELP = {
   splitView: "Show the task-state diagram beside Triage. It updates after each decision and every 15 s. Drag the line between them to change the widths. A narrow screen shows Triage only.",
   divider: "Drag to change the widths of the diagram and Triage.",
   bringIn: "Bring in: give this backlog task go, design or on hold and a priority (P0-P3). It goes to the curator like any triage decision, and you can undo it in Decided until then.",
-  tabSignoff: "Merged copy and visible changes: approve or reject each, then press Approve and push.",
+  tabSignoff: "Merged copy and visible changes that wait for your approve or reject, and rejections that wait for their revert. An approved item moves to Push.",
+  tabPush: "Merged work not pushed yet: approved sign-off items and merges with nothing to sign off. The same tasks as the diagram's Push stage. Push sends them all.",
   old: "The text before the change. Struck words went away.",
   pairImages: "The same screen before and after the change. Tap an image to open it full size. One comment covers the pair.",
   before: "The screen before the change.",
@@ -115,12 +117,14 @@ const HELP = {
   comment: "Optional. A note (\"shorter\"), or the exact new text in quotes. Saved as you type. Approve turns comments into a copy-edits task; Reject adds them to its note.",
   editsFiled: "Approved, and your comments became a copy-edits task. This commit goes out with the next push; the edits follow as their own commit.",
   rejectNote: "Why you reject it, and what to do instead. The worker reads it when the task comes back.",
-  undoApprove: "Undo the approval until you press Approve and push.",
-  push: "Approve and push: tells Isomux Main to push main at the sha below, which sends every task in Push. Enabled when every item is approved or rejected and every rejection is reverted.",
-  sha: "The main commit from Isomux Main's latest merge or revert. Approve and push names this commit.",
+  undoApprove: "Undo the approval: the item goes back to Sign-off. Possible until you press Push.",
+  push: "Push: tells Isomux Main to push main at the sha below, which sends every task in this list. Enabled when every item is approved or rejected and every rejection is reverted.",
+  sha: "The main commit from Isomux Main's latest merge or revert. Push names this commit.",
   rejected: "Rejected: Isomux Main was asked to revert it. It stays here until Main reports the revert.",
   waitingSign: "Waiting for your approve or reject.",
   approvedSign: "Approved: it goes out with the next push.",
+  nothingToSign: "Merged, with no copy or visible change to sign off.",
+  sentPush: "The push go included it: it leaves when Isomux Main reports the push.",
   where: "Where this copy appears.",
   summary: "What the worker says changed.",
 };
@@ -135,7 +139,7 @@ const STATE_INFO = {
   signoff: ["Sign-off", "Merged, with copy or a visible change: its item on the Sign-off tab waits for your approve or reject, or for its revert. The board already says done."],
   hold: ["On hold", "Tag [hold | ...]. The loop never touches it."],
   backlog: ["Backlog", "P4. The loop never picks it."],
-  push: ["Push", "Merged and done on the board, not pushed yet: Approve and push sends it, and it leaves when Isomux Main reports the push."],
+  push: ["Push", "Merged and done on the board, not pushed yet: the Push button on the Push tab sends it, and it leaves when Isomux Main reports the push. The same tasks as the Push tab."],
   done: ["Done", "Status done, with no merge that waits for the push."],
   obsolete: ["Obsolete", "Status obsolete: closed, and reversible."],
 };
@@ -205,7 +209,7 @@ function renderStates(b) {
   return h;
 }
 
-const TAB_HELP = { status: "tabStatus", open: "tabOpen", decided: "tabDecided", applied: "tabApplied", backlog: "tabBacklog", signoff: "tabSignoff" };
+const TAB_HELP = { status: "tabStatus", open: "tabOpen", decided: "tabDecided", applied: "tabApplied", backlog: "tabBacklog", signoff: "tabSignoff", push: "tabPush" };
 
 // title="" for hover.
 function tip(key) {
@@ -286,7 +290,12 @@ async function sendOff(id, button, call, notice, undo, reload = true) {
   await leave(cardById(id));
   arriving = true;
   pulsing = true;
-  showToast(notice, undo);
+  // A function notice is read after the call and gives { text, undo } (an
+  // approve learns from the call whether it filed edits, which cannot be undone).
+  if (typeof notice === "function") {
+    const n = notice();
+    showToast(n.text, n.undo);
+  } else showToast(notice, undo);
   if (reload) await load();
   else render();
 }
@@ -297,7 +306,7 @@ function showToast(text, undo) {
     document.body.insertAdjacentHTML("beforeend", '<div class="toast" id="toast" role="status" hidden></div>');
     el = document.getElementById("toast");
   }
-  el.innerHTML = "<span>" + esc(text) + '</span><button class="btn ghost" data-toastundo="1"' + tip("toastUndo") + ">Undo</button>";
+  el.innerHTML = "<span>" + esc(text) + "</span>" + (undo ? '<button class="btn ghost" data-toastundo="1"' + tip("toastUndo") + ">Undo</button>" : "");
   el.hidden = false;
   toast = { undo, timer: setTimeout(hideToast, 8000) };
 }
@@ -308,7 +317,7 @@ function hideToast() {
   if (el) el.hidden = true;
 }
 async function runToastUndo() {
-  if (!toast) return;
+  if (!toast || !toast.undo) return;
   const undo = toast.undo;
   hideToast();
   await undo();
@@ -552,6 +561,7 @@ async function api(path, opts) {
 
 function readLocation() {
   if (location.pathname.startsWith("/signoff")) tab = "signoff";
+  if (location.pathname.startsWith("/push")) tab = "push";
 }
 function go(nextTab) {
   // A new tab starts at its first card.
@@ -560,7 +570,7 @@ function go(nextTab) {
     currentIndex = 0;
   }
   tab = nextTab;
-  const path = tab === "signoff" ? "/signoff/" : "/";
+  const path = tab === "signoff" ? "/signoff/" : tab === "push" ? "/push/" : "/";
   if (location.pathname !== path) history.pushState(null, "", path);
   render();
   window.scrollTo(0, 0);
@@ -617,12 +627,21 @@ function renderTabs() {
     decided: decidedCount(),
     applied: (counts.applied || 0) + pc(["applied"]),
     signoff: signoffCount(),
+    push: pushTasks().length,
     backlog: backlogTasks.length,
   };
   document.getElementById("tabs").innerHTML = TABS.map(
     ([k, label]) =>
       '<button class="' + (k === tab ? "on" : "") + '" data-tab="' + k + '"' + tip(TAB_HELP[k]) + ">" + label + (k in n ? " (" + n[k] + ")" : "") + "</button>",
   ).join("");
+  // On a phone the bar scrolls sideways: keep the open tab in view.
+  const on = document.querySelector("#tabs button.on");
+  const nav = document.getElementById("tabs");
+  if (on && nav.scrollWidth > nav.clientWidth) {
+    const r = on.getBoundingClientRect();
+    const box = nav.getBoundingClientRect();
+    nav.scrollLeft += r.left - box.left - (box.width - r.width) / 2;
+  }
 }
 function taskLine(t, who, extra) {
   const m = t.title.match(/^\[\s*([a-z]+)\s*\|\s*([^\]]*?)\s*\]\s*(.*)$/s);
@@ -666,7 +685,7 @@ function renderStatus() {
   const c = s.lastClassify;
   h += "<br><span" + tip("classify") + ">Curator wake: " + (c ? clock(c.at) + " · " + (c.error ? '<span class="warn">' + esc(c.error) + "</span>" : c.found.length + " to classify") : "not yet") + "</span>";
   h += q("runs") + "</div>" + helpBox(["runs", "classify"], "runs");
-  h += '<div class="small"' + tip("signoff") + '>Sign-off: <a href="/signoff/" data-go="signoff">' + signoffCount() + "</a> " + q("signoff") + "</div>" + helpBox(["signoff"], "signoff");
+  h += '<div class="small"' + tip("signoff") + '>Sign-off: <a href="/signoff/" data-go="signoff">' + signoffCount() + '</a> · Push: <a href="/push/" data-go="push">' + pushTasks().length + "</a> " + q("signoff") + "</div>" + helpBox(["signoff", "tabPush"], "signoff");
   if (s.error) return h + '<div class="err">Board unreadable: ' + esc(s.error) + "</div>";
   const b = s.board;
   h += renderStates(b);
@@ -1135,17 +1154,56 @@ function commentBox(it, kind, n) {
   return '<textarea rows="1" class="comment" placeholder="Comment: a note, or new text in quotes" data-comment="' +
     esc(it.taskId) + ":" + kind + ":" + n + '"' + tip("comment") + ">" + esc(v) + "</textarea>";
 }
-function renderSignoff() {
+// The Sign-off stage: items that wait for Nil, or for their revert.
+function signoffItems() {
+  return signoffData.items.filter((x) => x.state === "waiting" || x.state === "rejected");
+}
+// The Push stage, from the diagram's own list, with each task's commit and
+// its approved item (if it had one).
+function pushTasks() {
+  const st = loopState && loopState.board && loopState.board.states.push;
+  if (!st) return [];
+  const un = Object.fromEntries((signoffData.unpushed || []).map((u) => [u.taskId, u]));
+  const item = Object.fromEntries(signoffData.items.map((i) => [i.taskId, i]));
+  return st.tasks.map((t) => ({ t, u: un[t.id], it: item[t.id] }));
+}
+function pushBanner() {
   const so = signoffData;
   const sha = so.lastSha ? so.lastSha.commit : null;
-  let h =
-    '<div class="banner ' + (so.push.ok ? "run" : "paused") + '"><div><b' + tip("push") + ">Push" + (loopState && loopState.board ? " (" + loopState.board.states.push.count + ")" : "") + "</b>" +
+  return (
+    '<div class="banner ' + (so.push.ok ? "run" : "paused") + '"><div><b' + tip("push") + ">Push (" + pushTasks().length + ")</b>" +
     '<div class="small"' + tip("sha") + ">main " + (sha ? "<code>" + esc(sha.slice(0, 10)) + "</code> · " + clock(so.lastSha.at) : "not reported yet") + "</div>" +
     (so.push.ok ? "" : '<div class="small">' + esc(so.push.reason) + "</div>") +
-    '</div><span><button class="btn primary" data-push="1"' + (so.push.ok ? "" : " disabled") + tip("push") + ">Approve and push</button> " + q("push") + "</span></div>" +
-    helpBox(["push", "sha"], "push") + '<div class="err" data-err="push"></div>';
-  if (!so.items.length) return h + '<div class="empty">No merged copy or visible change waits for sign-off.</div>';
-  for (const it of so.items) {
+    '</div><span><button class="btn primary" data-push="1"' + (so.push.ok ? "" : " disabled") + tip("push") + ">Push</button> " + q("push") + "</span></div>" +
+    helpBox(["push", "sha"], "push") + '<div class="err" data-err="push"></div>'
+  );
+}
+function renderPush() {
+  const list = pushTasks();
+  let h = '<div class="small"' + tip("tabPush") + ">" + esc(HELP.tabPush) + "</div>" + pushBanner();
+  if (!list.length) return h + '<div class="empty">Nothing waits for the push.</div>';
+  for (const { t, u, it } of list) {
+    const approved = it && it.state === "approved";
+    const status = approved
+      ? it.decision.edits
+        ? '<span class="ok"' + tip("editsFiled") + ">Approved, edits filed: task " + esc(it.decision.edits) + "</span>"
+        : '<span class="ok"' + tip("approvedSign") + ">Approved</span>"
+      : u && u.sent ? '<span' + tip("sentPush") + ">Push sent, waiting for Isomux Main</span>"
+      : '<span' + tip("nothingToSign") + ">Nothing to sign off</span>";
+    h += cardOpen(t.id, "signoff-card") + '<div class="sotitle">' + esc(t.title) + "</div>" +
+      '<div class="meta"><span>Task ' + idCopy(t.id) + "</span>" +
+      (u ? "<span" + tip("sha") + ">commit <code>" + esc(u.commit.slice(0, 10)) + "</code></span><span>merged " + clock(u.at) + "</span>" : "") + status + "</div>" +
+      '<div class="err" data-err="' + esc(t.id) + '"></div>' +
+      (approved && !it.decision.edits ? '<div class="actions"><button class="btn ghost" data-sundo="' + esc(t.id) + '"' + tip("undoApprove") + ">Undo</button></div>" : "") +
+      "</div>";
+  }
+  return h;
+}
+function renderSignoff() {
+  const items = signoffItems();
+  let h = '<div class="small"' + tip("tabSignoff") + ">" + esc(HELP.tabSignoff) + "</div>";
+  if (!items.length) return h + '<div class="empty">Nothing waits for your sign-off.</div>';
+  for (const it of items) {
     const waiting = it.state === "waiting";
     const stateText =
       it.state === "approved"
@@ -1154,7 +1212,7 @@ function renderSignoff() {
           : '<span class="ok"' + tip("approvedSign") + ">Approved</span>"
       : it.state === "rejected" ? '<span class="warn"' + tip("rejected") + ">Rejected, waiting for revert: " + esc(it.decision.note) + "</span>"
       : "<span" + tip("waitingSign") + ">Waiting for you</span>";
-    h += '<div class="card signoff-card"><div class="sotitle">' + esc(it.title) + "</div>" +
+    h += cardOpen(it.taskId, "signoff-card") + '<div class="sotitle">' + esc(it.title) + "</div>" +
       '<div class="meta"><span>Task ' + idCopy(it.taskId) + "</span><span" + tip("sha") + ">commit <code>" + esc(it.merged.commit.slice(0, 10)) + "</code></span><span>merged " +
       clock(it.merged.at) + "</span>" + stateText + "</div>";
     if (it.summary) h += '<div class="mdbody"' + tip("summary") + ">" + md(it.summary) + "</div>";
@@ -1202,8 +1260,6 @@ function renderSignoff() {
         '<div class="actions"><button class="btn primary" data-approve="' + esc(it.taskId) + '"' + tip("approve") + ">" + approveLabel(it.taskId) + "</button>" +
         '<button class="btn ghost" data-reject="' + esc(it.taskId) + '"' + tip("reject") + ">Reject</button>" + q("sactions", it.taskId) + "</div>" +
         helpBox(["approve", "reject", "comment", "rejectNote"], "sactions", it.taskId) + "</div>";
-    if (it.state === "approved" && !it.decision.edits)
-      h += '<div class="actions"><button class="btn ghost" data-sundo="' + esc(it.taskId) + '"' + tip("undoApprove") + ">Undo</button></div>";
     h += "</div>";
   }
   return h;
@@ -1225,7 +1281,7 @@ function render() {
     ? '<div class="split" style="--split:' + split.pct + '%"><div class="side" id="side">' + sidePane() + "</div>" +
       '<div class="divider" role="separator" aria-orientation="vertical"' + tip("divider") + "></div>" +
       '<div class="pane">' + renderTriage() + "</div></div>"
-    : tab === "status" ? renderStatus() : tab === "signoff" ? renderSignoff() : tab === "backlog" ? renderBacklog() : renderTriage();
+    : tab === "status" ? renderStatus() : tab === "signoff" ? renderSignoff() : tab === "push" ? renderPush() : tab === "backlog" ? renderBacklog() : renderTriage();
   syncCurrent();
   if (pulsing) {
     pulsing = false;
@@ -1434,12 +1490,19 @@ document.addEventListener("click", async (e) => {
     }, "Decided: " + id, () => undoPacket(id));
   }
   if (d.pundo) return undoPacket(d.pundo);
-  if (d.approve)
-    return act(d.approve, async () => {
-      clearTimeout(commentTimers[d.approve]);
-      if (soComments[d.approve]) await api("/api/signoff/" + encodeURIComponent(d.approve) + "/comments", { method: "POST", body: soComments[d.approve] });
-      await api("/api/signoff/" + encodeURIComponent(d.approve) + "/approve", { method: "POST" });
-    });
+  if (d.approve) {
+    const id = d.approve;
+    let edits = null;
+    return sendOff(id, t, async () => {
+      clearTimeout(commentTimers[id]);
+      if (soComments[id]) await api("/api/signoff/" + encodeURIComponent(id) + "/comments", { method: "POST", body: soComments[id] });
+      const it = await api("/api/signoff/" + encodeURIComponent(id) + "/approve", { method: "POST" });
+      edits = it && it.decision && it.decision.edits;
+    }, () =>
+      edits
+        ? { text: "Approved, edits filed: task " + edits, undo: null }
+        : { text: "Approved: " + id + ", moved to Push", undo: () => act(id, () => api("/api/signoff/" + encodeURIComponent(id) + "/undo", { method: "POST" })) });
+  }
   if (d.sundo) return act(d.sundo, () => api("/api/signoff/" + encodeURIComponent(d.sundo) + "/undo", { method: "POST" }));
   if (d.reject) {
     const note = (rejectNotes[d.reject] || "").trim();

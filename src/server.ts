@@ -88,10 +88,11 @@ POST /api/signoff/:taskId/merged  Isomux Main after EVERY merge, item or not: {"
 POST /api/signoff/:taskId/reverted  Isomux Main after a revert Nil asked for: {"commit"}. The item leaves the list.
 POST /api/signoff/pushed          Isomux Main after every push: {"commit"} (the sha it pushed). Every merge reported up to
                                   that sha leaves the Push state; returns {"pushed":[taskIds]}.
-GET  /api/signoff                 merged items, the main sha, and whether a push go is possible
+GET  /api/signoff                 merged items, the merges not pushed yet (unpushed: taskId, commit, sent = in the last push go),
+                                  the main sha, and whether a push go is possible
 Nil's buttons on the Sign-off tab: approve (with comments on any entry it also files a P0
 "[go | ready] Copy edits: <title>" task with them; the merged commit still goes out with the next push);
-reject (a note, plus any comments; messages Main "/isomux-main revert ..."); and "Approve and push"
+reject (a note, plus any comments; messages Main "/isomux-main revert ..."); and "Push" on the Push tab
 (messages Main "/isomux-main push go ..."). Comments are saved as Nil types
 (POST /api/signoff/:taskId/comments {"copy":{"0":"..."},"images":{"0":"..."}}).
 The app cannot tell which member pressed them.
@@ -375,7 +376,7 @@ async function route(req: Request): Promise<Response> {
   const path = url.pathname;
   const m = req.method;
 
-  if (m === "GET" && (path === "/" || path.startsWith("/signoff/"))) return html();
+  if (m === "GET" && (path === "/" || path.startsWith("/signoff/") || path.startsWith("/push/"))) return html();
   const img = path.match(/^\/img\/(packets|signoff)\/([^/]+)\/([^/]+)$/);
   if (m === "GET" && img)
     return serveImage(img[1] === "packets" ? packets.images : signoff.images, decodeURIComponent(img[2]), img[3]);
@@ -445,6 +446,7 @@ async function route(req: Request): Promise<Response> {
   if (m === "GET" && path === "/api/signoff")
     return json({
       items: signoff.visible().map((i) => ({ ...i, state: signoffState(i) })),
+      unpushed: signoff.unpushedList(),
       ...signoff.meta(),
       push: signoff.pushCheck(),
     });
