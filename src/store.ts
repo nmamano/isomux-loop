@@ -157,11 +157,17 @@ export class Store {
   // Upsert from the curator. A decision that is not applied yet is Nil's and
   // is never overwritten; an applied item may get a fresh proposal (a change
   // of direction), which reopens it.
-  propose(raws: unknown[]): { created: string[]; updated: string[]; skipped: string[] } {
+  // Nil, 2026-10-19: a P4 (backlog) task gets a card only to promote it, so a
+  // proposal that keeps a P4 task at P4 is refused, not stored.
+  propose(raws: unknown[]): { created: string[]; updated: string[]; skipped: string[]; refused: string[] } {
     const parsed = raws.map(parseProposal);
-    const out = { created: [] as string[], updated: [] as string[], skipped: [] as string[] };
+    const out = { created: [] as string[], updated: [] as string[], skipped: [] as string[], refused: [] as string[] };
     const at = this.now();
     for (const p of parsed) {
+      if (p.task.priority === "P4" && p.proposal.priority === "P4") {
+        out.refused.push(p.taskId);
+        continue;
+      }
       const existing = this.state.items[p.taskId];
       if (existing && existing.decision && itemState(existing) !== "applied") {
         out.skipped.push(p.taskId);

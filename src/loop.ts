@@ -147,10 +147,11 @@ export function status(agents: Agent[], tasks: Task[], n: number): Status {
 
 // Open tasks with no [<class> | <state>] tag and no card in the app (a
 // proposal or packet not written to the board yet): the curator has not
-// proposed them. P4 included; the curator proposes those too.
+// proposed them. P4 (backlog) is left out: it gets a card only when the
+// curator proposes to promote it (Nil, 2026-10-19).
 export function unclassified(tasks: Task[], cards: Set<string>): Task[] {
   return tasks
-    .filter((t) => inRoom(t) && t.status === "open" && parseTag(t.title) === null && !cards.has(t.id))
+    .filter((t) => inRoom(t) && t.status === "open" && t.priority !== "P4" && parseTag(t.title) === null && !cards.has(t.id))
     .sort((a, b) => a.createdAt - b.createdAt);
 }
 

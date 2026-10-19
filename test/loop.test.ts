@@ -186,7 +186,7 @@ describe("status", () => {
 });
 
 describe("curator wake", () => {
-  test("open, untagged tasks without a card, oldest first; P4 included", () => {
+  test("open, untagged P0-P3 tasks without a card, oldest first; P4 left out", () => {
     const a = task({ title: "new idea" });
     const b = task({ title: "backlog idea", priority: "P4" });
     const tasks = [
@@ -199,9 +199,7 @@ describe("curator wake", () => {
       task({ title: "elsewhere", roomId: "other" }),
     ];
     const card = tasks[3].id;
-    expect(unclassified(tasks, new Set([card])).map((t) => t.title)).toEqual(
-      [a, b].sort((x, y) => x.createdAt - y.createdAt).map((t) => t.title),
-    );
+    expect(unclassified(tasks, new Set([card])).map((t) => t.title)).toEqual([a.title]);
   });
 });
 

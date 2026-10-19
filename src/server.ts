@@ -34,6 +34,7 @@ GET  /api/items?state=open|decided|applied|failed|all
 POST /api/proposals               {"proposals":[{"taskId","task":{"title","description","priority","createdBy","createdAt"},"proposal":{"priority":"P0-P4","class":"auto|decide|authority","outcome":"keep|rescope|obsolete","title?","scope?","why"}}]}
                                   task.* is the board task as it is now. A rescope needs proposal.title and/or proposal.scope.
                                   An item with a decision not yet applied is skipped; an applied item gets the new proposal and reopens.
+                                  A P4 task is proposed only to promote it: a proposal keeping it at P4 comes back under "refused".
 DELETE /api/items/:taskId         withdraw a proposal (the task closed meanwhile)
 GET  /api/decisions               decisions to write to the board (decided, or failed earlier), triage and packets:
                                   each has "kind": "triage" (decision: priority, class, outcome, note) or
@@ -54,8 +55,8 @@ POST /api/pause | /api/resume     pause stops dispatch and the tick; the first t
 POST /api/settings                {"workers": 1-6}: the loop dispatches to Workers 1..N (also on the status page).
                                   Lowering N takes no task away; a worker above N keeps its tick while it holds a loop task.
 POST /api/dispatch | /api/tick    run one now (both refuse while paused)
-POST /api/classify                run the curator wake now: every 10 minutes, also while paused, open tasks with no tag
-                                  and no card go to the curator (a task is announced again after an hour); the same run
+POST /api/classify                run the curator wake now: every 10 minutes, also while paused, open P0-P3 tasks with no tag
+                                  and no card go to the curator (P4 is left out) (a task is announced again after an hour); the same run
                                   withdraws undecided triage cards whose task is done, obsolete or gone
 
 Sign-off before the push:

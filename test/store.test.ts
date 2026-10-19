@@ -113,4 +113,12 @@ describe("store", () => {
     ]);
     expect(store.list("open").map((i) => i.taskId)).toEqual(["old-p1", "new-p1", "old-p2"]);
   });
+
+  test("a P4 task gets a card only to promote it", () => {
+    const { store } = setup();
+    const p4 = (id: string, priority: string) => ({ ...proposal(id, { priority }), task: { ...proposal(id).task, priority: "P4" } });
+    const out = store.propose([p4("stay", "P4"), p4("up", "P3")]);
+    expect([out.refused, out.created]).toEqual([["stay"], ["up"]]);
+    expect(store.get("stay")).toBeUndefined();
+  });
 });

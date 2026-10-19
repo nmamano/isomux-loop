@@ -34,7 +34,8 @@ export function classify(t: Task, hasCard: boolean, needsSignoff = false): State
   if (needsSignoff) return "signoff";
   if (t.status === "done") return "done";
   if (t.status === "obsolete") return "obsolete";
-  if (t.priority === "P4") return "backlog";
+  // A P4 task with a card is a proposal to promote it: it waits in Triage.
+  if (t.priority === "P4") return hasCard ? "proposed" : "backlog";
   const tag = parseTag(t.title);
   if (tag?.class === "authority") return "never";
   if (tag?.state === "merging") return "merging";
