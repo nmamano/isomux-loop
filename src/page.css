@@ -188,6 +188,7 @@
   .links { display: flex; gap: 12px; font-size: 13px; margin: 6px 0; flex-wrap: wrap; }
   .mdbody { font-size: 14px; overflow-wrap: anywhere; }
   .mdbody p { margin: 6px 0; }
+  .answer { font-size: 15px; margin: 8px 0; }
   .mdbody .mdh { font-weight: 600; margin: 10px 0 4px; }
   .mdbody pre.code, .mdbody code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
   .mdbody pre.code { background: var(--chip); padding: 8px; border-radius: 8px; overflow-x: auto; white-space: pre; }

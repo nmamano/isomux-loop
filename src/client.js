@@ -112,12 +112,13 @@ const HELP = {
   before: "The screen before the change.",
   after: "The screen after the change.",
   new: "The text after the change. Marked words are new.",
-  packet: "A design packet: a worker hit a decision that needs you. You decide it like a triage card: a choice, a priority and a note. An option fills the choice and the note for you.",
-  question: "The question the worker needs you to answer.",
+  packet: "A design packet: a worker hit a decision that needs you. The line shows the task's priority, its title and its id; the question below is the heading. You decide it like a triage card: a choice, a priority and a note. An option fills the choice and the note for you.",
+  question: "The question the worker needs you to answer. Under it: the options, then the worker's answer and why it recommends that option, then the evidence.",
+  answer: "The worker's answer: what it recommends, and why.",
   options: "The options the worker found, with what each costs. Tapping one sets its choice and fills the note with it; you can still change both. They are in the worker's order; the label “recommended” marks the one the worker recommends.",
   presetRec: "The label “recommended” marks the option the worker recommends. It is not selected for you.",
   packetNote: "Your note goes to the curator. With go it is the design to build: the curator writes it at the top of the task. go needs one. Ctrl+Enter (Cmd+Enter on a Mac) confirms; Enter adds a line.",
-  packetBody: "The worker's full packet: findings, details and trade-offs.",
+  evidence: "The rest of the worker's packet: findings, details and trade-offs behind the answer.",
   images: "Screenshots from the worker. Tap one to open it in the viewer: a tap on the image zooms to 100%, arrows or a swipe go to the next, Esc or a tap outside closes.",
   links: "The branch with the work, and the diff when there is one.",
   packetConfirm: "Confirm saves your choice. The curator writes it to the task a few minutes after your last decision; until then you can undo it in Decided.",
@@ -1184,12 +1185,29 @@ function imagesHtml(kind, taskId, images) {
     "</div>"
   );
 }
+// Nil, 2026-10-20: the question is the card's one heading; the task title
+// moves to the meta line, shortened when long.
 function packetHead(p) {
+  const title = p.title.replace(/^\[[^\]]*\]\s*/, "");
+  const short = title.length > 60 ? title.slice(0, 57).trimEnd() + "…" : title;
   return (
-    '<div class="meta"' + tip("packet") + '><span class="badge">Design packet</span><span>' + esc(p.priority || "no priority") + "</span><span>Task " + idCopy(p.taskId) +
-    "</span><span>" + clock(p.createdAt) + "</span>" + q("packet", p.taskId) + "</div>" + helpBox(["packet"], "packet", p.taskId) +
-    '<div class="title">' + esc(p.title.replace(/^\[[^\]]*\]\s*/, "")) + "</div>"
+    '<div class="meta"' + tip("packet") + '><span class="badge">Design packet</span><span>' + esc(p.priority || "no priority") + '</span><span title="' + esc(title) + '">' + esc(short) +
+    "</span><span>Task " + idCopy(p.taskId) + "</span><span>" + clock(p.createdAt) + "</span>" + q("packet", p.taskId) + "</div>" + helpBox(["packet"], "packet", p.taskId) +
+    '<div class="question"' + tip("question") + ">" + esc(p.question) + "</div>"
   );
+}
+// The body's first paragraph (up to the first blank line outside a code
+// fence) is the answer, shown open; the rest is the evidence, folded.
+function splitBody(body) {
+  const lines = body.replace(/^\s*\n/, "").split("\n");
+  let fence = false;
+  let seen = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*```/.test(lines[i])) fence = !fence;
+    if (!fence && seen && !lines[i].trim()) return [lines.slice(0, i).join("\n"), lines.slice(i + 1).join("\n").trim()];
+    if (lines[i].trim()) seen = true;
+  }
+  return [lines.join("\n").trim(), ""];
 }
 function packetCard(p) {
   // The recommended option is marked, not picked (Nil, 2026-10-20).
@@ -1203,17 +1221,18 @@ function packetCard(p) {
   const pickRow = (name, kind, list) =>
     '<div class="row"><span class="label"' + tip(kind) + ">" + name + " " + q("p" + kind, p.taskId) + "</span>" +
     helpBox([kind].concat(list), "p" + kind, p.taskId) + chips(kind, list, k[kind], undefined, p.taskId, "ppick") + "</div>";
+  const [answer, evidence] = splitBody(p.body || "");
   let links = "";
   if (p.branch) links += "<span>Branch <code>" + esc(p.branch) + "</code></span>";
   if (p.diffUrl) links += '<a href="' + esc(p.diffUrl) + '" target="_blank" rel="noopener">Diff</a>';
   return (
     cardOpen(p.taskId, "packet") + packetHead(p) +
-    '<div class="question"' + tip("question") + ">" + esc(p.question) + "</div>" +
-    (p.body ? details("packet:" + p.taskId, "packetBody", "The packet", '<div class="mdbody">' + md(p.body) + "</div>") : "") +
-    imagesHtml("packets", p.taskId, p.images) +
-    (links ? '<div class="links"' + tip("links") + ">" + links + "</div>" : "") +
     '<div class="row"><span class="label"' + tip("options") + ">Options " + q("options", p.taskId) + "</span>" + helpBox(["options", "presetRec"], "options", p.taskId) +
     '<div class="options">' + p.options.map(opt).join("") + "</div></div>" +
+    (answer ? '<div class="mdbody answer"' + tip("answer") + ">" + md(answer) + "</div>" : "") +
+    (evidence ? details("packet:" + p.taskId, "evidence", "Evidence", '<div class="mdbody">' + md(evidence) + "</div>") : "") +
+    imagesHtml("packets", p.taskId, p.images) +
+    (links ? '<div class="links"' + tip("links") + ">" + links + "</div>" : "") +
     pickRow("Choice", "choice", CHOICES) +
     (tagged(k.choice) ? pickRow("Priority", "priority", PRIORITIES) : "") +
     '<textarea rows="1" placeholder="Note for the curator (go: the design to build)" data-pnote="' + esc(p.taskId) + '"' + tip("packetNote") + ">" + esc(k.note) + "</textarea>" +
@@ -1232,7 +1251,7 @@ function decidedPacketCard(p) {
     : "<span" + tip("pending") + ">Decided: waiting for the curator</span>";
   const rec = p.options.find((o) => o.recommended);
   let h =
-    cardOpen(p.taskId, "packet") + packetHead(p) + '<div class="question">' + esc(p.question) + "</div>" +
+    cardOpen(p.taskId, "packet") + packetHead(p) +
     '<div class="why"><span class="label"' + tip("decision") + ">Your decision</span><br><b>" + esc(summary(d)) + "</b>" +
     (d.preset ? ' <span class="small">from option ' + esc(d.preset) + "</span>" : "") +
     (rec ? ' <span class="small">(worker recommended ' + esc(rec.label) + ")</span>" : "") + (d.note ? "<br>" + esc(d.note) : "") + "</div>" +
