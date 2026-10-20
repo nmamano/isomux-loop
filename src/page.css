@@ -171,7 +171,22 @@
   .diagram .st-hold rect, .diagram .st-backlog rect, .diagram .st-obsolete rect { fill: var(--chip); }
   .diagram .st.picked rect { stroke-width: 3; }
   .picked-list { margin-bottom: 8px; }
-  .effort { border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; color: var(--fg); }
+  /* Effort: one purple scale, S light to XL strong, at the weight of a chip.
+     In dark mode the strong end is the brightest. */
+  .meta { align-items: center; }
+  .effort { border: 1px solid transparent; border-radius: 999px; padding: 3px 11px; font-size: 14px; font-weight: 700;
+    white-space: nowrap; background: var(--e-bg); color: var(--e-fg); border-color: var(--e-line, var(--e-bg)); }
+  .e-S { --e-bg: #f1ebff; --e-fg: #4b2a99; --e-line: #d9cdfa; }
+  .e-M { --e-bg: #d6c6fb; --e-fg: #351a7e; }
+  .e-L { --e-bg: #7a4fe3; --e-fg: #fff; }
+  .e-XL { --e-bg: #3f1a9e; --e-fg: #fff; }
+  .e-none { --e-bg: transparent; --e-fg: var(--muted); --e-line: var(--muted); border-style: dashed; font-weight: 600; }
+  @media (prefers-color-scheme: dark) {
+    .e-S { --e-bg: #2b2540; --e-fg: #d6c9ff; --e-line: #463a6e; }
+    .e-M { --e-bg: #463585; --e-fg: #ece6ff; }
+    .e-L { --e-bg: #7458dc; --e-fg: #fff; }
+    .e-XL { --e-bg: #b9a2ff; --e-fg: #1a0f38; }
+  }
   .badge { background: var(--accent); color: var(--accent-fg); border-radius: 6px; padding: 0 6px; font-weight: 600; }
   .card.packet { border-color: var(--accent); }
   .question { font-size: 16px; font-weight: 600; margin: 8px 0; overflow-wrap: anywhere; }

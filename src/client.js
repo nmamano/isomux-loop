@@ -791,8 +791,8 @@ function head(i, sel, showProposal) {
   const m = i.task.title.match(/^\[\s*([a-z]+)\s*\|\s*([^\]]*?)\s*\]/);
   const board = (i.task.priority || "no priority") + " · " + (m ? m[1] + " | " + m[2] : "no tag");
   return (
-    '<div class="meta"' + tip("head") + "><span>Board: " + esc(board) + " → yours: <b>" + esc(summary(sel)) +
-    "</b></span>" + (showProposal ? "<span>curator proposed: " + esc(summary(p)) + "</span>" : "") + effortChip(p) +
+    '<div class="meta"' + tip("head") + ">" + effortChip(p) + "<span>Board: " + esc(board) + " → yours: <b>" + esc(summary(sel)) +
+    "</b></span>" + (showProposal ? "<span>curator proposed: " + esc(summary(p)) + "</span>" : "") +
     q("head", i.taskId) + "</div>" + helpBox(["head", "effort"], "head", i.taskId) +
     '<div class="meta"' + tip("head") + "><span>Filed by " + esc(i.task.createdBy || "unknown") + "</span><span>" +
     filed(i.task.createdAt) + "</span><span>Task " + idCopy(i.taskId) + "</span></div>" +
@@ -800,9 +800,10 @@ function head(i, sel, showProposal) {
   );
 }
 // x: a proposal or a backlog task; "effort ?" when the curator gave none.
+// First on the card, in a color per size; the letter stays (Nil, 2026-10-20).
 function effortChip(x) {
   const e = x.effort || "?";
-  return '<span class="effort" title="' + esc(HELP[e] + (x.effortWhy ? " " + x.effortWhy : "")) + '">effort ' + e + "</span>";
+  return '<span class="effort e-' + (EFFORTS.includes(e) ? e : "none") + '" title="' + esc(HELP[e] + (x.effortWhy ? " " + x.effortWhy : "")) + '">effort ' + e + "</span>";
 }
 function body(i) {
   const p = i.proposal;
@@ -1283,8 +1284,7 @@ function backlogCards() {
   let h = "";
   for (const t of shown.map((e) => e.x)) {
     const k = backlogPicks[t.id];
-    h += cardOpen(t.id) + '<div class="meta"><span>Filed by ' + esc(t.createdBy || "unknown") + "</span><span>" + filed(t.createdAt) + "</span><span>Task " + idCopy(t.id) + "</span>" +
-      (t.effort ? effortChip(t) : "") + "</div>" +
+    h += cardOpen(t.id) + '<div class="meta">' + (t.effort ? effortChip(t) : "") + "<span>Filed by " + esc(t.createdBy || "unknown") + "</span><span>" + filed(t.createdAt) + "</span><span>Task " + idCopy(t.id) + "</span></div>" +
       '<div class="title">' + esc(t.title) + "</div>" +
       (t.description ? details("bdesc:" + t.id, "description", "Description", '<div class="desc">' + esc(t.description) + "</div>") : "");
     if (!k) {
