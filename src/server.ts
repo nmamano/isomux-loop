@@ -150,6 +150,7 @@ async function runDispatch(): Promise<Run<DispatchResult> | null> {
     lastDispatch = run;
     statusCache = null;
     if (run.result?.assigned.length) console.log(`dispatch ${JSON.stringify(run.result.assigned)}`);
+    if (run.result?.killed.length) console.log(`dispatch: held by a killed worker: ${run.result.killed.join(", ")}`);
   }
   return run;
 }
@@ -316,7 +317,7 @@ async function loopStatus(): Promise<Record<string, unknown>> {
         at: Date.now(),
         value: {
           ...status(agents, live, pause.workers),
-          states: stateViews(all, cards(), (t) => closed.get(t), signoffIds(), signoff.unpushedIds()),
+          states: stateViews(all, cards(), (t) => closed.get(t), signoffIds(), signoff.unpushedIds(), new Set(agents.map((a) => a.id))),
           closedPending: closed.missing(all).length,
         },
       };

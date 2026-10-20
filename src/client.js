@@ -151,6 +151,7 @@ const STATE_INFO = {
   decided: ["Decided", "You confirmed the card; the curator has not written it to the board yet. The same cards as the Decided tab, whatever the board says."],
   ready: ["Ready", "Tag [go | ready] or [design | ready], open, no assignee, P0-P3. The loop picks these."],
   working: ["Working", "In progress, assigned to an Isomux Worker."],
+  killed: ["Holder killed", "In progress, assigned to an Isomux Worker that was killed. A new worker with the same name cannot claim it. Isomux PM reassigns it (assignee to none, then to the new worker) or sets it back to ready."],
   merging: ["Merging", "Tag [<class> | merging], in progress, no assignee. Isomux Main merges it after CI."],
   signoff: ["Sign-off", "Merged, with copy or a visible change: its item on the Sign-off tab waits for your approve or reject, or for its revert. The board already says done."],
   hold: ["On hold", "Tag [hold | ...]. The loop never touches it."],
@@ -163,6 +164,8 @@ const BOX = {
   filed: [140, 10, 120], triage: [140, 90, 120], decided: [140, 170, 120], ready: [140, 250, 120], working: [140, 330, 120],
   merging: [140, 410, 120], signoff: [140, 490, 120], push: [140, 570, 120], done: [140, 650, 120],
   hold: [0, 40, 100], backlog: [0, 110, 100], obsolete: [0, 180, 100],
+  // Left of the lanes that run back to Ready.
+  killed: [0, 330, 86],
 };
 // [path, label x, label y, anchor, label, help, label runs up the lane, dashed]
 const EDGES = [
@@ -198,7 +201,7 @@ function diagram(states) {
   const boxes = Object.entries(BOX).map(([k, [x, y, w]]) => {
     const [label, help] = STATE_INFO[k];
     const n = states[k] ? states[k].count : 0;
-    const cls = "st st-" + k + (pickedState === k ? " picked" : "");
+    const cls = "st st-" + k + (pickedState === k ? " picked" : "") + (n === 0 ? " zero" : "");
     return '<g class="' + cls + '" data-state="' + k + '" role="button" tabindex="0"><title>' + esc(label + ": " + help + " Tap to list.") + "</title>" +
       '<rect x="' + (x + 1) + '" y="' + (y + 1) + '" width="' + (w - 2) + '" height="42" rx="9"/>' +
       '<text x="' + (x + w / 2) + '" y="' + (y + 19) + '" text-anchor="middle" font-size="12" font-weight="600">' + esc(label) + "</text>" +
@@ -748,7 +751,8 @@ function renderStatus() {
   const t = s.lastTick;
   h += '<div class="small"' + tip("runs") + ">Last dispatch: " + (d ? clock(d.at) : "not yet");
   if (d && d.error) h += ' · <span class="warn">' + esc(d.error) + "</span>";
-  else if (d && d.result) h += " · " + d.result.assigned.length + " assigned" + (d.result.errors.length ? ' · <span class="warn">' + esc(d.result.errors.join("; ")) + "</span>" : "");
+  else if (d && d.result) h += " · " + d.result.assigned.length + " assigned" + (d.result.errors.length ? ' · <span class="warn">' + esc(d.result.errors.join("; ")) + "</span>" : "") +
+    (d.result.killed && d.result.killed.length ? ' · <span class="warn">held by a killed worker: ' + linkIds(d.result.killed.join(", ")) + "</span>" : "");
   h += "<br>Last tick: " + (t ? clock(t.at) : "not yet");
   if (t && t.error) h += ' · <span class="warn">' + esc(t.error) + "</span>";
   const c = s.lastClassify;

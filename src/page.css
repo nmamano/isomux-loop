@@ -204,6 +204,9 @@
   .shot { width: 200px; }
   .shot img { width: 200px; height: 130px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); display: block; }
   .diagram .st-signoff rect { fill: color-mix(in srgb, var(--warn) 14%, var(--card)); stroke: var(--warn); }
+  /* Holder killed needs Isomux PM only when it holds a task. */
+  .diagram .st-killed rect { fill: var(--chip); }
+  .diagram .st-killed:not(.zero) rect { fill: color-mix(in srgb, var(--warn) 14%, var(--card)); stroke: var(--warn); }
   .pairimg { display: block; }
   .pairimg img { width: 100%; height: auto; max-height: 520px; object-fit: contain; border-radius: 8px;
     border: 1px solid var(--line); background: var(--card); display: block; }

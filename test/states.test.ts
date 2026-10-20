@@ -11,6 +11,17 @@ function task(over: Partial<Task> & { title: string }): Task {
 }
 
 describe("classify", () => {
+  test("a loop worker's task whose holder id is not live is held by a killed worker; no id, or no agent list, stays working", () => {
+    const live = new Set(["w1-new"]);
+    const held = (over: Partial<Task>) => task({ title: "[go | ready] x", status: "in_progress", assignee: "Isomux Worker 1", ...over });
+    expect(classify(held({ assigneeAgentId: "w1-old" }), null, false, false, live)).toBe("killed");
+    expect(classify(held({ assigneeAgentId: "w1-new" }), null, false, false, live)).toBe("working");
+    expect(classify(held({}), null, false, false, live)).toBe("working");
+    expect(classify(held({ assigneeAgentId: "w1-old" }), null)).toBe("working");
+    expect(classify(held({ assigneeAgentId: "lead-old", assignee: "Isomux Lead", title: "untagged" }), null, false, false, live)).toBe("other");
+    expect(stateViews([held({ assigneeAgentId: "w1-old" })], new Map(), () => undefined, new Set(), new Set(), live).killed.count).toBe(1);
+  });
+
   test("each board shape lands in its one state", () => {
     const cases: [Partial<Task> & { title: string }, Card, string][] = [
       [{ title: "untagged" }, null, "filed"],

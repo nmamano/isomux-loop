@@ -47,19 +47,26 @@ function workers(agents: Agent[], n = WORKER_NAMES.length): Agent[] {
   );
 }
 
-function heldBy(tasks: Task[], name: string): Task[] {
+// Since isomux task 83f71be9 a task carries its holder's agent id: a new
+// worker with a killed worker's name does not hold the killed one's task.
+// A row with no id matches by name, as before.
+export function holds(t: Task, worker: Agent): boolean {
+  return t.assigneeAgentId ? t.assigneeAgentId === worker.id : t.assignee === worker.name;
+}
+
+function heldBy(tasks: Task[], worker: Agent): Task[] {
   return tasks
-    .filter((t) => inRoom(t) && t.status === "in_progress" && t.assignee === name)
+    .filter((t) => inRoom(t) && t.status === "in_progress" && holds(t, worker))
     .sort((a, b) => (a.priority ?? "").localeCompare(b.priority ?? "") || a.createdAt - b.createdAt);
 }
 
 export function holdings(agents: Agent[], tasks: Task[]): Holding[] {
-  return workers(agents).flatMap((w) => heldBy(tasks, w.name).map((task) => ({ worker: w, task })));
+  return workers(agents).flatMap((w) => heldBy(tasks, w).map((task) => ({ worker: w, task })));
 }
 
 // Only Workers 1..n take new tasks.
 export function freeWorkers(agents: Agent[], tasks: Task[], n: number): Agent[] {
-  return workers(agents, n).filter((w) => heldBy(tasks, w.name).length === 0);
+  return workers(agents, n).filter((w) => heldBy(tasks, w).length === 0);
 }
 
 export function withState(tasks: Task[], state: string): Task[] {
@@ -69,6 +76,8 @@ export function withState(tasks: Task[], state: string): Task[] {
 export type DispatchResult = {
   assigned: { worker: string; taskId: string; messaged: boolean }[];
   conflicts: string[];
+  // Ready tasks the server refused because their holder is a killed agent.
+  killed: string[];
   errors: string[];
 };
 
@@ -88,7 +97,7 @@ export function ageLine(createdAt: number, editedAt: number | null | undefined, 
 }
 
 export async function dispatch(office: Office, n: number, now = Date.now()): Promise<DispatchResult> {
-  const out: DispatchResult = { assigned: [], conflicts: [], errors: [] };
+  const out: DispatchResult = { assigned: [], conflicts: [], killed: [], errors: [] };
   const [tasks, agents] = await Promise.all([office.tasks(), office.agents()]);
   const queue = readyQueue(tasks);
   for (const worker of freeWorkers(agents, tasks, n)) {
@@ -100,8 +109,10 @@ export async function dispatch(office: Office, n: number, now = Date.now()): Pro
         status: "in_progress",
       });
       if (!res.ok) {
-        // 409: someone changed the task since our read; it is not ours to take.
-        if (res.status === 409) out.conflicts.push(task.id);
+        // 409: someone changed the task since our read, or its holder is a
+        // killed agent; either way it is not ours to take.
+        if (res.status === 409 && res.killed) out.killed.push(task.id);
+        else if (res.status === 409) out.conflicts.push(task.id);
         else out.errors.push(`PATCH ${task.id} answered ${res.status}`);
         continue;
       }
@@ -140,7 +151,7 @@ export async function tick(office: Office, n: number): Promise<TickResult> {
   const [tasks, agents] = await Promise.all([office.tasks(), office.agents()]);
   for (const w of workers(agents)) {
     const inLoop = WORKER_NAMES.indexOf(w.name) < n;
-    const held = heldBy(tasks, w.name).filter((t) => inLoop || DISPATCH_CLASSES.includes(parseTag(t.title)?.class ?? ""));
+    const held = heldBy(tasks, w).filter((t) => inLoop || DISPATCH_CLASSES.includes(parseTag(t.title)?.class ?? ""));
     if (held.length === 0 || w.inFlightTurn) continue;
     if (await office.message(workerTickText(held[0].id), w.id))
       out.nudged.push({ worker: w.name, taskId: held[0].id });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ageLine, dispatch, dueIn, freeWorkers, parseTag, readyQueue, staleCards, status, tick, unclassified } from "../src/loop";
+import { ageLine, dispatch, dueIn, freeWorkers, holdings, parseTag, readyQueue, staleCards, status, tick, unclassified } from "../src/loop";
 import type { Agent, Office, PatchResult, Task } from "../src/office";
 
 const ROOM = "e6818e47";
@@ -14,7 +14,7 @@ function agent(name: string, busy = false): Agent {
 }
 
 // An office stub that applies PATCHes to its task list, with optional 409s.
-function stubOffice(tasks: Task[], agents: Agent[], conflict: string[] = [], edits: Record<string, number> = {}, brokenHistory = "") {
+function stubOffice(tasks: Task[], agents: Agent[], conflict: string[] = [], edits: Record<string, number> = {}, brokenHistory = "", killed: string[] = []) {
   const messages: { text: string; to?: string }[] = [];
   const patches: { id: string; body: Record<string, unknown> }[] = [];
   const office: Office = {
@@ -33,6 +33,7 @@ function stubOffice(tasks: Task[], agents: Agent[], conflict: string[] = [], edi
     async patchTask(id, body): Promise<PatchResult> {
       patches.push({ id, body });
       if (conflict.includes(id)) return { ok: false, status: 409 };
+      if (killed.includes(id)) return { ok: false, status: 409, killed: true };
       const t = tasks.find((x) => x.id === id)!;
       if (body.version !== t.version) return { ok: false, status: 409 };
       Object.assign(t, { assignee: body.assignee, status: body.status, version: t.version + "+" });
@@ -141,6 +142,27 @@ describe("dispatch", () => {
     expect(res.conflicts).toEqual([a.id]);
     expect(res.assigned.map((x) => x.taskId)).toEqual([b.id]);
     expect(messages.map((m) => m.text.split("\n")[0])).toEqual([`/isomux-loop-worker ${b.id}`]);
+  });
+
+  test("a new worker with a killed worker's name does not hold its task: it counts as free and gets no tick for it", async () => {
+    const w1 = agent("Isomux Worker 1");
+    const dead = task({ title: "[go | ready] dead", status: "in_progress", assignee: "Isomux Worker 1", assigneeAgentId: "killed-id" });
+    expect(holdings([w1], [dead])).toEqual([]);
+    expect(freeWorkers([w1], [dead], 2).map((a) => a.name)).toEqual(["Isomux Worker 1"]);
+    const { office, messages } = stubOffice([dead], [w1]);
+    expect((await tick(office, 2)).nudged).toEqual([]);
+    expect(messages).toEqual([]);
+    // Its own id, or no id at all (an older row), still holds it.
+    for (const t of [{ ...dead, assigneeAgentId: w1.id }, { ...dead, assigneeAgentId: undefined }])
+      expect(freeWorkers([w1], [t], 2)).toEqual([]);
+  });
+
+  test("a 409 for a killed holder is reported as such, not as a conflict, and the worker takes the next task", async () => {
+    const a = task({ title: "[go | ready] A", priority: "P1" });
+    const b = task({ title: "[go | ready] B", priority: "P2" });
+    const { office } = stubOffice([a, b], [agent("Isomux Worker 1")], [], {}, "", [a.id]);
+    const res = await dispatch(office, 2, NOW);
+    expect([res.killed, res.conflicts, res.assigned.map((x) => x.taskId)]).toEqual([[a.id], [], [b.id]]);
   });
 
   test("a worker missing from the agent list gets nothing", async () => {

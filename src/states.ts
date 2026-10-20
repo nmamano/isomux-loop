@@ -14,6 +14,7 @@ export const STATES = [
   "decided",
   "ready",
   "working",
+  "killed",
   "merging",
   "signoff",
   "push",
@@ -37,7 +38,8 @@ export type Card = "open" | "decided" | null;
 // counts in two states. needsSignoff: the app holds a merged sign-off item
 // for it that waits for Nil or waits for its revert (the board already says
 // done). unpushed: Main reported its merge, and no push since.
-export function classify(t: Task, card: Card, needsSignoff = false, unpushed = false): StateKey {
+// liveIds: the ids of the live agents (unknown: no task counts as killed).
+export function classify(t: Task, card: Card, needsSignoff = false, unpushed = false, liveIds?: Set<string>): StateKey {
   // An open card is Triage and a decided one Decided whatever the board says,
   // so these states and their tabs count the same cards.
   if (card === "open") return "triage";
@@ -51,7 +53,10 @@ export function classify(t: Task, card: Card, needsSignoff = false, unpushed = f
   // "authority" is the class's old name (2026-10-19).
   if (tag?.class === "hold" || tag?.class === "authority") return "hold";
   if (tag?.state === "merging") return "merging";
-  if (t.status === "in_progress" && WORKER_NAMES.includes(t.assignee ?? "")) return "working";
+  if (t.status === "in_progress" && WORKER_NAMES.includes(t.assignee ?? ""))
+    // Its holder was killed (isomux task 83f71be9): a new worker with the
+    // name cannot claim it; Isomux PM reassigns or reopens it.
+    return t.assigneeAgentId && liveIds && !liveIds.has(t.assigneeAgentId) ? "killed" : "working";
   if (
     tag &&
     LOOP_CLASSES.includes(tag.class) &&
@@ -85,10 +90,11 @@ export function stateViews(
   closedAt: (t: Task) => number | undefined,
   signoff: Set<string> = new Set(),
   unpushed: Set<string> = new Set(),
+  liveIds?: Set<string>,
 ): Record<StateKey, StateView> {
   const groups = {} as Record<StateKey, Task[]>;
   for (const k of [...STATES, "other" as const]) groups[k] = [];
-  for (const t of tasks) groups[classify(t, cards.get(t.id) ?? null, signoff.has(t.id), unpushed.has(t.id))].push(t);
+  for (const t of tasks) groups[classify(t, cards.get(t.id) ?? null, signoff.has(t.id), unpushed.has(t.id), liveIds)].push(t);
   const out = {} as Record<StateKey, StateView>;
   for (const [k, list] of Object.entries(groups) as [StateKey, Task[]][]) {
     if (k === "done" || k === "obsolete") {

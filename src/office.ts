@@ -11,6 +11,9 @@ export type Task = {
   status: string;
   priority?: string | null;
   assignee?: string | null;
+  // Since isomux task 83f71be9: the id of the live agent the assignee named
+  // when it was set; absent for members and older rows.
+  assigneeAgentId?: string;
   createdAt: number;
   roomId?: string;
   version: string;
@@ -24,7 +27,8 @@ export type Agent = {
   pendingPrompt?: unknown | null;
 };
 
-export type PatchResult = { ok: true; task: Task } | { ok: false; status: number };
+// killed: a 409 because the task's holder is a killed agent (task_held).
+export type PatchResult = { ok: true; task: Task } | { ok: false; status: number; killed?: boolean };
 
 export interface Office {
   // Open and in-progress tasks of the loop's room (the board's default listing).
@@ -87,7 +91,10 @@ export function httpOffice(token: string, base = OFFICE): Office {
         headers: { ...auth, "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (!res.ok) return { ok: false, status: res.status };
+      if (!res.ok) {
+        const err = res.status === 409 ? ((await res.json().catch(() => null)) as { error?: { killed?: unknown } } | null) : null;
+        return { ok: false, status: res.status, ...(err?.error?.killed === true ? { killed: true } : {}) };
+      }
       return { ok: true, task: (await res.json()) as Task };
     },
     async message(text, targetAgentId) {
