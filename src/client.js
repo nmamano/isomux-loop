@@ -95,7 +95,7 @@ const HELP = {
   keys: "Keyboard shortcuts for triage: j/k move between cards, g d h b o pick, 0-3 set the priority, Ctrl+Enter (Cmd+Enter) confirms. Press ? to show the list.",
   viewbar: "Sort and filter the cards. The tab count and the diagram stay the full total; the keys follow the order shown. Your browser keeps these until Clear.",
   search: "Matches the title, the description, the task id and the curator's reason. / puts the cursor here; Esc leaves.",
-  filters: "Combine any chips: in one row a card matches any chip, across rows it must match each row. A filter on the proposal or the effort hides design packets. Change compares the proposal with the board's priority.",
+  filters: "Combine any chips: in one row a card matches any chip, across rows it must match each row. Change compares the proposal with the board's priority. Design packets: Priority matches their board priority, the other rows let them pass, and only Kind and the search can hide them.",
   clearView: "Back to the default order with no filters.",
   toggleAll: "Expand or collapse every description and packet in this list at once.",
   splitView: "Show the task-state diagram beside Triage. It updates after each decision and every 15 s. Drag the line between them to change the widths. A narrow screen shows Triage only.",
@@ -943,14 +943,20 @@ function filers(list) {
   }
   return Object.keys(n).sort((a, b) => n[b] - n[a] || a.localeCompare(b)).slice(0, 10).map((b) => [b, b + " (" + n[b] + ")"]);
 }
+// Nil, 2026-10-20: a filter never hides a design packet by accident. Priority
+// matches a packet by its board priority; the rows a packet has no value for
+// (Proposed, Effort, Change, Filed by) let it pass. Only Kind and the search
+// can hide one.
 function matches(f, v) {
-  // A filter on the proposal hides packets, which have none.
+  const pk = f.kind === "packet";
   if (v.kind && v.kind.length && !v.kind.includes(f.kind)) return false;
-  if (v.choice && v.choice.length && !v.choice.includes(f.choice)) return false;
-  if (v.pri && v.pri.length && !v.pri.includes(f.proposed)) return false;
-  if (v.effort && v.effort.length && !v.effort.includes(f.effort)) return false;
-  if (v.change && v.change.length && !v.change.includes(change(f))) return false;
-  if (v.by && v.by.length && !v.by.includes(f.by)) return false;
+  if (v.pri && v.pri.length && !v.pri.includes(pk ? f.board : f.proposed)) return false;
+  if (!pk) {
+    if (v.choice && v.choice.length && !v.choice.includes(f.choice)) return false;
+    if (v.effort && v.effort.length && !v.effort.includes(f.effort)) return false;
+    if (v.change && v.change.length && !v.change.includes(change(f))) return false;
+    if (v.by && v.by.length && !v.by.includes(f.by)) return false;
+  }
   const q = v.q.trim().toLowerCase();
   return !q || f.text.toLowerCase().includes(q);
 }
