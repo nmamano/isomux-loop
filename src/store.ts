@@ -14,6 +14,9 @@ export const PRIORITIES = ["P0", "P1", "P2", "P3", "P4"] as const;
 // change anything, and the curator applies it with its judgement. Cards
 // stored in the old shape are migrated on load.
 export const CHOICES = ["go", "design", "hold", "backlog", "obsolete"] as const;
+// Nil, 2026-10-20: Nil may also answer rewrite (not a proposal choice): the
+// curator rewrites the task as his note asks and proposes it again.
+export const DECISIONS = [...CHOICES, "rewrite"] as const;
 export const TAGGED = ["go", "design", "hold"] as const;
 export const LOOP_PRIORITIES = ["P0", "P1", "P2", "P3"] as const;
 // The curator's estimate of the work (Nil, 2026-10-20). S: under an hour of
@@ -24,7 +27,8 @@ export type Effort = (typeof EFFORTS)[number];
 export type Priority = (typeof PRIORITIES)[number];
 export type LoopPriority = (typeof LOOP_PRIORITIES)[number];
 export type Choice = (typeof CHOICES)[number];
-export const tagged = (c: Choice) => (TAGGED as readonly string[]).includes(c);
+export type DecisionChoice = (typeof DECISIONS)[number];
+export const tagged = (c: string) => (TAGGED as readonly string[]).includes(c);
 
 export type TaskSnapshot = {
   title: string;
@@ -48,7 +52,7 @@ export type ProposalBody = {
 };
 
 export type Decision = {
-  choice: Choice;
+  choice: DecisionChoice;
   priority: LoopPriority | null;
   note: string;
   decidedAt: number;
@@ -155,9 +159,16 @@ function migrate(state: State): boolean {
 }
 
 // A decision from the page or the Backlog tab: go/design/hold need P0-P3.
-export function choiceAndPriority(r: Record<string, unknown>, allowed: readonly Choice[]): { choice: Choice; priority: LoopPriority | null } {
+export function choiceAndPriority<T extends string>(r: Record<string, unknown>, allowed: readonly T[]): { choice: T; priority: LoopPriority | null } {
   const choice = oneOf(r.choice, allowed, "choice");
   return { choice, priority: tagged(choice) ? oneOf(r.priority, LOOP_PRIORITIES, "priority") : null };
+}
+
+// A rewrite says what to write differently, so it needs a note.
+export function decisionNote(choice: string, raw: unknown): string {
+  const note = str(raw, "note", 4000, true) ?? "";
+  if (choice === "rewrite" && !note.trim()) throw new ValidationError("rewrite needs a note: what to write differently");
+  return note;
 }
 
 export class Store {
@@ -264,11 +275,8 @@ export class Store {
     if (itemState(item) === "applied") throw new ValidationError("already applied");
     const r = (raw ?? {}) as Record<string, unknown>;
     const at = this.now();
-    item.decision = {
-      ...choiceAndPriority(r, CHOICES),
-      note: str(r.note, "note", 4000, true) ?? "",
-      decidedAt: at,
-    };
+    const c = choiceAndPriority(r, DECISIONS);
+    item.decision = { ...c, note: decisionNote(c.choice, r.note), decidedAt: at };
     item.applied = null;
     this.state.notify.lastDecisionAt = at;
     this.save();

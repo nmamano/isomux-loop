@@ -74,6 +74,20 @@ describe("store", () => {
     expect(itemState(store.get("a")!)).toBe("open");
   });
 
+  test("rewrite: Nil's answer only, with a note and no priority; the curator's next proposal opens the card again", () => {
+    const { store } = setup();
+    expect(() => store.propose([proposal("a", { choice: "rewrite", priority: null })])).toThrow(ValidationError);
+    store.propose([proposal("a")]);
+    expect(() => store.decide("a", { choice: "rewrite", note: " " })).toThrow(ValidationError);
+    store.decide("a", { choice: "rewrite", priority: "P1", note: "say what breaks for a member" });
+    const d = store.get("a")!.decision!;
+    expect([d.choice, d.priority]).toEqual(["rewrite", null]);
+    expect(store.pending().map((i) => i.taskId)).toEqual(["a"]);
+    store.markApplied([{ taskId: "a", decidedAt: d.decidedAt, ok: true }]);
+    expect(store.propose([proposal("a", { why: "rewritten as asked" })]).updated).toEqual(["a"]);
+    expect([itemState(store.get("a")!), store.get("a")!.proposal.why]).toEqual(["open", "rewritten as asked"]);
+  });
+
   test("a failed apply stays pending and shows as failed", () => {
     const { store } = setup();
     store.propose([proposal("a")]);

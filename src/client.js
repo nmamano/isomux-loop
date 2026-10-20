@@ -3,6 +3,9 @@
 // go, design and hold take a priority; backlog sets P4; obsolete closes.
 const PRIORITIES = ["P0", "P1", "P2", "P3"];
 const CHOICES = ["go", "design", "hold", "backlog", "obsolete"];
+// Nil, 2026-10-20: rewrite is his answer, not a proposal: the curator rewrites
+// the task as his note asks and proposes it again.
+const DECISIONS = CHOICES.concat("rewrite");
 const TAGGED = ["go", "design", "hold"];
 const tagged = (c) => TAGGED.includes(c);
 const CLASS_LABEL = { hold: "on hold" };
@@ -48,7 +51,8 @@ const HELP = {
   hold: "On hold (tag [hold | ...]): the loop never touches it. Also for work run outside the loop.",
   backlog: "backlog: the task goes to P4 with no tag. The loop never picks it; the Backlog tab lists it.",
   obsolete: "obsolete: the task is closed, with the reason. Reversible: it can be reopened.",
-  choice: "What happens to the task. go, design and on hold take a priority below; a proposed title and scope come with them.",
+  rewrite: "rewrite: you do not decide yet. Your note says what to write differently; the curator rewrites the task (or the packet) and the card comes back to Triage. Needs a note.",
+  choice: "What happens to the task. go, design and on hold take a priority below; a proposed title and scope come with them. rewrite sends it back to the curator to be written again, as your note asks.",
   priority: "Which priority the task gets. The loop takes P0 first, then P1 to P3, oldest first within one.",
   head: "Board: the task's priority and tag on the board now. Yours: what is selected in the rows below; it changes as you tap. The dot on a chip marks the curator's proposal. Nothing in these lines needs you: you decide with the rows below.",
   dot: "The dot marks the curator's proposal.",
@@ -92,7 +96,7 @@ const HELP = {
   tabBacklog: "The Backlog state: P4 tasks with no card. The loop never picks them. Bring one in as go, design or on hold, with a priority.",
   copyId: "Copy the task id.",
   idLink: "Go to this task's card: it opens the tab that holds it and flashes the card.",
-  keys: "Keyboard shortcuts for triage: j/k move between cards, g d h b o pick, 0-3 set the priority, Ctrl+Enter (Cmd+Enter) confirms. Press ? to show the list.",
+  keys: "Keyboard shortcuts for triage: j/k move between cards, g d h b o w pick, 0-3 set the priority, Ctrl+Enter (Cmd+Enter) confirms. Press ? to show the list.",
   viewbar: "Sort and filter the cards. The tab count and the diagram stay the full total; the keys follow the order shown. Your browser keeps these until Clear.",
   search: "Matches the title, the description, the task id and the curator's reason. / puts the cursor here; Esc leaves.",
   filters: "Combine any chips: in one row a card matches any chip, across rows it must match each row. Change compares the proposal with the board's priority. Design packets: Priority matches their board priority, the other rows let them pass, and only Kind and the search can hide them.",
@@ -243,10 +247,10 @@ function helpBox(keys, key, id) {
 // click does, so the same checks and errors apply.
 let currentId = null;
 let currentIndex = 0;
-const KEY_CHOICE = { g: "go", d: "design", h: "hold", b: "backlog", o: "obsolete" };
+const KEY_CHOICE = { g: "go", d: "design", h: "hold", b: "backlog", o: "obsolete", w: "rewrite" };
 const KEY_HELP = [
   ["j / ↓, k / ↑", "next / previous card"],
-  ["g d h b o", "go, design, on hold, backlog, obsolete"],
+  ["g d h b o w", "go, design, on hold, backlog, obsolete, rewrite"],
   ["0 1 2 3", "priority P0-P3 (go, design, on hold)"],
   ["a", "fill in the curator's proposal, or the worker's recommended option (does not confirm)"],
   ["p", "packet: fill in the next option (choice and note)"],
@@ -833,9 +837,9 @@ function openCard(i) {
   const k = picks[i.taskId] || (picks[i.taskId] = { choice: p.choice, priority: p.priority || board, note: "" });
   return (
     cardOpen(i.taskId) + head(i, k, false) + body(i) +
-    row("Choice", "choice", CHOICES, k, p, i.taskId) +
+    row("Choice", "choice", DECISIONS, k, p, i.taskId) +
     (tagged(k.choice) ? row("Priority", "priority", PRIORITIES, k, p, i.taskId) : "") +
-    '<textarea rows="1" placeholder="Note for the curator (optional)" data-note="' + esc(i.taskId) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
+    '<textarea rows="1" placeholder="' + (k.choice === "rewrite" ? "Note: what to write differently (needed)" : "Note for the curator (optional)") + '" data-note="' + esc(i.taskId) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
     '<div class="err" data-err="' + esc(i.taskId) + '"></div>' +
     '<div class="actions"><button class="btn primary" data-decide="' + esc(i.taskId) + '"' + tip("confirm") + ">Confirm</button>" +
     '<button class="btn ghost" data-later="' + esc(i.taskId) + '"' + tip("later") + ">Later</button>" + q("actions", i.taskId) + "</div>" +
@@ -1233,9 +1237,9 @@ function packetCard(p) {
     (evidence ? details("packet:" + p.taskId, "evidence", "Evidence", '<div class="mdbody">' + md(evidence) + "</div>") : "") +
     imagesHtml("packets", p.taskId, p.images) +
     (links ? '<div class="links"' + tip("links") + ">" + links + "</div>" : "") +
-    pickRow("Choice", "choice", CHOICES) +
+    pickRow("Choice", "choice", DECISIONS) +
     (tagged(k.choice) ? pickRow("Priority", "priority", PRIORITIES) : "") +
-    '<textarea rows="1" placeholder="Note for the curator (go: the design to build)" data-pnote="' + esc(p.taskId) + '"' + tip("packetNote") + ">" + esc(k.note) + "</textarea>" +
+    '<textarea rows="1" placeholder="' + (k.choice === "rewrite" ? "Note: what to write differently (needed)" : "Note for the curator (go: the design to build)") + '" data-pnote="' + esc(p.taskId) + '"' + tip("packetNote") + ">" + esc(k.note) + "</textarea>" +
     '<div class="err" data-err="' + esc(p.taskId) + '"></div>' +
     '<div class="actions"><button class="btn primary" data-pdecide="' + esc(p.taskId) + '"' + tip("packetConfirm") + ">Confirm</button>" +
     '<button class="btn ghost" data-later="' + esc(p.taskId) + '"' + tip("later") + ">Later</button>" + q("pactions", p.taskId) + "</div>" +
@@ -1735,6 +1739,7 @@ document.addEventListener("click", async (e) => {
     if (!k.choice) return showErr(d.pdecide, "Pick a choice or an option first.");
     if (tagged(k.choice) && !k.priority) return showErr(d.pdecide, "Pick a priority first.");
     if (k.choice === "go" && !k.note.trim()) return showErr(d.pdecide, "go needs a note: the design to build. An option fills it.");
+    if (k.choice === "rewrite" && !k.note.trim()) return showErr(d.pdecide, "rewrite needs a note: what to write differently.");
     const id = d.pdecide;
     return sendOff(id, t, async () => {
       await api("/api/packets/" + encodeURIComponent(id) + "/decide", { method: "POST", body: k });
@@ -1800,6 +1805,7 @@ document.addEventListener("click", async (e) => {
     const id = d.decide;
     const k = picks[id];
     if (tagged(k.choice) && !k.priority) return showErr(id, "Pick a priority first.");
+    if (k.choice === "rewrite" && !k.note.trim()) return showErr(id, "rewrite needs a note: what to write differently.");
     return sendOff(id, t, async () => {
       await api("/api/items/" + encodeURIComponent(id) + "/decide", { method: "POST", body: k });
       later.delete(id);

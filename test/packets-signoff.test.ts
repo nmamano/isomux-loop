@@ -73,6 +73,17 @@ describe("packets", () => {
     expect(JSON.parse(readFileSync(join(dir, "packets.json"), "utf8")).abc12345.decision.choice).toBe("go");
   });
 
+  test("rewrite on a packet needs a note; the re-posted packet is open again", () => {
+    const s = new PacketStore(tempDir(), () => 9);
+    s.put(packet(), task);
+    expect(() => s.decide("abc12345", { choice: "rewrite" })).toThrow(ValidationError);
+    expect(s.decide("abc12345", { choice: "rewrite", priority: "P1", note: "shorter question" }).decision).toEqual({ choice: "rewrite", priority: null, note: "shorter question", decidedAt: 9 });
+    s.markApplied("abc12345", 9, true);
+    expect(packetState(s.get("abc12345")!)).toBe("applied");
+    s.put(packet({ question: "Grid or list?" }), task);
+    expect(packetState(s.get("abc12345")!)).toBe("open");
+  });
+
   test("undo: before and after the apply; a report of an undone decision still counts", () => {
     let t = 1;
     const s = new PacketStore(tempDir(), () => t++);

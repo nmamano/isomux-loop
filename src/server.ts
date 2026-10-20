@@ -46,6 +46,10 @@ POST /api/proposals               {"proposals":[{"taskId","task":{"title","descr
 DELETE /api/items/:taskId         withdraw a card (the task closed meanwhile)
 GET  /api/decisions               decisions to write to the board (decided, or failed earlier), triage and packets:
                                   each has "kind": "triage" or "packet"; both carry decision: choice, priority, note
+                                  choice is go|design|hold|backlog|obsolete, or rewrite (Nil's answer only, never a proposal:
+                                  no priority, and the note says what to write differently). Apply a rewrite by rewriting the
+                                  task (or the packet) as the note asks, then propose it again (or re-post the packet): the
+                                  card comes back to Triage as open.
                                   (a packet's decision may name the option, "preset", Nil picked to fill it)
                                   Nil's note can change anything; apply it with judgement (isomux-curator skill)
 POST /api/applied                 {"results":[{"taskId","decidedAt","kind?":"triage|packet","ok":true|false,"error?"}]}

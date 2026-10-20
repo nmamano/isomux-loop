@@ -9,11 +9,11 @@
 import { join } from "node:path";
 import { checkTaskId, ImageDir, type Image } from "./images";
 import { readJson, writeJson } from "./json-file";
-import { type Choice, CHOICES, choiceAndPriority, type LoopPriority, LOOP_PRIORITIES, ValidationError } from "./store";
+import { type Choice, CHOICES, choiceAndPriority, DECISIONS, type DecisionChoice, decisionNote, type LoopPriority, LOOP_PRIORITIES, ValidationError } from "./store";
 
 export type Option = { label: string; cost: string; recommended: boolean; decision: Choice; note: string };
 // preset: the option Nil picked to fill the choice and the note, if any.
-export type PacketDecision = { choice: Choice; priority: LoopPriority | null; note: string; preset?: string; decidedAt: number };
+export type PacketDecision = { choice: DecisionChoice; priority: LoopPriority | null; note: string; preset?: string; decidedAt: number };
 export type Packet = {
   taskId: string;
   title: string;
@@ -69,7 +69,7 @@ function migrate(p: Packet): boolean {
   }
   const priority = (LOOP_PRIORITIES as readonly unknown[]).includes(p.priority) ? (p.priority as LoopPriority) : null;
   for (const d of [p.decision, p.undone]) {
-    if (!d || (CHOICES as readonly string[]).includes(d.choice)) continue;
+    if (!d || (DECISIONS as readonly string[]).includes(d.choice)) continue;
     const old = d.choice as string;
     const o = p.options.find((x) => x.label === old);
     if (o) {
@@ -176,8 +176,8 @@ export class PacketStore {
     if (!p) throw new ValidationError("unknown packet");
     if (packetState(p) === "applied") throw new ValidationError("already applied");
     const r = (raw ?? {}) as Record<string, unknown>;
-    const { choice, priority } = choiceAndPriority(r, CHOICES);
-    const note = text(r.note, "note", 4000, false);
+    const { choice, priority } = choiceAndPriority(r, DECISIONS);
+    const note = decisionNote(choice, r.note);
     // A go on a packet without a note names no design.
     if (choice === "go" && !note.trim()) throw new ValidationError("go needs a note: the design to build (pick an option to fill it)");
     const preset = p.options.find((o) => o.label === r.preset)?.label;
