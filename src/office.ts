@@ -35,6 +35,8 @@ export interface Office {
   allTasks(): Promise<Task[]>;
   // When the task last moved to done or obsolete, from its history; null if unknown.
   closedAt(id: string): Promise<number | null>;
+  // When the description last changed, from its history; null if none is on record.
+  lastEdited(id: string): Promise<number | null>;
   agents(): Promise<Agent[]>;
   patchTask(id: string, body: Record<string, unknown>): Promise<PatchResult>;
   // Without a target the message goes to the app's configured target.
@@ -67,6 +69,12 @@ export function httpOffice(token: string, base = OFFICE): Office {
       const times = h.items
         .filter((i) => ["done", "obsolete"].includes(i.taskChanges?.status?.new ?? ""))
         .map((i) => i.time);
+      return times.length > 0 ? Math.max(...times) : null;
+    },
+    async lastEdited(id) {
+      type Item = { time: number; fields?: string[] };
+      const h = await getJson<{ items: Item[] }>(`/api/tasks/${encodeURIComponent(id)}/history`);
+      const times = h.items.filter((i) => i.fields?.includes("description")).map((i) => i.time);
       return times.length > 0 ? Math.max(...times) : null;
     },
     async agents() {

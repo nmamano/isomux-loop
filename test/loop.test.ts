@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { dispatch, dueIn, freeWorkers, parseTag, readyQueue, staleCards, status, tick, unclassified } from "../src/loop";
+import { ageLine, dispatch, dueIn, freeWorkers, parseTag, readyQueue, staleCards, status, tick, unclassified } from "../src/loop";
 import type { Agent, Office, PatchResult, Task } from "../src/office";
 
 const ROOM = "e6818e47";
+const NOW = Date.UTC(2026, 9, 20, 12);
 let seq = 0;
 function task(over: Partial<Task> & { title: string }): Task {
   seq++;
@@ -13,7 +14,7 @@ function agent(name: string, busy = false): Agent {
 }
 
 // An office stub that applies PATCHes to its task list, with optional 409s.
-function stubOffice(tasks: Task[], agents: Agent[], conflict: string[] = []) {
+function stubOffice(tasks: Task[], agents: Agent[], conflict: string[] = [], edits: Record<string, number> = {}, brokenHistory = "") {
   const messages: { text: string; to?: string }[] = [];
   const patches: { id: string; body: Record<string, unknown> }[] = [];
   const office: Office = {
@@ -24,6 +25,10 @@ function stubOffice(tasks: Task[], agents: Agent[], conflict: string[] = []) {
       throw new Error("not used");
     },
     closedAt: async () => null,
+    lastEdited: async (id) => {
+      if (id === brokenHistory) throw new Error("GET /history answered 500");
+      return edits[id] ?? null;
+    },
     agents: async () => agents,
     async patchTask(id, body): Promise<PatchResult> {
       patches.push({ id, body });
@@ -93,17 +98,30 @@ describe("dispatch", () => {
     const c = task({ title: "[go | ready] C", priority: "P3" });
     const agents = [agent("Isomux Worker 1"), agent("Isomux Worker 2"), agent("Isomux Reviewer 1")];
     const { office, messages, patches } = stubOffice([a, b, c], agents);
-    const res = await dispatch(office, 2);
+    const res = await dispatch(office, 2, NOW);
     expect(res.assigned).toEqual([
       { worker: "Isomux Worker 1", taskId: a.id, messaged: true },
       { worker: "Isomux Worker 2", taskId: b.id, messaged: true },
     ]);
     expect(patches[0]).toEqual({ id: a.id, body: { version: "v" + a.id.slice(1), assignee: "Isomux Worker 1", status: "in_progress" } });
     expect(messages).toEqual([
-      { text: `/isomux-loop-worker ${a.id}\n${a.title}`, to: "id-Isomux Worker 1" },
-      { text: `/isomux-loop-worker ${b.id}\n${b.title}`, to: "id-Isomux Worker 2" },
+      { text: `/isomux-loop-worker ${a.id}\n${a.title}\n${ageLine(a.createdAt, null, NOW)}`, to: "id-Isomux Worker 1" },
+      { text: `/isomux-loop-worker ${b.id}\n${b.title}\n${ageLine(b.createdAt, null, NOW)}`, to: "id-Isomux Worker 2" },
     ]);
     expect(c.assignee).toBeUndefined();
+  });
+
+  test("the message gives the task's age and its last description edit; a failed history read leaves the edit out", async () => {
+    const day = 86_400_000;
+    const a = task({ title: "[go | ready] A", priority: "P1", createdAt: NOW - 50 * day });
+    const b = task({ title: "[go | ready] B", priority: "P2", createdAt: NOW - 1000 });
+    const { office, messages } = stubOffice([a, b], [agent("Isomux Worker 1"), agent("Isomux Worker 2")], [], { [a.id]: NOW - 3 * day - 1000 }, b.id);
+    await dispatch(office, 2, NOW);
+    expect(messages.map((m) => m.text.split("\n")[2])).toEqual([
+      "Filed 50 days ago (2026-08-31); description last edited 3 days ago (2026-10-17).",
+      "Filed today (2026-10-20).",
+    ]);
+    expect(ageLine(NOW - day - 1, null, NOW)).toBe("Filed 1 day ago (2026-10-19); no description edit on record.");
   });
 
   test("a worker that holds a task, and a worker outside the loop's names, get nothing", async () => {

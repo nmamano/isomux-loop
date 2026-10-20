@@ -72,7 +72,22 @@ export type DispatchResult = {
   errors: string[];
 };
 
-export async function dispatch(office: Office, n: number): Promise<DispatchResult> {
+// The task's age for the worker (Nil, 2026-10-20: an old task may be stale
+// and need reinterpretation). Only a description edit counts as a change: a
+// retag or a new priority leaves the text as old as it was.
+const DAY_MS = 86_400_000;
+function ago(at: number, now: number): string {
+  const d = Math.floor((now - at) / DAY_MS);
+  const date = new Date(at).toISOString().slice(0, 10);
+  return (d < 1 ? "today" : d === 1 ? "1 day ago" : `${d} days ago`) + ` (${date})`;
+}
+export function ageLine(createdAt: number, editedAt: number | null | undefined, now: number): string {
+  const edit =
+    editedAt === undefined ? "" : editedAt === null ? "; no description edit on record" : `; description last edited ${ago(editedAt, now)}`;
+  return `Filed ${ago(createdAt, now)}${edit}.`;
+}
+
+export async function dispatch(office: Office, n: number, now = Date.now()): Promise<DispatchResult> {
   const out: DispatchResult = { assigned: [], conflicts: [], errors: [] };
   const [tasks, agents] = await Promise.all([office.tasks(), office.agents()]);
   const queue = readyQueue(tasks);
@@ -90,7 +105,10 @@ export async function dispatch(office: Office, n: number): Promise<DispatchResul
         else out.errors.push(`PATCH ${task.id} answered ${res.status}`);
         continue;
       }
-      const messaged = await office.message(`/isomux-loop-worker ${task.id}\n${task.title}`, worker.id);
+      // An unreadable history leaves the edit out, not the dispatch.
+      const edited = await office.lastEdited(task.id).catch(() => undefined);
+      const text = `/isomux-loop-worker ${task.id}\n${task.title}\n${ageLine(task.createdAt, edited, now)}`;
+      const messaged = await office.message(text, worker.id);
       if (!messaged) out.errors.push(`message to ${worker.name} about ${task.id} failed; the tick retries it`);
       out.assigned.push({ worker: worker.name, taskId: task.id, messaged });
       break;
