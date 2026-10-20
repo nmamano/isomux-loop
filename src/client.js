@@ -261,7 +261,7 @@ let keysOpen = false;
 
 // --- leaving cards, the undo notice (Nil, 2026-10-19) --------------------------
 // A confirmed (or Later) card slides out and collapses; the card that takes
-// its place flashes. A notice offers Undo for 8 s.
+// its place flashes. A notice offers Undo for 24 s (Nil, 2026-10-20: was 8 s).
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 let arriving = false;
 let pulsing = false;
@@ -320,7 +320,7 @@ function showToast(text, undo) {
   }
   el.innerHTML = "<span>" + linkIds(text) + "</span>" + (undo ? '<button class="btn ghost" data-toastundo="1"' + tip("toastUndo") + ">Undo</button>" : "");
   el.hidden = false;
-  toast = { undo, timer: setTimeout(hideToast, 8000) };
+  toast = { undo, timer: setTimeout(hideToast, 24000) };
 }
 function hideToast() {
   if (toast) clearTimeout(toast.timer);
