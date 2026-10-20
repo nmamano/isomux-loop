@@ -791,7 +791,7 @@ function head(i, sel, showProposal) {
   const m = i.task.title.match(/^\[\s*([a-z]+)\s*\|\s*([^\]]*?)\s*\]/);
   const board = (i.task.priority || "no priority") + " · " + (m ? m[1] + " | " + m[2] : "no tag");
   return (
-    '<div class="meta"' + tip("head") + ">" + effortChip(p) + "<span>Board: " + esc(board) + " → yours: <b>" + esc(summary(sel)) +
+    '<div class="meta"' + tip("head") + "><span>Board: " + esc(board) + " → yours: <b>" + esc(summary(sel)) + " · " + effortText(p) +
     "</b></span>" + (showProposal ? "<span>curator proposed: " + esc(summary(p)) + "</span>" : "") +
     q("head", i.taskId) + "</div>" + helpBox(["head", "effort"], "head", i.taskId) +
     '<div class="meta"' + tip("head") + "><span>Filed by " + esc(i.task.createdBy || "unknown") + "</span><span>" +
@@ -800,15 +800,15 @@ function head(i, sel, showProposal) {
   );
 }
 // x: a proposal or a backlog task; "effort ?" when the curator gave none.
-// First on the card, in a color per size; the letter stays (Nil, 2026-10-20).
-function effortChip(x) {
+// Plain text in the head line, once per card (Nil, 2026-10-20).
+function effortText(x) {
   const e = x.effort || "?";
-  return '<span class="effort e-' + (EFFORTS.includes(e) ? e : "none") + '" title="' + esc(HELP[e] + (x.effortWhy ? " " + x.effortWhy : "")) + '">effort ' + e + "</span>";
+  return '<span title="' + esc(HELP[e]) + '">effort ' + e + "</span>";
 }
 function body(i) {
   const p = i.proposal;
   let h = '<div class="why"><span class="label"' + tip("why") + ">Why</span><br>" + esc(p.why) +
-    (p.effortWhy ? '<br><span class="small"' + tip("effort") + ">Effort " + esc(p.effort || "?") + ": " + esc(p.effortWhy) + "</span>" : "") + "</div>";
+    (p.effortWhy ? "<br><span" + tip("effort") + ">Effort: " + esc(p.effortWhy) + "</span>" : "") + "</div>";
   if (p.title || p.scope) {
     h += '<div class="proposed-scope"><span class="label"' + tip("scope") + ">Proposed scope</span>";
     if (p.title) h += '<div class="title">' + esc(p.title) + "</div>";
@@ -921,7 +921,7 @@ function facts(e) {
   }
   const i = e.x;
   return { id: i.taskId, kind: "proposal", by: i.task.createdBy || "unknown", board: i.task.priority, proposed: i.proposal.priority, choice: i.proposal.choice,
-    effort: i.proposal.effort || "?",    created: i.task.createdAt, card: i.proposedAt,
+    effort: i.proposal.effort || "?", created: i.task.createdAt, card: i.proposedAt,
     text: [i.task.title, i.task.description, i.taskId, i.proposal.why, i.proposal.title, i.proposal.scope].join(" ") };
 }
 const rank = (p) => (p ? Number(String(p).slice(1)) : null);
@@ -1284,7 +1284,8 @@ function backlogCards() {
   let h = "";
   for (const t of shown.map((e) => e.x)) {
     const k = backlogPicks[t.id];
-    h += cardOpen(t.id) + '<div class="meta">' + (t.effort ? effortChip(t) : "") + "<span>Filed by " + esc(t.createdBy || "unknown") + "</span><span>" + filed(t.createdAt) + "</span><span>Task " + idCopy(t.id) + "</span></div>" +
+    h += cardOpen(t.id) + '<div class="meta"><span>Filed by ' + esc(t.createdBy || "unknown") + "</span><span>" + filed(t.createdAt) + "</span><span>Task " + idCopy(t.id) + "</span>" +
+      (t.effort ? '<span title="' + esc(HELP[t.effort] + (t.effortWhy ? " " + t.effortWhy : "")) + '">effort ' + esc(t.effort) + "</span>" : "") + "</div>" +
       '<div class="title">' + esc(t.title) + "</div>" +
       (t.description ? details("bdesc:" + t.id, "description", "Description", '<div class="desc">' + esc(t.description) + "</div>") : "");
     if (!k) {
