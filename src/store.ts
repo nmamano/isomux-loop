@@ -16,6 +16,10 @@ export const PRIORITIES = ["P0", "P1", "P2", "P3", "P4"] as const;
 export const CHOICES = ["go", "design", "hold", "backlog", "obsolete"] as const;
 export const TAGGED = ["go", "design", "hold"] as const;
 export const LOOP_PRIORITIES = ["P0", "P1", "P2", "P3"] as const;
+// The curator's estimate of the work (Nil, 2026-10-20). S: under an hour of
+// one worker pair; M: a few hours; L: about a day; XL: multi-day, split it.
+export const EFFORTS = ["S", "M", "L", "XL"] as const;
+export type Effort = (typeof EFFORTS)[number];
 
 export type Priority = (typeof PRIORITIES)[number];
 export type LoopPriority = (typeof LOOP_PRIORITIES)[number];
@@ -38,6 +42,9 @@ export type ProposalBody = {
   title?: string;
   scope?: string;
   why: string;
+  // Optional for now: cards proposed before 2026-10-20 have none.
+  effort?: Effort;
+  effortWhy?: string;
 };
 
 export type Decision = {
@@ -119,6 +126,9 @@ export function parseProposal(raw: unknown): Pick<Item, "taskId" | "task" | "pro
     scope: str(p.scope, "proposal.scope", 20000, true),
     why: str(p.why, "proposal.why", 2000)!,
   };
+  if (p.effort != null && p.effort !== "") proposal.effort = oneOf(p.effort, EFFORTS, "proposal.effort");
+  const effortWhy = str(p.effortWhy, "proposal.effortWhy", 300, true);
+  if (effortWhy) proposal.effortWhy = effortWhy;
   return { taskId, task, proposal };
 }
 

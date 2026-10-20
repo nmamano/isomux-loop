@@ -6,6 +6,7 @@ const CHOICES = ["go", "design", "hold", "backlog", "obsolete"];
 const TAGGED = ["go", "design", "hold"];
 const tagged = (c) => TAGGED.includes(c);
 const CLASS_LABEL = { hold: "on hold" };
+const EFFORTS = ["S", "M", "L", "XL"];
 const TABS = [
   ["status", "Status"],
   ["open", "Triage"],
@@ -52,6 +53,12 @@ const HELP = {
   head: "Board: the task's priority and tag on the board now. Yours: what is selected in the rows below; it changes as you tap. The dot on a chip marks the curator's proposal. Nothing in these lines needs you: you decide with the rows below.",
   dot: "The dot marks the curator's proposal.",
   why: "The curator's reason for its proposal.",
+  effort: "The curator's estimate of the work. S: under an hour of one worker pair, a file or two. M: a few hours. L: about a day, several areas. XL: multi-day, should be split. ?: not estimated yet.",
+  S: "S: under an hour of one worker pair, a file or two.",
+  M: "M: a few hours.",
+  L: "L: about a day, several areas.",
+  XL: "XL: multi-day; it should be split.",
+  "?": "?: the curator has not estimated it yet.",
   scope: "The new title and description the curator proposes for this task. go, design or on hold accepts them; your note can change them.",
   description: "The task's description on the board today.",
   note: "Optional words for the curator. A note can change anything, for example the scope; the curator applies it when it writes your decision to the board. Ctrl+Enter (Cmd+Enter on a Mac) confirms; Enter adds a line.",
@@ -88,7 +95,7 @@ const HELP = {
   keys: "Keyboard shortcuts for triage: j/k move between cards, g d h b o pick, 0-3 set the priority, Ctrl+Enter (Cmd+Enter) confirms. Press ? to show the list.",
   viewbar: "Sort and filter the cards. The tab count and the diagram stay the full total; the keys follow the order shown. Your browser keeps these until Clear.",
   search: "Matches the title, the description, the task id and the curator's reason. / puts the cursor here; Esc leaves.",
-  filters: "Combine any chips: in one row a card matches any chip, across rows it must match each row. A filter on the proposal hides design packets. Change compares the proposal with the board's priority.",
+  filters: "Combine any chips: in one row a card matches any chip, across rows it must match each row. A filter on the proposal or the effort hides design packets. Change compares the proposal with the board's priority.",
   clearView: "Back to the default order with no filters.",
   toggleAll: "Expand or collapse every description and packet in this list at once.",
   splitView: "Show the task-state diagram beside Triage. It updates after each decision and every 15 s. Drag the line between them to change the widths. A narrow screen shows Triage only.",
@@ -785,16 +792,22 @@ function head(i, sel, showProposal) {
   const board = (i.task.priority || "no priority") + " · " + (m ? m[1] + " | " + m[2] : "no tag");
   return (
     '<div class="meta"' + tip("head") + "><span>Board: " + esc(board) + " → yours: <b>" + esc(summary(sel)) +
-    "</b></span>" + (showProposal ? "<span>curator proposed: " + esc(summary(p)) + "</span>" : "") +
-    q("head", i.taskId) + "</div>" + helpBox(["head"], "head", i.taskId) +
+    "</b></span>" + (showProposal ? "<span>curator proposed: " + esc(summary(p)) + "</span>" : "") + effortChip(p) +
+    q("head", i.taskId) + "</div>" + helpBox(["head", "effort"], "head", i.taskId) +
     '<div class="meta"' + tip("head") + "><span>Filed by " + esc(i.task.createdBy || "unknown") + "</span><span>" +
     filed(i.task.createdAt) + "</span><span>Task " + idCopy(i.taskId) + "</span></div>" +
     '<div class="title">' + esc(i.task.title) + "</div>"
   );
 }
+// x: a proposal or a backlog task; "effort ?" when the curator gave none.
+function effortChip(x) {
+  const e = x.effort || "?";
+  return '<span class="effort" title="' + esc(HELP[e] + (x.effortWhy ? " " + x.effortWhy : "")) + '">effort ' + e + "</span>";
+}
 function body(i) {
   const p = i.proposal;
-  let h = '<div class="why"><span class="label"' + tip("why") + ">Why</span><br>" + esc(p.why) + "</div>";
+  let h = '<div class="why"><span class="label"' + tip("why") + ">Why</span><br>" + esc(p.why) +
+    (p.effortWhy ? '<br><span class="small"' + tip("effort") + ">Effort " + esc(p.effort || "?") + ": " + esc(p.effortWhy) + "</span>" : "") + "</div>";
   if (p.title || p.scope) {
     h += '<div class="proposed-scope"><span class="label"' + tip("scope") + ">Proposed scope</span>";
     if (p.title) h += '<div class="title">' + esc(p.title) + "</div>";
@@ -870,7 +883,7 @@ function triageCards(all) {
 // Per tab, kept in this browser. The tab count and the diagram stay the full
 // total; the keys follow the order shown.
 const VIEW_DEFAULT = {
-  triage: { sort: "proposed", kind: [], choice: [], pri: [], change: [], by: [], q: "" },
+  triage: { sort: "proposed", kind: [], choice: [], pri: [], effort: [], change: [], by: [], q: "" },
   backlog: { sort: "oldest", by: [], q: "" },
 };
 const view = {};
@@ -878,7 +891,7 @@ for (const k of Object.keys(VIEW_DEFAULT))
   view[k] = Object.assign(JSON.parse(JSON.stringify(VIEW_DEFAULT[k])), JSON.parse(localStorage.getItem("loop.view." + k) || "{}"));
 const saveView = (k) => localStorage.setItem("loop.view." + k, JSON.stringify(view[k]));
 const SORTS = {
-  triage: [["proposed", "proposed priority"], ["board", "board priority"], ["oldest", "oldest task"], ["newest", "newest task"], ["card", "newest card"]],
+  triage: [["proposed", "proposed priority"], ["board", "board priority"], ["oldest", "oldest task"], ["newest", "newest task"], ["card", "newest card"], ["effort", "smallest effort"]],
   backlog: [["oldest", "oldest task"], ["newest", "newest task"]],
 };
 const FILTER_ROWS = {
@@ -886,6 +899,7 @@ const FILTER_ROWS = {
     ["kind", "Kind", () => [["proposal", "proposal"], ["packet", "design packet"]]],
     ["choice", "Proposed", () => CHOICES.map((c) => [c, label(c)])],
     ["pri", "Priority", () => PRIORITIES.map((p) => [p, p])],
+    ["effort", "Effort", () => EFFORTS.concat("?").map((e) => [e, e])],
     ["change", "Change", () => [["up", "priority up"], ["down", "priority down"], ["same", "same priority"], ["new", "new task"]]],
     ["by", "Filed by", (list) => filers(list)],
   ],
@@ -906,10 +920,11 @@ function facts(e) {
   }
   const i = e.x;
   return { id: i.taskId, kind: "proposal", by: i.task.createdBy || "unknown", board: i.task.priority, proposed: i.proposal.priority, choice: i.proposal.choice,
-    created: i.task.createdAt, card: i.proposedAt,
+    effort: i.proposal.effort || "?",    created: i.task.createdAt, card: i.proposedAt,
     text: [i.task.title, i.task.description, i.taskId, i.proposal.why, i.proposal.title, i.proposal.scope].join(" ") };
 }
 const rank = (p) => (p ? Number(String(p).slice(1)) : null);
+const effortRank = (e) => (EFFORTS.includes(e) ? EFFORTS.indexOf(e) : 9);
 // up / down / same compared with the board; "new" when the board has no priority.
 function change(f) {
   if (f.kind !== "proposal") return null;
@@ -932,6 +947,7 @@ function matches(f, v) {
   if (v.kind && v.kind.length && !v.kind.includes(f.kind)) return false;
   if (v.choice && v.choice.length && !v.choice.includes(f.choice)) return false;
   if (v.pri && v.pri.length && !v.pri.includes(f.proposed)) return false;
+  if (v.effort && v.effort.length && !v.effort.includes(f.effort)) return false;
   if (v.change && v.change.length && !v.change.includes(change(f))) return false;
   if (v.by && v.by.length && !v.by.includes(f.by)) return false;
   const q = v.q.trim().toLowerCase();
@@ -950,6 +966,8 @@ function viewList(k, all) {
     oldest: (a, b) => a.created - b.created,
     newest: (a, b) => b.created - a.created,
     card: (a, b) => b.card - a.card,
+    // Not estimated (and packets) last.
+    effort: (a, b) => effortRank(a.effort) - effortRank(b.effort) || a.created - b.created,
   }[v.sort];
   let list = all.map((e) => ({ e, f: facts(e) })).filter((x) => matches(x.f, v));
   if (by) list = list.sort((a, b) => by(a.f, b.f));
@@ -1265,7 +1283,8 @@ function backlogCards() {
   let h = "";
   for (const t of shown.map((e) => e.x)) {
     const k = backlogPicks[t.id];
-    h += cardOpen(t.id) + '<div class="meta"><span>Filed by ' + esc(t.createdBy || "unknown") + "</span><span>" + filed(t.createdAt) + "</span><span>Task " + idCopy(t.id) + "</span></div>" +
+    h += cardOpen(t.id) + '<div class="meta"><span>Filed by ' + esc(t.createdBy || "unknown") + "</span><span>" + filed(t.createdAt) + "</span><span>Task " + idCopy(t.id) + "</span>" +
+      (t.effort ? effortChip(t) : "") + "</div>" +
       '<div class="title">' + esc(t.title) + "</div>" +
       (t.description ? details("bdesc:" + t.id, "description", "Description", '<div class="desc">' + esc(t.description) + "</div>") : "");
     if (!k) {

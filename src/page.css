@@ -171,6 +171,7 @@
   .diagram .st-hold rect, .diagram .st-backlog rect, .diagram .st-obsolete rect { fill: var(--chip); }
   .diagram .st.picked rect { stroke-width: 3; }
   .picked-list { margin-bottom: 8px; }
+  .effort { border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; color: var(--fg); }
   .badge { background: var(--accent); color: var(--accent-fg); border-radius: 6px; padding: 0 6px; font-weight: 600; }
   .card.packet { border-color: var(--accent); }
   .question { font-size: 16px; font-weight: 600; margin: 8px 0; overflow-wrap: anywhere; }

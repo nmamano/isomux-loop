@@ -33,7 +33,10 @@ const HELP = `Loop app API. Base: ${local}
 Triage (for the curator):
 GET  /api/summary                 counts per state
 GET  /api/items?state=open|decided|applied|failed|all
-POST /api/proposals               {"proposals":[{"taskId","task":{"title","description","priority","createdBy","createdAt"},"proposal":{"choice":"go|design|hold|backlog|obsolete","priority":"P0-P3 (go, design, hold only)","title?","scope?","why"}}]}
+POST /api/proposals               {"proposals":[{"taskId","task":{"title","description","priority","createdBy","createdAt"},"proposal":{"choice":"go|design|hold|backlog|obsolete","priority":"P0-P3 (go, design, hold only)","title?","scope?","why",
+                                  "effort?":"S|M|L|XL","effortWhy?"}}]}
+                                  effort: S under an hour of one worker pair, a file or two; M a few hours; L about a day,
+                                  several areas; XL multi-day, should be split. effortWhy: one line.
                                   task.* is the board task as it is now. go, design and hold tag the task [<choice> | <state>] at the
                                   priority; backlog sets P4 and no tag; obsolete closes it. A go/design/hold card may carry a new
                                   proposal.title and/or proposal.scope, which Nil accepts with the card.
@@ -62,7 +65,7 @@ POST /api/packets/:taskId/images  raw PNG/JPEG/WebP bytes, ?caption=..., one per
 GET  /api/packets                 all packets with their state
 
 Backlog (Nil's tab):
-GET  /api/backlog                 the tasks of the Backlog state (P4, no card), oldest first
+GET  /api/backlog                 the tasks of the Backlog state (P4, no card), oldest first, with effort when a card estimated it
 POST /api/backlog/:taskId/bring   {"choice":"go|design|hold","priority":"P0-P3","note?"}: a decided card that goes to the curator
                                   with the next burst, like any triage decision
 
@@ -338,7 +341,12 @@ async function backlog(): Promise<unknown[]> {
   const value = all
     .filter((t) => (t.roomId ?? ROOM_ID) === ROOM_ID && classify(t, c.get(t.id) ?? null, so.has(t.id)) === "backlog")
     .sort((a, b) => a.createdAt - b.createdAt)
-    .map((t) => ({ id: t.id, title: t.title, description: t.description ?? "", createdBy: (t as { createdBy?: string }).createdBy ?? "", createdAt: t.createdAt }));
+    .map((t) => {
+      // The curator's estimate from the card that sent it to the backlog, when known.
+      const p = store.get(t.id)?.proposal;
+      return { id: t.id, title: t.title, description: t.description ?? "", createdBy: (t as { createdBy?: string }).createdBy ?? "", createdAt: t.createdAt,
+        ...(p?.effort ? { effort: p.effort, effortWhy: p.effortWhy } : {}) };
+    });
   backlogCache = { at: Date.now(), value };
   return value;
 }

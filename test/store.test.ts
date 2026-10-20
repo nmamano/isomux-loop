@@ -37,6 +37,15 @@ describe("store", () => {
     expect(store.pending()).toEqual([]);
   });
 
+  test("effort is optional; when given it is S, M, L or XL, with a short why", () => {
+    const { store } = setup();
+    store.propose([proposal("a"), proposal("b", { effort: "L", effortWhy: "server and UI, a live run" })]);
+    expect(store.get("a")!.proposal.effort).toBeUndefined();
+    expect(store.get("b")!.proposal).toMatchObject({ effort: "L", effortWhy: "server and UI, a live run" });
+    expect(() => store.propose([proposal("c", { effort: "XXL" })])).toThrow(ValidationError);
+    expect(() => store.propose([proposal("c", { effort: "S", effortWhy: "x".repeat(301) })])).toThrow(ValidationError);
+  });
+
   test("a decision changed after the curator read it stays pending", () => {
     const { store, clock } = setup();
     store.propose([proposal("a")]);
