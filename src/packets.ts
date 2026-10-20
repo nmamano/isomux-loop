@@ -102,7 +102,9 @@ export class PacketStore {
     writeJson(this.file, this.items);
   }
 
-  // A new packet for a task replaces the old one, its images and its decision.
+  // A new packet for a task replaces the old one and its decision. It keeps
+  // the old images (Nil, 2026-10-20: a rewrite re-posts the packet) unless
+  // the body says "clearImages": true.
   put(raw: unknown, task: { title: string; priority: string | null }): Packet {
     const r = (raw ?? {}) as Record<string, unknown>;
     const taskId = checkTaskId(text(r.taskId, "taskId", 64));
@@ -132,12 +134,12 @@ export class PacketStore {
       body: text(r.body, "body", 500_000, false),
       branch: text(r.branch, "branch", 300, false) || undefined,
       diffUrl: diffUrl || undefined,
-      images: [],
+      images: r.clearImages === true ? [] : (this.items[taskId]?.images ?? []),
       createdAt: this.now(),
       decision: null,
       applied: null,
     };
-    this.images.clear(taskId);
+    if (r.clearImages === true || !this.items[taskId]) this.images.clear(taskId);
     this.items[taskId] = packet;
     this.save();
     return packet;

@@ -61,7 +61,8 @@ POST /api/applied                 {"results":[{"taskId","decidedAt","kind?":"tri
 Packets (for workers; a card for Nil in Triage):
 POST /api/packets                 {"taskId","question","options":[{"label","cost","recommended":true|false,
                                   "decision":"go|design|hold|backlog|obsolete","note?"}] (2-4, at most one recommended),
-                                  "body":"markdown","branch?","diffUrl?"}. A new packet replaces the task's old one.
+                                  "body":"markdown","branch?","diffUrl?"}. A new packet replaces the task's old one
+                                  and its decision, and keeps its images; add "clearImages":true to drop them.
                                   Nil decides a packet like a triage card (choice, priority, note); an option is a preset:
                                   picking it sets its decision and fills the note with its note (default: the label).
                                   obsolete is always a choice: no option needs to offer "close, no change".

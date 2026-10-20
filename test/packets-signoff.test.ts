@@ -112,17 +112,19 @@ describe("packets", () => {
     expect(new PacketStore(dir).get("abc12345")).toBeUndefined();
   });
 
-  test("a new packet replaces the old one, its decision and its images", () => {
+  test("a new packet replaces the old one and its decision; it keeps the images unless told to clear them", () => {
     const dir = tempDir();
     const s = new PacketStore(dir);
+    const file = join(dir, "images", "packets", "abc12345", "1.png");
     s.put(packet(), task);
     s.addImage("abc12345", PNG, "before");
     s.decide("abc12345", { choice: "obsolete" });
-    expect(existsSync(join(dir, "images", "packets", "abc12345", "1.png"))).toBe(true);
     const again = s.put(packet({ question: "Which layout, now?" }), task);
-    expect([again.decision, again.images.length]).toEqual([null, 0]);
-    expect(existsSync(join(dir, "images", "packets", "abc12345", "1.png"))).toBe(false);
+    expect([again.decision, again.images.map((i) => i.caption), existsSync(file)]).toEqual([null, ["before"], true]);
     expect(new PacketStore(dir).get("abc12345")!.question).toBe("Which layout, now?");
+    expect(s.addImage("abc12345", PNG, "after").file).not.toBe("1.png");
+    const cleared = s.put(packet({ clearImages: true }), task);
+    expect([cleared.images.length, existsSync(file)]).toEqual([0, false]);
   });
 
   test("images: the type comes from the bytes; other bytes and path tricks are refused", () => {
