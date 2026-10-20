@@ -179,8 +179,9 @@
     border-radius: 10px; padding: 9px 12px; font: inherit; cursor: pointer; }
   .option.on { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
   .option .cost { display: block; font-size: 13px; opacity: .85; margin-top: 2px; }
-  .option .dot { position: absolute; top: -3px; right: -3px; width: 10px; height: 10px; border-radius: 50%;
-    background: var(--warn); border: 2px solid var(--card); }
+  /* The worker's recommendation: a text label, in the option's own color, so it reads on a selected option too. */
+  .option .rec-label { margin-left: 8px; padding: 0 6px; border: 1px solid currentColor; border-radius: 6px;
+    font-size: 12px; font-weight: 600; white-space: nowrap; vertical-align: 1px; }
   .thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 10px; }
   .thumbs a { display: block; width: 120px; text-decoration: none; color: var(--muted); font-size: 12px; }
   .thumbs img { width: 120px; height: 80px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); display: block; }

@@ -114,8 +114,8 @@ const HELP = {
   new: "The text after the change. Marked words are new.",
   packet: "A design packet: a worker hit a decision that needs you. You decide it like a triage card: a choice, a priority and a note. An option fills the choice and the note for you.",
   question: "The question the worker needs you to answer.",
-  options: "The options the worker found, with what each costs. Tapping one sets its choice and fills the note with it; you can still change both. The dot marks the worker's recommendation.",
-  presetDot: "The dot marks the worker's recommendation.",
+  options: "The options the worker found, with what each costs. Tapping one sets its choice and fills the note with it; you can still change both. They are in the worker's order; the label “recommended” marks the one the worker recommends.",
+  presetRec: "The label “recommended” marks the option the worker recommends. It is not selected for you.",
   packetNote: "Your note goes to the curator. With go it is the design to build: the curator writes it at the top of the task. go needs one. Ctrl+Enter (Cmd+Enter on a Mac) confirms; Enter adds a line.",
   packetBody: "The worker's full packet: findings, details and trade-offs.",
   images: "Screenshots from the worker. Tap one to open it in the viewer: a tap on the image zooms to 100%, arrows or a swipe go to the next, Esc or a tap outside closes.",
@@ -1198,7 +1198,7 @@ function packetCard(p) {
   const opt = (o) =>
     '<button class="option' + (k.preset === o.label ? " on" : "") + (o.recommended ? " rec" : "") + '" data-preset="' + esc(o.label) + '" data-id="' + esc(p.taskId) + '"' +
     ' title="' + esc(o.label + (o.cost ? ": " + o.cost : "") + ". Sets " + label(o.decision) + " and fills the note." + (o.recommended ? " The worker recommends this." : "")) + '">' +
-    "<b>" + esc(o.label) + "</b>" + (o.recommended ? '<span class="dot" aria-label="worker\'s recommendation"></span>' : "") +
+    "<b>" + esc(o.label) + "</b>" + (o.recommended ? '<span class="rec-label">recommended</span>' : "") +
     '<span class="cost">→ ' + esc(label(o.decision)) + (o.cost ? " · " + esc(o.cost) : "") + "</span></button>";
   const pickRow = (name, kind, list) =>
     '<div class="row"><span class="label"' + tip(kind) + ">" + name + " " + q("p" + kind, p.taskId) + "</span>" +
@@ -1212,7 +1212,7 @@ function packetCard(p) {
     (p.body ? details("packet:" + p.taskId, "packetBody", "The packet", '<div class="mdbody">' + md(p.body) + "</div>") : "") +
     imagesHtml("packets", p.taskId, p.images) +
     (links ? '<div class="links"' + tip("links") + ">" + links + "</div>" : "") +
-    '<div class="row"><span class="label"' + tip("options") + ">Options " + q("options", p.taskId) + "</span>" + helpBox(["options", "presetDot"], "options", p.taskId) +
+    '<div class="row"><span class="label"' + tip("options") + ">Options " + q("options", p.taskId) + "</span>" + helpBox(["options", "presetRec"], "options", p.taskId) +
     '<div class="options">' + p.options.map(opt).join("") + "</div></div>" +
     pickRow("Choice", "choice", CHOICES) +
     (tagged(k.choice) ? pickRow("Priority", "priority", PRIORITIES) : "") +
