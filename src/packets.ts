@@ -173,6 +173,16 @@ export class PacketStore {
     return true;
   }
 
+  // The curator takes a packet out of Triage (Nil answered it elsewhere).
+  // A decision that waits for the curator is never dropped this way.
+  remove(taskId: string): "removed" | "not_found" | "pending" {
+    const p = this.items[taskId];
+    if (!p) return "not_found";
+    if (["decided", "failed"].includes(packetState(p))) return "pending";
+    this.withdraw(taskId);
+    return "removed";
+  }
+
   decide(taskId: string, raw: unknown): Packet {
     const p = this.items[taskId];
     if (!p) throw new ValidationError("unknown packet");

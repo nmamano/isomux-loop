@@ -68,6 +68,9 @@ POST /api/packets                 {"taskId","question","options":[{"label","cost
                                   obsolete is always a choice: no option needs to offer "close, no change".
 POST /api/packets/:taskId/images  raw PNG/JPEG/WebP bytes, ?caption=..., one per call, at most 5 MB, 20 per packet
 GET  /api/packets                 all packets with their state
+DELETE /api/packets/:taskId       withdraw a packet, for example one Nil answered in the chat instead of on the card:
+                                  it leaves Triage with its images. 204; 404 if none; 409 if Nil decided it and the
+                                  decision waits in /api/decisions (apply it, or ask him to undo it).
 
 Backlog (Nil's tab):
 GET  /api/backlog                 the tasks of the Backlog state (P4, no card), oldest first, with effort when a card estimated it
@@ -456,6 +459,17 @@ async function route(req: Request): Promise<Response> {
   if (m === "GET" && path === "/api/packets") {
     await boardTasks().catch(() => undefined);
     return json(packets.list().map((p) => ({ ...p, state: packetState(p) })));
+  }
+  const del = m === "DELETE" && path.match(/^\/api\/packets\/([^/]+)$/);
+  if (del) {
+    const r = packets.remove(decodeURIComponent(del[1]));
+    if (r === "removed") {
+      statusCache = null;
+      return new Response(null, { status: 204 });
+    }
+    return r === "pending"
+      ? json({ error: "pending", message: "Nil decided this packet and the decision waits in /api/decisions; apply it, or ask him to undo it" }, 409)
+      : json({ error: "not_found" }, 404);
   }
   const pk = path.match(/^\/api\/packets\/([^/]+)\/(images|decide|undo)$/);
   if (pk && m === "POST") {

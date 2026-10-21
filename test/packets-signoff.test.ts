@@ -101,6 +101,18 @@ describe("packets", () => {
     expect([packetState(s.get("abc12345")!), typeof s.get("abc12345")!.reopenedAt]).toEqual(["open", "number"]);
   });
 
+  test("remove: the curator withdraws an open or applied packet, never one whose decision waits", () => {
+    const s = new PacketStore(tempDir(), () => 5);
+    expect(s.remove("abc12345")).toBe("not_found");
+    s.put(packet(), task);
+    s.decide("abc12345", { choice: "obsolete" });
+    expect(s.remove("abc12345")).toBe("pending");
+    s.markApplied("abc12345", 5, false, "409");
+    expect(s.remove("abc12345")).toBe("pending");
+    s.undo("abc12345");
+    expect([s.remove("abc12345"), s.get("abc12345")]).toEqual(["removed", undefined]);
+  });
+
   test("withdraw: a packet whose task closed leaves with its images", () => {
     const dir = tempDir();
     const s = new PacketStore(dir);
