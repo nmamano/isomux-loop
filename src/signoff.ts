@@ -309,6 +309,19 @@ export class SignoffStore {
     return i;
   }
 
+  // A Sign-off changes task filed by hand for an approved item (Isomux
+  // Curator, 2026-10-21): the push waits for it as for one Approve filed.
+  linkEdits(taskId: string, editsTaskId: string): SignoffItem {
+    const i = this.mergedItem(taskId);
+    checkTaskId(editsTaskId);
+    if (signoffState(i) !== "approved") throw new ValidationError("only an approved item takes a Sign-off changes task");
+    if (i.decision!.edits) throw new ValidationError(`the item already waits for ${i.decision!.edits}`);
+    if (editsTaskId === taskId) throw new ValidationError("an item cannot wait for its own task");
+    i.decision = { ...i.decision!, edits: editsTaskId };
+    this.save();
+    return i;
+  }
+
   // Checks only; the caller messages Main and then records the rejection.
   checkReject(taskId: string, raw: unknown): { item: SignoffItem; note: string } {
     const i = this.mergedItem(taskId);

@@ -211,6 +211,19 @@ describe("sign-off", () => {
     expect(s.pushCheck((id) => id === "fix2")).toMatchObject({ ok: true, sha: "ddddddd4", blockers: [] });
   });
 
+  test("a changes task filed by hand: only for an approved item without one; then the push waits for it", () => {
+    const s = new SignoffStore(tempDir());
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    expect(() => s.linkEdits("t1", "fix1aaaa")).toThrow(ValidationError);
+    s.approve("t1");
+    expect(s.pushCheck().sha).toBe("aaaaaaa1");
+    expect(() => s.linkEdits("t1", "t1")).toThrow(ValidationError);
+    s.linkEdits("t1", "fix1aaaa");
+    expect(() => s.linkEdits("t1", "fix2aaaa")).toThrow(ValidationError);
+    expect(s.pushCheck()).toMatchObject({ ok: false, sha: null, blockers: [{ taskId: "t1", state: "edits", edits: "fix1aaaa" }] });
+  });
+
   test("push point: a rejected merge holds it back until its revert, and no point between them is used", () => {
     const s = new SignoffStore(tempDir());
     s.put(item);

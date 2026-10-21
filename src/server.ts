@@ -104,6 +104,8 @@ POST /api/signoff/:taskId/merged  Isomux Main after EVERY merge, item or not: {"
                                   Only merged items show, so an item waits unseen until this call. A task with no code
                                   (copy only, for example a comment draft) has nothing to merge: Main reports it with the
                                   current main sha when it closes the task, and the item shows then.
+POST /api/signoff/:taskId/edits   {"task"}: a Sign-off changes task filed by hand for an approved item. The item then holds
+                                  the push point back (state "edits") until that task's merge is reported or it is closed.
 POST /api/signoff/:taskId/reverted  Isomux Main after a revert Nil asked for: {"commit"}. The item leaves the list.
 POST /api/signoff/pushed          Isomux Main after every push: {"commit"} (the sha it pushed). Every merge reported up to
                                   that sha leaves the Push state; returns {"pushed":[taskIds]}.
@@ -519,7 +521,7 @@ async function route(req: Request): Promise<Response> {
     signoff.recordPushGo(check.sha!);
     return json({ sent: text });
   }
-  const so = path.match(/^\/api\/signoff\/([^/]+)\/(images|merged|reverted|approve|reject|undo|comments)$/);
+  const so = path.match(/^\/api\/signoff\/([^/]+)\/(images|merged|reverted|approve|reject|undo|comments|edits)$/);
   if (so && m === "POST") {
     const taskId = decodeURIComponent(so[1]);
     // Merges, reverts and Nil's buttons move tasks between diagram states.
@@ -555,6 +557,15 @@ async function route(req: Request): Promise<Response> {
       }
       case "undo":
         return json(signoff.undo(taskId));
+      case "edits": {
+        const editsId = String((await body(req)).task ?? "");
+        try {
+          await office.task(editsId);
+        } catch {
+          throw new ValidationError(`task ${editsId} is not on the board (or the board is unreadable)`);
+        }
+        return json(signoff.linkEdits(taskId, editsId));
+      }
       case "comments":
         return json(signoff.setComments(taskId, await body(req)));
       case "reject": {
