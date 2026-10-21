@@ -190,6 +190,27 @@ describe("sign-off", () => {
     expect(s.pushCheck().tasks).toEqual(["t2", "t4"]);
   });
 
+  test("push point: an item approved with changes holds it back until its Sign-off changes task merges or closes", () => {
+    const s = new SignoffStore(tempDir());
+    for (const id of ["t1", "t2"]) s.put({ ...item, taskId: id });
+    s.merged("before", { commit: "aaaaaaa1" });
+    s.merged("t1", { commit: "bbbbbbb2" });
+    s.merged("t2", { commit: "ccccccc3" });
+    s.approve("t1", "fix1");
+    s.approve("t2", "fix2");
+    // t1 waits for fix1: the push stops before t1's merge.
+    expect(s.pushCheck()).toMatchObject({ ok: true, sha: "aaaaaaa1", tasks: ["before"] });
+    expect(s.pushCheck().blockers).toEqual([
+      { taskId: "t1", state: "edits", seq: 2, edits: "fix1" },
+      { taskId: "t2", state: "edits", seq: 3, edits: "fix2" },
+    ]);
+    // fix1 merges (Main reports it): t1 and fix1 may go, t2 still waits for fix2.
+    s.merged("fix1", { commit: "ddddddd4" });
+    expect(s.pushCheck().sha).toBe("bbbbbbb2");
+    // fix2 closed on the board (done or obsolete) without a merge: nothing holds back.
+    expect(s.pushCheck((id) => id === "fix2")).toMatchObject({ ok: true, sha: "ddddddd4", blockers: [] });
+  });
+
   test("push point: a rejected merge holds it back until its revert, and no point between them is used", () => {
     const s = new SignoffStore(tempDir());
     s.put(item);
@@ -312,7 +333,7 @@ describe("sign-off", () => {
     expect(() => s.setComments("t1", { copy: { "0": "y" } })).toThrow(ValidationError);
   });
 
-  test("approve with comments: approved with its edits task, does not block the push, cannot be undone", () => {
+  test("approve with comments: approved with its Sign-off changes task, which the push waits for; cannot be undone", () => {
     const s = new SignoffStore(tempDir());
     s.put(item);
     s.merged("t1", { commit: "aaaaaaa1" });
@@ -322,7 +343,9 @@ describe("sign-off", () => {
     const a = s.approve("t1", "ed1");
     expect([signoffState(a), a.decision!.edits]).toEqual(["approved", "ed1"]);
     expect(() => s.undo("t1")).toThrow(ValidationError);
-    expect(s.pushCheck()).toMatchObject({ ok: true, reason: "", sha: "aaaaaaa1", approved: ["t1"] });
+    expect(s.pushCheck()).toMatchObject({ ok: false, sha: null });
+    expect(s.pushCheck().reason).toContain("ed1");
+    expect(s.pushCheck((id) => id === "ed1")).toMatchObject({ ok: true, reason: "", sha: "aaaaaaa1", approved: ["t1"] });
     s.recordPushGo("aaaaaaa1");
     expect(s.visible()).toEqual([]);
   });

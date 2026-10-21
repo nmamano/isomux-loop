@@ -37,9 +37,10 @@ export type SignoffItem = {
   postedAt: number;
   // seq: the merge's place in Main's report order (missing on older items).
   merged: { commit: string; at: number; seq?: number } | null;
-  // edits: the copy-edits task an approval with comments filed (Nil, 2026-10-19:
-  // approve and request edits are one case, approved with 0 or more edits).
-  decision: { approved: boolean; note: string; at: number; edits?: string } | null;
+  // edits: the Sign-off changes task an approval with comments filed (Nil,
+  // 2026-10-19: approve and request edits are one case, approved with 0 or
+  // more edits). editsMerged: when Main reported that task's merge.
+  decision: { approved: boolean; note: string; at: number; edits?: string; editsMerged?: number } | null;
   reverted: { commit: string; at: number } | null;
 };
 export type SignoffState = "unmerged" | "waiting" | "approved" | "rejected";
@@ -72,7 +73,10 @@ export type PushCheck = {
   // Every merge the push point takes, item or not.
   tasks: string[];
   // Items that hold the push point back, oldest first: it stays before them.
-  blockers: { taskId: string; state: "waiting" | "rejected"; seq: number }[];
+  // "edits": approved with comments, and its Sign-off changes task (edits) is
+  // neither merged nor closed (Nil, 2026-10-21: a "remove this before it
+  // ships" comment must not go out with the next push).
+  blockers: { taskId: string; state: "waiting" | "rejected" | "edits"; seq: number; edits?: string }[];
 };
 
 export function signoffState(i: SignoffItem): SignoffState {
@@ -208,6 +212,8 @@ export class SignoffStore {
     const i = this.state.items[taskId];
     // A re-merge (after a red CI, say) moves the item to the new commit.
     if (i && signoffState(i) !== "rejected") i.merged = { commit, at, seq: this.state.seq };
+    // This merge may be the Sign-off changes task an approval waits for.
+    for (const x of Object.values(this.state.items)) if (x.decision?.edits === taskId && !x.decision.editsMerged) x.decision.editsMerged = at;
     this.save();
     return { signoff: Boolean(i) };
   }
@@ -287,8 +293,8 @@ export class SignoffStore {
     return lines;
   }
 
-  // Approve. With comments the caller files a copy-edits task first and passes
-  // its id; the merged commit still goes out with the next push go.
+  // Approve. With comments the caller files a Sign-off changes task first and
+  // passes its id; the push waits until that task is merged or closed.
   checkApprove(taskId: string): { item: SignoffItem; hasComments: boolean } {
     const i = this.mergedItem(taskId);
     if (signoffState(i) !== "waiting") throw new ValidationError("only an item that waits for you can be approved");
@@ -323,7 +329,7 @@ export class SignoffStore {
   undo(taskId: string): SignoffItem {
     const i = this.mergedItem(taskId);
     if (signoffState(i) !== "approved") throw new ValidationError("only an approval can be undone");
-    if (i.decision?.edits) throw new ValidationError(`the copy-edits task ${i.decision.edits} is filed; close it on the board instead`);
+    if (i.decision?.edits) throw new ValidationError(`the Sign-off changes task ${i.decision.edits} is filed; close it on the board instead`);
     i.decision = null;
     this.save();
     return i;
@@ -347,10 +353,18 @@ export class SignoffStore {
   // Main is linear, so a push is "everything up to sha X" (Nil, 2026-10-20):
   // push along the way, up to the first item that still waits for Nil (or
   // for its revert). Later merges wait for the next push.
-  pushCheck(): PushCheck {
-    const blockers = this.visible()
-      .filter((i) => ["waiting", "rejected"].includes(signoffState(i)))
-      .map((i) => ({ taskId: i.taskId, state: signoffState(i) as "waiting" | "rejected", seq: this.itemSeq(i) }))
+  // closed: whether the board says a task is done or obsolete (or gone); the
+  // caller reads the board. Unknown (no reader) counts as open: the safe side.
+  pushCheck(closed: (taskId: string) => boolean = () => false): PushCheck {
+    const editsOpen = (i: SignoffItem) =>
+      signoffState(i) === "approved" && Boolean(i.decision!.edits) && !i.decision!.editsMerged && !closed(i.decision!.edits!);
+    const blockers: PushCheck["blockers"] = this.visible()
+      .filter((i) => ["waiting", "rejected"].includes(signoffState(i)) || editsOpen(i))
+      .map((i) =>
+        editsOpen(i)
+          ? { taskId: i.taskId, state: "edits" as const, seq: this.itemSeq(i), edits: i.decision!.edits }
+          : { taskId: i.taskId, state: signoffState(i) as "waiting" | "rejected", seq: this.itemSeq(i) },
+      )
       .sort((a, b) => a.seq - b.seq);
     const limit = blockers.length ? blockers[0].seq : Infinity;
     const spans = this.state.spans ?? [];
@@ -365,7 +379,13 @@ export class SignoffStore {
     let reason = "";
     if (!this.state.lastSha) reason = "Isomux Main has reported no merge yet";
     else if (seq === null)
-      reason = b ? (b.state === "rejected" ? `rejected ${b.taskId} waits for its revert` : `${b.taskId}, the oldest item, waits for your approve or reject`) : "nothing new to push";
+      reason = b
+        ? b.state === "rejected"
+          ? `rejected ${b.taskId} waits for its revert`
+          : b.state === "edits"
+            ? `${b.taskId} waits for its Sign-off changes task ${b.edits} to merge`
+            : `${b.taskId}, the oldest item, waits for your approve or reject`
+        : "nothing new to push";
     else if (goSeq !== undefined && goSeq >= seq) reason = `the push go for ${best!.commit.slice(0, 8)} is sent; it waits for Isomux Main`;
     return { ok: reason === "", reason, sha: best ? best.commit : null, seq, approved, tasks, blockers };
   }

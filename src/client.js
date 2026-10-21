@@ -107,10 +107,10 @@ const HELP = {
   bringIn: "Bring in: give this backlog task go, design or on hold and a priority (P0-P3). It goes to the curator like any triage decision, and you can undo it in Decided until then.",
   tabSignoff: "Merged copy and visible changes that wait for your approve or reject, and rejections that wait for their revert, oldest merge first. An approved item moves to Push; approving from the top moves the push point.",
   tabPush: "Merged work not pushed yet: approved sign-off items and merges with nothing to sign off. The same tasks as the diagram's Push stage. Push sends everything up to the push point; the rest waits.",
-  pushPoint: "The push point is the newest merge with every sign-off item at or before it approved. Main is linear, so a push takes everything up to it. A rejected item holds it back until Isomux Main reports the revert.",
+  pushPoint: "The push point is the newest merge with every sign-off item at or before it approved. Main is linear, so a push takes everything up to it. A rejected item holds it back until Isomux Main reports the revert, and an item approved with comments until its Sign-off changes task is merged or closed.",
   goesOut: "Merges up to the push point: the next push sends them.",
   waitsBehind: "Merges after an item that still waits in Sign-off (or for its revert). They go out once that item is approved; approve Sign-off from the top to move the push point.",
-  waitsFor: "The oldest item in Sign-off before this merge. Approve it to let this one go out.",
+  waitsFor: "What holds this merge back: the oldest item in Sign-off before it (approve it to let this one go out), or a Sign-off changes task that must merge first.",
   old: "The text before the change. Struck words went away.",
   pairImages: "The same screen before and after the change. Tap an image to open the pair in the viewer. One comment covers the pair.",
   before: "The screen before the change.",
@@ -126,10 +126,10 @@ const HELP = {
   images: "Screenshots from the worker. Tap one to open it in the viewer: a tap on the image zooms to 100%, arrows or a swipe go to the next, Esc or a tap outside closes.",
   links: "The branch with the work, and the diff when there is one.",
   packetConfirm: "Confirm saves your choice. The curator writes it to the task a few minutes after your last decision; until then you can undo it in Decided.",
-  approve: "Approve: this copy or change goes out with the next push. If you wrote comments, Approve also files a P0 copy-edits task with them; the edits come later as their own commit and sign-off item.",
+  approve: "Approve: this copy or change goes out with the next push. If you wrote comments, Approve also files a P0 Sign-off changes task with them, and the push waits until that task is merged or closed; the changes come as their own commit and sign-off item.",
   reject: "Reject: Isomux Main reverts the commit at once and the task goes back to ready with your note (and your comments). Needs a note.",
-  comment: "Optional. A note (\"shorter\"), or the exact new text in quotes. Saved as you type. Approve turns comments into a copy-edits task; Reject adds them to its note.",
-  editsFiled: "Approved, and your comments became a copy-edits task. This commit goes out with the next push; the edits follow as their own commit.",
+  comment: "Optional. A note (\"shorter\"), or the exact new text in quotes. Saved as you type. Comments can ask for any change, not only copy: Approve turns them into a Sign-off changes task, and the push waits for it; Reject adds them to its note.",
+  editsFiled: "Approved, and your comments became a Sign-off changes task. This commit does not go out until that task is merged or closed; the changes come as their own commit.",
   rejectNote: "Why you reject it, and what to do instead. The worker reads it when the task comes back.",
   undoApprove: "Undo the approval: the item goes back to Sign-off. Possible until you press Push.",
   push: "Push up to: tells Isomux Main to push main up to the push point, which sends every task under Goes out. Enabled when the push point is ahead of the last push go.",
@@ -179,12 +179,12 @@ const EDGES = [
   ["M200,376 V408", 206, 396, "start", "approved", "Working to Merging: the reviewer approved the work."],
   ["M200,456 V488", 206, 476, "start", "to sign off", "Merging to Sign-off: merged, and it has copy or a visible change."],
   ["M260,432 H290 V592 H262", 295, 520, "start", "nothing to sign off", "Merging to Push: merged, with nothing to sign off."],
-  ["M200,536 V568", 206, 556, "start", "approved", "Sign-off to Push: approved; comments become a copy-edits task."],
+  ["M200,536 V568", 206, 556, "start", "approved", "Sign-off to Push: approved; comments become a Sign-off changes task, which the push waits for."],
   ["M200,616 V648", 206, 636, "start", "pushed", "Push to Done: Isomux Main reported the push."],
   ["M260,352 H284 V112 H262", 289, 230, "start", "packet", "Working to Triage: the worker hit a design decision and sent you a packet."],
   ["M140,432 H120 V284 H138", 116, 360, "middle", "CI red", "Merging to Ready: CI failed because of the branch; it goes back to the queue.", true],
   ["M140,512 H108 V270 H138", 104, 410, "middle", "rejected, reverted", "Sign-off to Ready: you rejected it, Isomux Main reverted it, and it goes back to the queue with your note.", true],
-  ["M140,524 H94 V256 H138", 90, 410, "middle", "files a task", "Approving with comments files a new copy-edits task, which enters Ready. The approved task itself goes on to Done.", true, true],
+  ["M140,524 H94 V256 H138", 90, 410, "middle", "files a task", "Approving with comments files a new Sign-off changes task, which enters Ready. The approved task goes on to Push, and the push waits until the new task is merged or closed.", true, true],
 ];
 let pickedState = null;
 
@@ -1406,7 +1406,7 @@ function pushCard({ t, u, it }, waitsFor) {
   const approved = it && it.state === "approved";
   const status = approved
     ? it.decision.edits
-      ? '<span class="ok"' + tip("editsFiled") + ">Approved, edits filed: task " + idLink(it.decision.edits) + "</span>"
+      ? '<span class="ok"' + tip("editsFiled") + ">Approved, changes filed: task " + idLink(it.decision.edits) + "</span>"
       : '<span class="ok"' + tip("approvedSign") + ">Approved</span>"
     : u && u.sent ? "<span" + tip("sentPush") + ">Push sent, waiting for Isomux Main</span>"
     : "<span" + tip("nothingToSign") + ">Nothing to sign off</span>";
@@ -1427,13 +1427,18 @@ function renderPush() {
   const inPush = (x) => x.u && pt.seq !== null && pt.seq !== undefined && x.u.seq <= pt.seq;
   const goes = list.filter(inPush);
   const waits = list.filter((x) => !inPush(x));
-  const blocker = (x) => (pt.blockers || []).find((b) => !x.u || b.seq < x.u.seq);
+  // An item approved with changes waits for its own Sign-off changes task.
+  const blocker = (x) => (pt.blockers || []).find((b) => !x.u || b.seq < x.u.seq || (b.state === "edits" && b.taskId === x.t.id));
+  const waitsFor = (x) => {
+    const b = blocker(x);
+    return b ? (b.state === "edits" ? b.edits : b.taskId) : null;
+  };
   let h = '<div class="small"' + tip("tabPush") + ">" + esc(HELP.tabPush) + "</div>" + pushBanner(goes.length);
   if (!list.length) return h + '<div class="empty">Nothing waits for the push.</div>';
   if (goes.length) h += "<h2" + tip("goesOut") + ">Goes out (" + goes.length + ") " + q("goesOut") + "</h2>" + helpBox(["goesOut"], "goesOut") + goes.map((x) => pushCard(x, null)).join("");
   if (waits.length)
     h += "<h2" + tip("waitsBehind") + ">Waits (" + waits.length + ") " + q("waitsBehind") + "</h2>" + helpBox(["waitsBehind"], "waitsBehind") +
-      waits.map((x) => pushCard(x, (blocker(x) || {}).taskId || null)).join("");
+      waits.map((x) => pushCard(x, waitsFor(x))).join("");
   return h;
 }
 function renderSignoff() {
@@ -1445,7 +1450,7 @@ function renderSignoff() {
     const stateText =
       it.state === "approved"
         ? it.decision.edits
-          ? '<span class="ok"' + tip("editsFiled") + ">Approved, edits filed: task " + idLink(it.decision.edits) + "</span>"
+          ? '<span class="ok"' + tip("editsFiled") + ">Approved, changes filed: task " + idLink(it.decision.edits) + "</span>"
           : '<span class="ok"' + tip("approvedSign") + ">Approved</span>"
       : it.state === "rejected" ? '<span class="warn"' + tip("rejected") + ">Rejected, waiting for revert: " + esc(it.decision.note) + "</span>"
       : "<span" + tip("waitingSign") + ">Waiting for you</span>";
@@ -1761,7 +1766,7 @@ document.addEventListener("click", async (e) => {
       edits = it && it.decision && it.decision.edits;
     }, () =>
       edits
-        ? { text: "Approved, edits filed: task " + edits, undo: null }
+        ? { text: "Approved, changes filed: task " + edits, undo: null }
         : { text: "Approved: " + id + ", moved to Push", undo: () => act(id, () => api("/api/signoff/" + encodeURIComponent(id) + "/undo", { method: "POST" })) });
   }
   if (d.sundo) return act(d.sundo, () => api("/api/signoff/" + encodeURIComponent(d.sundo) + "/undo", { method: "POST" }));

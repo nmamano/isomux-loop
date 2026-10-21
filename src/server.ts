@@ -115,7 +115,8 @@ GET  /api/signoff                 merged items, the merges not pushed yet (unpus
                                   back until Main reports the revert, and no point between the rejected merge and its revert
                                   is used. The push go names push.sha, never main's tip.
 Nil's buttons on the Sign-off tab: approve (with comments on any entry it also files a P0
-"[go | ready] Copy edits: <title>" task with them; the merged commit still goes out with the next push);
+"[go | ready] Sign-off changes: <title>" task with them, and the item holds the push point back, as a blocker with
+state "edits", until that task's merge is reported or the task is closed);
 reject (a note, plus any comments; messages Main "/isomux-main revert ..."); and "Push" on the Push tab
 (messages Main "/isomux-main push go ..."). Comments are saved as Nil types
 (POST /api/signoff/:taskId/comments {"copy":{"0":"..."},"images":{"0":"..."}}).
@@ -270,6 +271,15 @@ setInterval(() => void notifyTriage(), 30_000);
 let tasksCache: { at: number; value: Task[] } | null = null;
 let tasksRead: Promise<Task[]> | null = null;
 let lastWithdrawn: string[] = [];
+
+// For the push point: a task the board says is done or obsolete, or does not
+// list. An unreadable board counts every task as open (the safe side).
+async function closedOnBoard(fresh = false): Promise<(taskId: string) => boolean> {
+  const all = await boardTasks(fresh).catch(() => null);
+  if (!all) return () => false;
+  const status = new Map(all.map((t) => [t.id, t.status]));
+  return (id) => !status.has(id) || ["done", "obsolete"].includes(status.get(id)!);
+}
 
 function boardTasks(fresh = false): Promise<Task[]> {
   if (!fresh && tasksCache && Date.now() - tasksCache.at < STATUS_CACHE_MS) return Promise.resolve(tasksCache.value);
@@ -489,7 +499,7 @@ async function route(req: Request): Promise<Response> {
       items: signoff.visible().map((i) => ({ ...i, copy: i.copy.map(withAudience), state: signoffState(i) })),
       unpushed: signoff.unpushedList(),
       ...signoff.meta(),
-      push: signoff.pushCheck(),
+      push: signoff.pushCheck(await closedOnBoard()),
     });
   if (m === "POST" && path === "/api/signoff") return json(signoff.put(await body(req)));
   if (m === "POST" && path === "/api/signoff/pushed") {
@@ -498,7 +508,7 @@ async function route(req: Request): Promise<Response> {
     return json(out);
   }
   if (m === "POST" && path === "/api/signoff/push") {
-    const check = signoff.pushCheck();
+    const check = signoff.pushCheck(await closedOnBoard(true));
     if (!check.ok) return json({ error: check.reason }, 409);
     const text =
       `/isomux-main push go from Nil through the loop app: push main at ${check.sha} ` +
@@ -522,23 +532,23 @@ async function route(req: Request): Promise<Response> {
       case "reverted":
         return json(signoff.reverted(taskId, await body(req)));
       case "approve": {
-        // Comments make the approval file a copy-edits task as well.
+        // Comments make the approval file a Sign-off changes task as well.
         const { item, hasComments } = signoff.checkApprove(taskId);
         if (!hasComments) return json(signoff.approve(taskId));
         const title = item.title.replace(/^\[[^\]]*\]\s*/, "");
         const description = [
-          `Copy edits Nil asked for when he approved this at sign-off in the loop app (${new Date().toISOString().slice(0, 10)}). The merged commit goes out as it is; these edits come as their own commit with their own sign-off item.`,
+          `Changes Nil asked for when he approved this at sign-off in the loop app (${new Date().toISOString().slice(0, 10)}): copy, or anything else he commented on. The push waits for this task: the merged commit does not go out until this task is merged or closed. The changes come as their own commit with their own sign-off item.`,
           `Source task: ${item.taskId}. Merged commit: ${item.merged!.commit}.`,
           "",
-          "Rule: Nil's quoted text goes in verbatim; for a note, write the edit and create a sign-off item for it.",
+          "Rule: Nil's quoted text goes in verbatim; for a note, make the change it asks for and create a sign-off item for it.",
           "",
           ...signoff.commentLines(item, true),
         ].join("\n");
         let created;
         try {
-          created = await office.createTask({ title: `[go | ready] Copy edits: ${title}`, description, priority: "P0", roomId: ROOM_ID });
+          created = await office.createTask({ title: `[go | ready] Sign-off changes: ${title}`, description, priority: "P0", roomId: ROOM_ID });
         } catch (err) {
-          return json({ error: `the board refused the copy-edits task (${String(err instanceof Error ? err.message : err)}); the item is not approved yet` }, 502);
+          return json({ error: `the board refused the Sign-off changes task (${String(err instanceof Error ? err.message : err)}); the item is not approved yet` }, 502);
         }
         statusCache = null;
         return json(signoff.approve(taskId, created.id));
