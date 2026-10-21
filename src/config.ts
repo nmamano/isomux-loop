@@ -7,6 +7,8 @@ export const WORKER_NAMES = [1, 2, 3, 4, 5, 6].map((n) => `Isomux Worker ${n}`);
 export const MAX_WORKERS = WORKER_NAMES.length;
 export const DEFAULT_WORKERS = 2;
 export const MAIN_NAME = "Isomux Main";
+// Reads each merged sign-off item and predicts Nil's decision (Nil, 2026-10-21).
+export const SCOUT_NAME = "Isomux Sign-off Scout";
 
 export const DISPATCH_MS = 2 * 60_000;
 export const TICK_MS = 60 * 60_000;

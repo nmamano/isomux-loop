@@ -154,6 +154,45 @@ describe("packets", () => {
 describe("sign-off", () => {
   const item = { taskId: "t1", title: "Docs line", copy: [{ where: "docs/features.md", old: "a", new: "b" }] };
 
+  test("scout: a verdict on a merged item, suggestions by real entry index, a new post replaces the old", () => {
+    let t = 1;
+    const s = new SignoffStore(tempDir(), () => t++);
+    s.put(item);
+    expect(() => s.setScout("t1", { verdict: "stamp", reason: "copy only" })).toThrow(ValidationError);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    expect(() => s.setScout("t1", { verdict: "approve", reason: "x" })).toThrow(ValidationError);
+    expect(() => s.setScout("t1", { verdict: "look", reason: "" })).toThrow(ValidationError);
+    expect(() => s.setScout("t1", { verdict: "look", reason: "x", suggestions: { copy: { "1": "no such entry" } } })).toThrow(ValidationError);
+    expect(() => s.setScout("t1", { verdict: "look", reason: "x", suggestions: { images: { "0": "no images" } } })).toThrow(ValidationError);
+    s.setScout("t1", { verdict: "pushback", reason: "breaks the 10-19 ruling", suggestions: { copy: { "0": '"Shorter."' } } });
+    expect(s.get("t1")!.scout).toMatchObject({ verdict: "pushback", suggestions: { copy: { "0": '"Shorter."' }, images: {} } });
+    s.setScout("t1", { verdict: "stamp", reason: "copy only" });
+    expect(s.get("t1")!.scout).toMatchObject({ verdict: "stamp", reason: "copy only", suggestions: { copy: {}, images: {} } });
+  });
+
+  test("history: each decision keeps the verdict it had; an undone approval leaves it; a linked changes task shows", () => {
+    let t = 1;
+    const s = new SignoffStore(tempDir(), () => t++);
+    for (const id of ["t1", "t2"]) s.put({ ...item, taskId: id });
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.merged("t2", { commit: "bbbbbbb2" });
+    s.setScout("t1", { verdict: "stamp", reason: "copy only" });
+    s.approve("t1");
+    expect(s.history().map((h) => [h.taskId, h.approved, h.scout?.verdict])).toEqual([["t1", true, "stamp"]]);
+    s.undo("t1");
+    expect(s.history()).toEqual([]);
+    s.approve("t1");
+    s.linkEdits("t1", "fix1aaaa");
+    s.recordReject("t2", "wrong tone");
+    expect(s.history().map((h) => [h.taskId, h.approved, h.note, h.edits, h.scout?.verdict ?? null])).toEqual([
+      ["t2", false, "wrong tone", undefined, null],
+      ["t1", true, "", "fix1aaaa", "stamp"],
+    ]);
+    // The history outlives the item: a push go removes approved items.
+    s.recordPushGo("aaaaaaa1");
+    expect([s.get("t1"), s.history().length]).toEqual([undefined, 2]);
+  });
+
   test("only merged items show; Main's merged call without an item still records the sha", () => {
     const s = new SignoffStore(tempDir());
     s.put(item);

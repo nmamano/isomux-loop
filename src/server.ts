@@ -1,4 +1,4 @@
-import { CLASSIFY_MS, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
+import { CLASSIFY_MS, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, SCOUT_NAME, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
 import { ClosedTimes } from "./closed-times";
 import { type ImageDir } from "./images";
 import { dispatch, dueIn, staleCards, status, tick, unclassified, type DispatchResult, type Status, type TickResult } from "./loop";
@@ -104,6 +104,14 @@ POST /api/signoff/:taskId/merged  Isomux Main after EVERY merge, item or not: {"
                                   Only merged items show, so an item waits unseen until this call. A task with no code
                                   (copy only, for example a comment draft) has nothing to merge: Main reports it with the
                                   current main sha when it closes the task, and the item shows then.
+POST /api/signoff/:taskId/scout   Isomux Sign-off Scout: {"verdict":"stamp|look|pushback","reason":"one line (max 300)",
+                                  "suggestions":{"copy":{"<entry index>":"comment"},"images":{"<image index>":"comment"}}}
+                                  (suggestions optional). A new post replaces the old. The Sign-off card shows it; Nil taps a
+                                  suggestion to put it in his comment field. The app messages the Scout when a merge puts an
+                                  item on the Sign-off tab (also after a re-merge).
+GET  /api/signoff/history?limit=  Nil's sign-off decisions, newest first (max 300): taskId, title, commit, approved, note,
+                                  comments, edits, the Scout's verdict at the time ("scout", or null), at. An undone
+                                  approval leaves it. GET /api/signoff items also carry "scout".
 POST /api/signoff/:taskId/edits   {"task"}: a Sign-off changes task filed by hand for an approved item. The item then holds
                                   the push point back (state "edits") until that task's merge is reported or it is closed.
 POST /api/signoff/:taskId/reverted  Isomux Main after a revert Nil asked for: {"commit"}. The item leaves the list.
@@ -390,6 +398,20 @@ async function body(req: Request): Promise<Record<string, unknown>> {
   }
 }
 
+// The Scout is optional: no Scout in the office, or a failed message, only logs.
+async function tellScout(taskId: string): Promise<void> {
+  try {
+    const scout = (await office.agents()).find((a) => a.name === SCOUT_NAME);
+    if (!scout) return;
+    const text =
+      `/isomux-signoff-scout ${taskId}: its merge is on the loop app's Sign-off tab. ` +
+      `Read it (GET 127.0.0.1:21025/api/signoff) and post your verdict: POST /api/signoff/${taskId}/scout.`;
+    if (!(await office.message(text, scout.id))) console.error(`message to ${SCOUT_NAME} about ${taskId} failed`);
+  } catch (err) {
+    console.error(`message to ${SCOUT_NAME} about ${taskId} failed: ${err}`);
+  }
+}
+
 async function mainAgentId(): Promise<string> {
   const main = (await office.agents()).find((a) => a.name === MAIN_NAME);
   if (!main) throw new ValidationError(`${MAIN_NAME} is not in the office`);
@@ -504,6 +526,8 @@ async function route(req: Request): Promise<Response> {
       push: signoff.pushCheck(await closedOnBoard()),
     });
   if (m === "POST" && path === "/api/signoff") return json(signoff.put(await body(req)));
+  if (m === "GET" && path === "/api/signoff/history")
+    return json(signoff.history(Number(new URL(req.url).searchParams.get("limit") ?? 50) || 50));
   if (m === "POST" && path === "/api/signoff/pushed") {
     const out = signoff.pushed(await body(req));
     statusCache = null;
@@ -521,7 +545,7 @@ async function route(req: Request): Promise<Response> {
     signoff.recordPushGo(check.sha!);
     return json({ sent: text });
   }
-  const so = path.match(/^\/api\/signoff\/([^/]+)\/(images|merged|reverted|approve|reject|undo|comments|edits)$/);
+  const so = path.match(/^\/api\/signoff\/([^/]+)\/(images|merged|reverted|approve|reject|undo|comments|edits|scout)$/);
   if (so && m === "POST") {
     const taskId = decodeURIComponent(so[1]);
     // Merges, reverts and Nil's buttons move tasks between diagram states.
@@ -529,8 +553,14 @@ async function route(req: Request): Promise<Response> {
     switch (so[2]) {
       case "images":
         return json(await imageUpload(req, signoff, taskId, true));
-      case "merged":
-        return json(signoff.merged(taskId, await body(req)));
+      case "merged": {
+        const out = signoff.merged(taskId, await body(req));
+        // The item is on the Sign-off tab now: the Scout reads it.
+        if (out.signoff && signoffState(signoff.get(taskId)!) === "waiting") void tellScout(taskId);
+        return json(out);
+      }
+      case "scout":
+        return json(signoff.setScout(taskId, await body(req)));
       case "reverted":
         return json(signoff.reverted(taskId, await body(req)));
       case "approve": {

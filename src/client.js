@@ -143,6 +143,12 @@ const HELP = {
   audMember: "For members: a person reads this (UI, site, docs, emails, GitHub comments). \"guessed\": the worker did not say; the app guessed from where.",
   audAgent: "For agents: agents read this (system prompt, agent reference, skills, API errors, logs). Folded and listed last, to skim. Tap to open. \"guessed\": the app guessed from where.",
   summary: "What the worker says changed.",
+  stamp: "Quick stamp: Isomux Sign-off Scout predicts you approve this as is. A glance is enough. It never decides for you.",
+  look: "Look closer: the Scout's default. Go through the diffs as usual.",
+  pushback: "Push back: the Scout thinks something is off or controversial; the reason names it.",
+  noVerdict: "No verdict: the Scout has not read this item yet.",
+  suggested: "The comment Isomux Sign-off Scout predicts you write here. Tap to put it in the field, then edit or keep it. Nothing is filled in for you.",
+  verdictFilter: "Show only the items with these Scout verdicts. Your browser keeps the choice. The tab count stays the full total.",
 };
 // The states: label, definition (board facts), and place in the diagram.
 const STATE_INFO = {
@@ -1356,6 +1362,33 @@ function unwrap(text) {
   return out;
 }
 
+// The Scout's verdicts (Nil, 2026-10-21): a label first in the card.
+const VERDICT_LABEL = { stamp: "Quick stamp", look: "Look closer", pushback: "Push back" };
+// The verdict filter on the Sign-off tab; empty shows every item.
+const soVerdicts = new Set(JSON.parse(localStorage.getItem("loop.soVerdicts") || "[]"));
+function verdictOf(it) {
+  return it.scout ? it.scout.verdict : "none";
+}
+function verdictBar(items) {
+  const chip = (v, label, key) => {
+    const n = items.filter((it) => verdictOf(it) === v).length;
+    return '<button class="chip' + (soVerdicts.has(v) ? " on" : "") + '" data-sofilter="' + v + '"' + tip(key) + ">" + label + " (" + n + ")</button>";
+  };
+  return '<div class="row"><span class="label"' + tip("verdictFilter") + ">Scout verdict " + q("verdictFilter") + "</span>" + helpBox(["verdictFilter"], "verdictFilter") +
+    chip("stamp", "Quick stamp", "stamp") + chip("look", "Look closer", "look") + chip("pushback", "Push back", "pushback") + chip("none", "No verdict", "noVerdict") + "</div>";
+}
+function setComment(taskId, kind, n, value) {
+  const c = soComments[taskId];
+  if (!c) return;
+  c[kind][n] = value;
+  const btn = document.querySelector('[data-approve="' + CSS.escape(taskId) + '"]');
+  if (btn) btn.textContent = approveLabel(taskId);
+  clearTimeout(commentTimers[taskId]);
+  commentTimers[taskId] = setTimeout(() => {
+    api("/api/signoff/" + encodeURIComponent(taskId) + "/comments", { method: "POST", body: c }).catch((err) => showErr(taskId, err.message));
+  }, 600);
+}
+
 // Nil's comments per sign-off item, kept here while he types and saved to the app.
 const soComments = {};
 const commentTimers = {};
@@ -1364,7 +1397,7 @@ function commentsOf(it) {
 }
 // The button says what it will do: with comments it also files the edits.
 function approveLabel(taskId) {
-  return hasComments(taskId) ? "Approve, file edits" : "Approve";
+  return hasComments(taskId) ? "Approve, file changes" : "Approve";
 }
 function hasComments(taskId) {
   const c = soComments[taskId];
@@ -1372,7 +1405,9 @@ function hasComments(taskId) {
 }
 function commentBox(it, kind, n) {
   const v = commentsOf(it)[kind][String(n)] || "";
-  return '<textarea rows="1" class="comment" placeholder="Comment: a note, or new text in quotes" data-comment="' +
+  const sug = it.scout && it.scout.suggestions && it.scout.suggestions[kind] && it.scout.suggestions[kind][String(n)];
+  return (sug ? '<button class="suggest" data-suggest="' + esc(it.taskId + ":" + kind + ":" + n) + '"' + tip("suggested") + "><b>Suggested:</b> " + esc(sug) + "</button>" : "") +
+    '<textarea rows="1" class="comment" placeholder="Comment: a note, or new text in quotes" data-comment="' +
     esc(it.taskId) + ":" + kind + ":" + n + '"' + tip("comment") + ">" + esc(v) + "</textarea>";
 }
 // The Sign-off stage: items that wait for Nil, or for their revert.
@@ -1442,9 +1477,12 @@ function renderPush() {
   return h;
 }
 function renderSignoff() {
-  const items = signoffItems();
+  const all = signoffItems();
   let h = '<div class="small"' + tip("tabSignoff") + ">" + esc(HELP.tabSignoff) + "</div>";
-  if (!items.length) return h + '<div class="empty">Nothing waits for your sign-off.</div>';
+  if (!all.length) return h + '<div class="empty">Nothing waits for your sign-off.</div>';
+  const items = soVerdicts.size ? all.filter((it) => soVerdicts.has(verdictOf(it))) : all;
+  h += verdictBar(all) + '<div class="small">Showing ' + items.length + " of " + all.length + "</div>";
+  if (!items.length) h += '<div class="empty">No item matches the filter.</div>';
   for (const it of items) {
     const waiting = it.state === "waiting";
     const stateText =
@@ -1454,7 +1492,11 @@ function renderSignoff() {
           : '<span class="ok"' + tip("approvedSign") + ">Approved</span>"
       : it.state === "rejected" ? '<span class="warn"' + tip("rejected") + ">Rejected, waiting for revert: " + esc(it.decision.note) + "</span>"
       : "<span" + tip("waitingSign") + ">Waiting for you</span>";
-    h += cardOpen(it.taskId, "signoff-card") + '<div class="sotitle">' + esc(it.title) + "</div>" +
+    const sc = it.scout;
+    h += cardOpen(it.taskId, "signoff-card") +
+      (sc ? '<div class="verdict v-' + esc(sc.verdict) + '"' + tip(sc.verdict) + ">" + esc(VERDICT_LABEL[sc.verdict] || sc.verdict) + "</div>" +
+        '<div class="vreason"' + tip(sc.verdict) + ">" + linkIds(sc.reason) + "</div>" : "") +
+      '<div class="sotitle">' + esc(it.title) + "</div>" +
       '<div class="meta"><span>Task ' + idCopy(it.taskId) + "</span><span" + tip("sha") + ">commit <code>" + esc(it.merged.commit.slice(0, 10)) + "</code></span><span>merged " +
       clock(it.merged.at) + "</span>" + stateText + "</div>";
     if (it.summary) h += '<div class="mdbody"' + tip("summary") + ">" + md(it.summary) + "</div>";
@@ -1769,6 +1811,22 @@ document.addEventListener("click", async (e) => {
         ? { text: "Approved, changes filed: task " + edits, undo: null }
         : { text: "Approved: " + id + ", moved to Push", undo: () => act(id, () => api("/api/signoff/" + encodeURIComponent(id) + "/undo", { method: "POST" })) });
   }
+  if (d.sofilter) {
+    if (soVerdicts.has(d.sofilter)) soVerdicts.delete(d.sofilter);
+    else soVerdicts.add(d.sofilter);
+    localStorage.setItem("loop.soVerdicts", JSON.stringify([...soVerdicts]));
+    return render();
+  }
+  if (d.suggest) {
+    const [taskId, kind, n] = d.suggest.split(":");
+    const it = signoffData.items.find((x) => x.taskId === taskId);
+    if (!it || !it.scout) return;
+    commentsOf(it);
+    setComment(taskId, kind, n, it.scout.suggestions[kind][n]);
+    const box = document.querySelector('[data-comment="' + CSS.escape(d.suggest) + '"]');
+    if (box) box.value = it.scout.suggestions[kind][n];
+    return;
+  }
   if (d.sundo) return act(d.sundo, () => api("/api/signoff/" + encodeURIComponent(d.sundo) + "/undo", { method: "POST" }));
   if (d.reject) {
     const note = (rejectNotes[d.reject] || "").trim();
@@ -1864,15 +1922,7 @@ document.addEventListener("input", (e) => {
   if (ds.bnote !== undefined && backlogPicks[ds.bnote]) backlogPicks[ds.bnote].note = e.target.value;
   if (ds.comment !== undefined) {
     const [taskId, kind, n] = ds.comment.split(":");
-    const c = soComments[taskId];
-    if (!c) return;
-    c[kind][n] = e.target.value;
-    const btn = document.querySelector('[data-approve="' + CSS.escape(taskId) + '"]');
-    if (btn) btn.textContent = approveLabel(taskId);
-    clearTimeout(commentTimers[taskId]);
-    commentTimers[taskId] = setTimeout(() => {
-      api("/api/signoff/" + encodeURIComponent(taskId) + "/comments", { method: "POST", body: c }).catch((err) => showErr(taskId, err.message));
-    }, 600);
+    setComment(taskId, kind, n, e.target.value);
   }
 });
 readLocation();

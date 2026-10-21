@@ -42,8 +42,34 @@ export type SignoffItem = {
   // more edits). editsMerged: when Main reported that task's merge.
   decision: { approved: boolean; note: string; at: number; edits?: string; editsMerged?: number } | null;
   reverted: { commit: string; at: number } | null;
+  scout?: Scout;
 };
 export type SignoffState = "unmerged" | "waiting" | "approved" | "rejected";
+
+// Isomux Sign-off Scout's prediction (Nil, 2026-10-21): stamp = he approves
+// as is, look = normal review, pushback = something seems off. Suggestions
+// are comments he may write, by entry index; the page never fills a field.
+export const VERDICTS = ["stamp", "look", "pushback"] as const;
+export type Scout = {
+  verdict: (typeof VERDICTS)[number];
+  reason: string;
+  suggestions: Comments;
+  at: number;
+};
+// One of Nil's sign-off decisions with the Scout's verdict, kept after the
+// item leaves the list, so the Scout can compare.
+export type PastDecision = {
+  taskId: string;
+  title: string;
+  commit: string;
+  approved: boolean;
+  note: string;
+  comments: Comments;
+  edits?: string;
+  scout: Scout | null;
+  at: number;
+};
+const HISTORY_MAX = 300;
 
 type State = {
   items: Record<string, SignoffItem>;
@@ -60,6 +86,7 @@ type State = {
   // A rejected merge and its revert (Nil, 2026-10-20): a push point between
   // them would ship the merge without its revert.
   spans?: { from: number; to: number }[];
+  history?: PastDecision[];
 };
 
 export type PushCheck = {
@@ -305,6 +332,7 @@ export class SignoffStore {
     const i = this.mergedItem(taskId);
     if (signoffState(i) !== "waiting") throw new ValidationError("only an item that waits for you can be approved");
     i.decision = { approved: true, note: "", at: this.now(), ...(editsTaskId ? { edits: editsTaskId } : {}) };
+    this.remember(i);
     this.save();
     return i;
   }
@@ -318,6 +346,8 @@ export class SignoffStore {
     if (i.decision!.edits) throw new ValidationError(`the item already waits for ${i.decision!.edits}`);
     if (editsTaskId === taskId) throw new ValidationError("an item cannot wait for its own task");
     i.decision = { ...i.decision!, edits: editsTaskId };
+    const past = (this.state.history ?? []).find((x) => x.taskId === taskId && x.at === i.decision!.at);
+    if (past) past.edits = editsTaskId;
     this.save();
     return i;
   }
@@ -335,6 +365,52 @@ export class SignoffStore {
   recordReject(taskId: string, note: string): SignoffItem {
     const i = this.mergedItem(taskId);
     i.decision = { approved: false, note, at: this.now() };
+    this.remember(i);
+    this.save();
+    return i;
+  }
+
+  // Nil's decision, with the Scout's verdict, into the history (newest last).
+  private remember(i: SignoffItem): void {
+    const h = (this.state.history ??= []);
+    h.push({
+      taskId: i.taskId,
+      title: i.title,
+      commit: i.merged!.commit,
+      approved: i.decision!.approved,
+      note: i.decision!.note,
+      comments: i.comments ?? { copy: {}, images: {} },
+      ...(i.decision!.edits ? { edits: i.decision!.edits } : {}),
+      scout: i.scout ?? null,
+      at: i.decision!.at,
+    });
+    if (h.length > HISTORY_MAX) h.splice(0, h.length - HISTORY_MAX);
+  }
+
+  // Newest first.
+  history(limit = 50): PastDecision[] {
+    return [...(this.state.history ?? [])].reverse().slice(0, Math.max(1, Math.min(HISTORY_MAX, limit)));
+  }
+
+  // The Scout's verdict on a merged item; a new one replaces the old.
+  setScout(taskId: string, raw: unknown): SignoffItem {
+    const i = this.mergedItem(taskId);
+    const r = (raw ?? {}) as Record<string, unknown>;
+    if (!(VERDICTS as readonly unknown[]).includes(r.verdict)) throw new ValidationError(`verdict must be one of ${VERDICTS.join(", ")}`);
+    const reason = text(r.reason, "reason", 300).trim();
+    const s = (r.suggestions ?? {}) as Record<string, unknown>;
+    const pick = (kind: "copy" | "images", count: number): Record<string, string> => {
+      const v = (s[kind] ?? {}) as Record<string, unknown>;
+      if (typeof v !== "object" || Array.isArray(v)) throw new ValidationError(`suggestions.${kind} must be an object by entry index`);
+      const out: Record<string, string> = {};
+      for (const [k, x] of Object.entries(v)) {
+        if (!/^\d+$/.test(k) || Number(k) >= count) throw new ValidationError(`suggestions.${kind}.${k}: no such entry`);
+        const t = text(x, `suggestions.${kind}.${k}`, 2000, false).trim();
+        if (t) out[k] = t;
+      }
+      return out;
+    };
+    i.scout = { verdict: r.verdict as Scout["verdict"], reason, suggestions: { copy: pick("copy", i.copy.length), images: pick("images", i.images.length) }, at: this.now() };
     this.save();
     return i;
   }
@@ -343,6 +419,10 @@ export class SignoffStore {
     const i = this.mergedItem(taskId);
     if (signoffState(i) !== "approved") throw new ValidationError("only an approval can be undone");
     if (i.decision?.edits) throw new ValidationError(`the Sign-off changes task ${i.decision.edits} is filed; close it on the board instead`);
+    // An undone approval leaves the history: it was not his decision after all.
+    const h = this.state.history ?? [];
+    const at = h.map((x) => x.taskId === taskId && x.at === i.decision!.at).lastIndexOf(true);
+    if (at >= 0) h.splice(at, 1);
     i.decision = null;
     this.save();
     return i;

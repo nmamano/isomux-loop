@@ -171,6 +171,14 @@
   .diagram .st-hold rect, .diagram .st-backlog rect, .diagram .st-obsolete rect { fill: var(--chip); }
   .diagram .st.picked rect { stroke-width: 3; }
   .picked-list { margin-bottom: 8px; }
+  /* The Scout's verdict, first in a Sign-off card (Nil, 2026-10-21). */
+  .verdict { display: inline-block; font-size: 13px; font-weight: 700; border-radius: 6px; padding: 1px 8px; border: 1px solid; }
+  .v-stamp { color: var(--ok); border-color: var(--ok); }
+  .v-look { color: var(--muted); border-color: var(--line); }
+  .v-pushback { color: var(--warn); border-color: var(--warn); }
+  .vreason { font-size: 14px; margin: 4px 0 6px; }
+  .suggest { display: block; width: 100%; text-align: left; font: inherit; font-size: 13px; color: var(--fg); background: var(--chip);
+    border: 1px dashed var(--line); border-radius: 8px; padding: 6px 10px; margin: 6px 0 4px; cursor: pointer; }
   .badge { background: var(--accent); color: var(--accent-fg); border-radius: 6px; padding: 0 6px; font-weight: 600; }
   .card.packet { border-color: var(--accent); }
   .question { font-size: 16px; font-weight: 600; margin: 8px 0; overflow-wrap: anywhere; }
