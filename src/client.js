@@ -148,6 +148,7 @@ const HELP = {
   pushback: "Push back: the Scout thinks something is off or controversial; the reason names it.",
   noVerdict: "No verdict: the Scout has not read this item yet.",
   suggested: "The comment Isomux Sign-off Scout predicts you write here. Tap to put it in the field, then edit or keep it. Nothing is filled in for you.",
+  suggestCount: "Isomux Sign-off Scout suggests comments on this card. Tap to go to the first one.",
   verdictFilter: "Show only the items with these Scout verdicts. Your browser keeps the choice. The tab count stays the full total.",
 };
 // The states: label, definition (board facts), and place in the diagram.
@@ -1403,10 +1404,23 @@ function hasComments(taskId) {
   const c = soComments[taskId];
   return Boolean(c && [...Object.values(c.copy), ...Object.values(c.images)].some((v) => v && v.trim()));
 }
+// The Scout's suggested edits on an item (Nil, 2026-10-22: easy to miss).
+function suggestionsOf(it, kind, n) {
+  const s = it.scout && it.scout.suggestions && it.scout.suggestions[kind];
+  return s ? (n === undefined ? Object.keys(s).length : s[String(n)]) : n === undefined ? 0 : undefined;
+}
+function suggestCount(it) {
+  return suggestionsOf(it, "copy") + suggestionsOf(it, "images");
+}
+function suggestJump(it, extra) {
+  const n = suggestCount(it);
+  return '<button class="sugjump' + (extra ? " " + extra : "") + '" data-sugjump="' + esc(it.taskId) + '"' + tip("suggestCount") + ">" +
+    n + (n === 1 ? " suggested edit" : " suggested edits") + "</button>";
+}
 function commentBox(it, kind, n) {
   const v = commentsOf(it)[kind][String(n)] || "";
-  const sug = it.scout && it.scout.suggestions && it.scout.suggestions[kind] && it.scout.suggestions[kind][String(n)];
-  return (sug ? '<button class="suggest" data-suggest="' + esc(it.taskId + ":" + kind + ":" + n) + '"' + tip("suggested") + "><b>Suggested:</b> " + esc(sug) + "</button>" : "") +
+  const sug = suggestionsOf(it, kind, n);
+  return (sug ? '<button class="suggest" data-suggest="' + esc(it.taskId + ":" + kind + ":" + n) + '"' + tip("suggested") + '><span class="sughead"><b>Suggested edit</b><span class="sinuse">Use</span></span>' + esc(sug) + "</button>" : "") +
     '<textarea rows="1" class="comment" placeholder="Comment: a note, or new text in quotes" data-comment="' +
     esc(it.taskId) + ":" + kind + ":" + n + '"' + tip("comment") + ">" + esc(v) + "</textarea>";
 }
@@ -1493,8 +1507,9 @@ function renderSignoff() {
       : it.state === "rejected" ? '<span class="warn"' + tip("rejected") + ">Rejected, waiting for revert: " + esc(it.decision.note) + "</span>"
       : "<span" + tip("waitingSign") + ">Waiting for you</span>";
     const sc = it.scout;
-    h += cardOpen(it.taskId, "signoff-card") +
-      (sc ? '<div class="verdict v-' + esc(sc.verdict) + '"' + tip(sc.verdict) + ">" + esc(VERDICT_LABEL[sc.verdict] || sc.verdict) + "</div>" +
+    const sugs = waiting && suggestCount(it) > 0;
+    h += cardOpen(it.taskId, "signoff-card" + (sugs ? " has-sug" : "")) +
+      (sc ? '<div class="verdict v-' + esc(sc.verdict) + '"' + tip(sc.verdict) + ">" + esc(VERDICT_LABEL[sc.verdict] || sc.verdict) + "</div>" + (sugs ? " " + suggestJump(it) : "") +
         '<div class="vreason"' + tip(sc.verdict) + ">" + linkIds(sc.reason) + "</div>" : "") +
       '<div class="sotitle">' + esc(it.title) + "</div>" +
       '<div class="meta"><span>Task ' + idCopy(it.taskId) + "</span><span" + tip("sha") + ">commit <code>" + esc(it.merged.commit.slice(0, 10)) + "</code></span><span>merged " +
@@ -1511,9 +1526,9 @@ function renderSignoff() {
         (agent ? "for agents" : "for members") + (c.guessed ? " · guessed" : "") + "</span>";
       const cols = '<div class="cols"><div><h2' + tip("old") + '>Old</h2><div class="copytext">' + (c.old ? o : '<span class="small">New copy</span>') +
         '</div></div><div><h2' + tip("new") + '>New</h2><div class="copytext">' + nw + "</div></div></div>" + (waiting ? commentBox(it, "copy", n) : "");
-      h += agent
+      h += agent && !(waiting && suggestionsOf(it, "copy", n))
         ? '<div class="entry agent">' + details("aud:" + it.taskId + ":" + n, "audAgent", tag + " " + esc(c.where), cols) + "</div>"
-        : '<div class="entry"><div class="where"' + tip("where") + ">" + tag + " " + esc(c.where) + "</div>" + cols + "</div>";
+        : '<div class="entry' + (agent ? " agent sug-open" : "") + '"><div class="where"' + tip("where") + ">" + tag + " " + esc(c.where) + "</div>" + cols + "</div>";
     }
     // Before/after pairs side by side (one comment each, kept on the pair's
     // first image); lone images as thumbnails with their own comment.
@@ -1552,7 +1567,8 @@ function renderSignoff() {
     }
     h += '<div class="err" data-err="' + esc(it.taskId) + '"></div>';
     if (waiting)
-      h += '<div class="entry"><textarea rows="1" placeholder="Why you reject it (needed to reject)" data-rnote="' + esc(it.taskId) + '"' + tip("rejectNote") + ">" + esc(rejectNotes[it.taskId] || "") + "</textarea>" +
+      h += '<div class="entry">' + (sugs ? '<div class="sugcall">' + suggestJump(it, "big") + " on this card. Tap one to use it.</div>" : "") +
+        '<textarea rows="1" placeholder="Why you reject it (needed to reject)" data-rnote="' + esc(it.taskId) + '"' + tip("rejectNote") + ">" + esc(rejectNotes[it.taskId] || "") + "</textarea>" +
         '<div class="actions"><button class="btn primary" data-approve="' + esc(it.taskId) + '"' + tip("approve") + ">" + approveLabel(it.taskId) + "</button>" +
         '<button class="btn ghost" data-reject="' + esc(it.taskId) + '"' + tip("reject") + ">Reject</button>" + q("sactions", it.taskId) + "</div>" +
         helpBox(["approve", "reject", "comment", "rejectNote"], "sactions", it.taskId) + "</div>";
@@ -1816,6 +1832,16 @@ document.addEventListener("click", async (e) => {
     else soVerdicts.add(d.sofilter);
     localStorage.setItem("loop.soVerdicts", JSON.stringify([...soVerdicts]));
     return render();
+  }
+  if (d.sugjump) {
+    const card = document.querySelector('.signoff-card[data-card="' + CSS.escape(d.sugjump) + '"]');
+    const first = card && card.querySelector(".suggest");
+    if (!first) return;
+    first.scrollIntoView({ behavior: "smooth", block: "center" });
+    first.classList.remove("flash");
+    void first.offsetWidth;
+    first.classList.add("flash");
+    return;
   }
   if (d.suggest) {
     const [taskId, kind, n] = d.suggest.split(":");

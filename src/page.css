@@ -1,11 +1,11 @@
   :root {
     --bg: #f6f5f2; --card: #fff; --fg: #1d1d1f; --muted: #6b6b70; --line: #e3e1dc;
-    --accent: #2f6fde; --accent-fg: #fff; --chip: #efeee9; --warn: #b4441c; --ok: #2e7d4f;
+    --accent: #2f6fde; --accent-fg: #fff; --chip: #efeee9; --warn: #b4441c; --ok: #2e7d4f; --sug: #7c3aed; --sug-fg: #fff;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #151517; --card: #1f1f22; --fg: #ececee; --muted: #9a9aa2; --line: #313136;
-      --accent: #5b8ef0; --accent-fg: #fff; --chip: #2a2a2f; --warn: #f08a5d; --ok: #6cc28f;
+      --accent: #5b8ef0; --accent-fg: #fff; --chip: #2a2a2f; --warn: #f08a5d; --ok: #6cc28f; --sug: #b794f6; --sug-fg: #1a1023;
     }
   }
   * { box-sizing: border-box; }
@@ -177,8 +177,23 @@
   .v-look { color: var(--muted); border-color: var(--line); }
   .v-pushback { color: var(--warn); border-color: var(--warn); }
   .vreason { font-size: 14px; margin: 4px 0 6px; }
-  .suggest { display: block; width: 100%; text-align: left; font: inherit; font-size: 13px; color: var(--fg); background: var(--chip);
-    border: 1px dashed var(--line); border-radius: 8px; padding: 6px 10px; margin: 6px 0 4px; cursor: pointer; }
+  /* The Scout's suggested edits stand out (Nil, 2026-10-22): one hue, used only for them. */
+  .suggest { display: block; width: 100%; text-align: left; font: inherit; font-size: 14px; color: var(--fg);
+    background: color-mix(in srgb, var(--sug) 12%, var(--card)); border: 1px solid color-mix(in srgb, var(--sug) 45%, transparent);
+    border-left: 5px solid var(--sug); border-radius: 8px; padding: 8px 12px; margin: 10px 0 6px; cursor: pointer; }
+  .suggest:hover { background: color-mix(in srgb, var(--sug) 20%, var(--card)); }
+  .sughead { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 2px;
+    color: var(--sug); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .sinuse { background: var(--sug); color: var(--sug-fg); border-radius: 6px; padding: 1px 10px; font-weight: 700; text-transform: none; letter-spacing: 0; }
+  @keyframes sugflash { from { box-shadow: 0 0 0 5px color-mix(in srgb, var(--sug) 55%, transparent); } to { box-shadow: none; } }
+  .suggest.flash { animation: sugflash 1.2s ease-out; }
+  .sugjump { display: inline-block; vertical-align: top; font: inherit; font-size: 13px; font-weight: 700; color: var(--sug-fg); background: var(--sug);
+    border: 1px solid var(--sug); border-radius: 6px; padding: 1px 8px; cursor: pointer; }
+  .sugjump.big { font-size: 14px; padding: 2px 10px; }
+  .sugcall { background: color-mix(in srgb, var(--sug) 12%, var(--card)); border-left: 5px solid var(--sug); border-radius: 8px;
+    padding: 8px 12px; margin-bottom: 10px; font-size: 14px; }
+  .card.has-sug { border-color: color-mix(in srgb, var(--sug) 55%, var(--line)); }
+  .entry.agent.sug-open { opacity: 1; }
   .badge { background: var(--accent); color: var(--accent-fg); border-radius: 6px; padding: 0 6px; font-weight: 600; }
   .card.packet { border-color: var(--accent); }
   .question { font-size: 16px; font-weight: 600; margin: 8px 0; overflow-wrap: anywhere; }
