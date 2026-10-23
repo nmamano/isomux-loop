@@ -132,7 +132,8 @@ POST /api/signoff/:taskId/merged  Isomux Main after EVERY merge, item or not: {"
                                   current main sha when it closes the task, and the item shows then.
 POST /api/signoff/:taskId/scout   Isomux Sign-off Scout: {"verdict":"stamp|look|pushback","reason":"one line (max 300)",
                                   "suggestions":{"copy":{"<entry index>":"comment"},"images":{"<image index>":"comment"}}}
-                                  (suggestions optional). A new post replaces the old. The Sign-off card shows it; Nil taps a
+                                  (suggestions optional; a before/after pair has one field, so either image's index
+                                  works). A new post replaces the old. The Sign-off card shows it; Nil taps a
                                   suggestion to put it in his comment field. The app messages the Scout when a merge puts an
                                   item on the Sign-off tab (also after a re-merge).
 GET  /api/signoff/history?limit=  Nil's sign-off decisions, newest first (max 300): taskId, title, commit, approved, note,

@@ -117,6 +117,19 @@ export function signoffState(i: SignoffItem): SignoffState {
   return i.decision.approved ? "approved" : "rejected";
 }
 
+// A before/after pair has one comment field, on its first image: a comment or
+// suggestion keyed on either image of the pair moves there (both texts, if
+// both images have one).
+export function onPairFirst(images: Image[], byIndex: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, t] of Object.entries(byIndex)) {
+    const im = images[Number(k)];
+    const key = im?.pair ? String(images.findIndex((x) => x.pair === im.pair)) : k;
+    out[key] = out[key] ? out[key] + "\n" + t : t;
+  }
+  return out;
+}
+
 function text(v: unknown, field: string, max: number, required = true): string {
   if (v === undefined || v === null || v === "") {
     if (required) throw new ValidationError(`${field} is required`);
@@ -151,6 +164,12 @@ export class SignoffStore {
     this.state = readJson<State>(this.file, { items: {}, lastSha: null, lastPushGo: null });
     this.images = new ImageDir(join(dataDir, "images", "signoff"));
     if (!this.state.unpushed) this.seedUnpushed();
+    // Keys stored before the fold below (Nil, 2026-10-23: a suggestion on a
+    // pair's after image showed in no field).
+    for (const i of Object.values(this.state.items)) {
+      if (i.comments) i.comments.images = onPairFirst(i.images, i.comments.images);
+      if (i.scout) i.scout.suggestions.images = onPairFirst(i.images, i.scout.suggestions.images);
+    }
   }
 
   // Data from before the push record: merged items that are not rejected,
@@ -301,7 +320,7 @@ export class SignoffStore {
       }
       return out;
     };
-    i.comments = { copy: pick(r.copy, i.copy.length, "copy entry"), images: pick(r.images, i.images.length, "image") };
+    i.comments = { copy: pick(r.copy, i.copy.length, "copy entry"), images: onPairFirst(i.images, pick(r.images, i.images.length, "image")) };
     this.save();
     return i;
   }
@@ -430,7 +449,7 @@ export class SignoffStore {
       }
       return out;
     };
-    i.scout = { verdict: r.verdict as Scout["verdict"], reason, suggestions: { copy: pick("copy", i.copy.length), images: pick("images", i.images.length) }, at: this.now() };
+    i.scout = { verdict: r.verdict as Scout["verdict"], reason, suggestions: { copy: pick("copy", i.copy.length), images: onPairFirst(i.images, pick("images", i.images.length)) }, at: this.now() };
     this.save();
     return i;
   }

@@ -455,4 +455,26 @@ describe("sign-off", () => {
     s.setComments("t1", { images: { "0": "too much padding" } });
     expect(s.commentLines(s.get("t1")!, false)).toEqual(['screenshots "Asks page" (before and after): too much padding']);
   });
+
+  test("a pair's one field: a suggestion or comment on either image is on its first image, also in data saved before", () => {
+    const dir = tempDir();
+    const s = new SignoffStore(dir);
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.addImage("t1", PNG, "lone");
+    s.addImage("t1", PNG, "old", "Asks page", "before");
+    s.addImage("t1", PNG, "new", "Asks page", "after");
+    s.setScout("t1", { verdict: "look", reason: "x", suggestions: { images: { "0": "crop", "2": "too much padding" } } });
+    expect(s.get("t1")!.scout!.suggestions.images).toEqual({ "0": "crop", "1": "too much padding" });
+    s.setComments("t1", { images: { "1": "a", "2": "b" } });
+    expect(s.get("t1")!.comments!.images).toEqual({ "1": "a\nb" });
+    // An item saved with the after image's index, as before the fold.
+    const file = join(dir, "signoff.json");
+    const raw = JSON.parse(readFileSync(file, "utf8"));
+    raw.items.t1.scout.suggestions.images = { "2": "too much padding" };
+    raw.items.t1.comments.images = { "2": "b" };
+    writeFileSync(file, JSON.stringify(raw));
+    const again = new SignoffStore(dir).get("t1")!;
+    expect([again.scout!.suggestions.images, again.comments!.images]).toEqual([{ "1": "too much padding" }, { "1": "b" }]);
+  });
 });
