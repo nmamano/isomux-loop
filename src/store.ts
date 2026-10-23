@@ -74,7 +74,14 @@ export type Item = {
   undone?: Decision | null;
   reopenedAt?: number;
   fromBacklog?: boolean;
+  // Nil brought a [hold] task back to Triage (Nil, 2026-10-23).
+  fromHold?: boolean;
 };
+
+// The curator's recommendation for a backlog (P4) task, shown on the Backlog
+// tab (Nil, 2026-10-23). Kept apart from the cards: an open card would move
+// the task to Triage.
+export type Recommendation = ProposalBody & { at: number };
 
 export type ItemState = "open" | "decided" | "applied" | "failed";
 
@@ -87,6 +94,7 @@ export function itemState(item: Item): ItemState {
 
 type State = {
   items: Record<string, Item>;
+  recs?: Record<string, Recommendation>;
   notify: { lastDecisionAt: number; lastSentAt: number };
 };
 
@@ -172,7 +180,7 @@ export function decisionNote(choice: string, raw: unknown): string {
 }
 
 export class Store {
-  private state: State;
+  private state: State & { recs: Record<string, Recommendation> };
   private file: string;
 
   constructor(
@@ -181,9 +189,10 @@ export class Store {
   ) {
     mkdirSync(dataDir, { recursive: true });
     this.file = join(dataDir, "triage.json");
-    this.state = existsSync(this.file)
+    const state: State = existsSync(this.file)
       ? (JSON.parse(readFileSync(this.file, "utf8")) as State)
       : { items: {}, notify: { lastDecisionAt: 0, lastSentAt: 0 } };
+    this.state = { ...state, recs: state.recs ?? {} };
     if (migrate(this.state)) this.save();
   }
 
@@ -217,47 +226,86 @@ export class Store {
   // Upsert from the curator. A decision that is not applied yet is Nil's and
   // is never overwritten; an applied item may get a fresh proposal (a change
   // of direction), which reopens it.
-  // Nil, 2026-10-19: a P4 (backlog) task gets a card only to promote it, so a
-  // proposal for a P4 task that is not go, design or hold is refused, not stored.
-  propose(raws: unknown[]): { created: string[]; updated: string[]; skipped: string[]; refused: string[] } {
+  // Nil, 2026-10-23: a proposal for a P4 (backlog) task, any choice, is the
+  // task's recommendation on the Backlog tab, not a card. A task that still
+  // has a card (not applied) is skipped.
+  propose(raws: unknown[]): { created: string[]; updated: string[]; skipped: string[]; recommended: string[] } {
     const parsed = raws.map(parseProposal);
-    const out = { created: [] as string[], updated: [] as string[], skipped: [] as string[], refused: [] as string[] };
+    const out = { created: [] as string[], updated: [] as string[], skipped: [] as string[], recommended: [] as string[] };
     const at = this.now();
     for (const p of parsed) {
-      if (p.task.priority === "P4" && !tagged(p.proposal.choice)) {
-        out.refused.push(p.taskId);
+      const existing = this.state.items[p.taskId];
+      const hasCard = existing && itemState(existing) !== "applied";
+      if (p.task.priority === "P4") {
+        if (hasCard) out.skipped.push(p.taskId);
+        else {
+          this.state.recs[p.taskId] = { ...p.proposal, at };
+          out.recommended.push(p.taskId);
+        }
         continue;
       }
-      const existing = this.state.items[p.taskId];
-      if (existing && existing.decision && itemState(existing) !== "applied") {
+      if (hasCard && existing.decision) {
         out.skipped.push(p.taskId);
         continue;
       }
       this.state.items[p.taskId] = { ...p, proposedAt: at, decision: null, applied: null };
+      // The curator's proposal for a card Nil brought back from hold keeps the mark.
+      if (hasCard && existing.fromHold) this.state.items[p.taskId].fromHold = true;
       (existing ? out.updated : out.created).push(p.taskId);
     }
     this.save();
     return out;
   }
 
-  // Nil brings a P4 task in from the Backlog tab: a decided card, sent to the
-  // curator like any other triage decision.
+  recommendation(taskId: string): Recommendation | undefined {
+    return this.state.recs[taskId];
+  }
+
+  // Nil decides a P4 task on the Backlog tab (go, design or hold with a
+  // priority, backlog to keep it, obsolete): a decided card, sent to the
+  // curator like any other triage decision. Its proposal is the curator's
+  // recommendation, when there is one.
   bringIn(task: TaskSnapshot, taskId: string, raw: unknown): Item {
     const existing = this.state.items[taskId];
     if (existing && itemState(existing) !== "applied") throw new ValidationError("this task already has a card");
     const r = (raw ?? {}) as Record<string, unknown>;
-    const c = choiceAndPriority(r, TAGGED);
+    const c = choiceAndPriority(r, CHOICES);
     const at = this.now();
+    const rec = this.state.recs[taskId];
+    let proposal: ProposalBody = { ...c, why: "Nil decided it on the Backlog tab." };
+    if (rec) {
+      const { at: _at, ...body } = rec;
+      proposal = body;
+    }
     this.state.items[taskId] = {
       taskId,
       task,
-      proposal: { ...c, why: "Nil brought it in from the backlog." },
+      proposal,
       proposedAt: at,
-      decision: { ...c, note: str(r.note, "note", 4000, true) ?? "", decidedAt: at },
+      decision: { ...c, note: decisionNote(c.choice, r.note), decidedAt: at },
       applied: null,
       fromBacklog: true,
     };
     this.state.notify.lastDecisionAt = at;
+    this.save();
+    return this.state.items[taskId];
+  }
+
+  // Nil brings a [hold] task back to Triage: an open card. Its proposal holds
+  // the task where it is until the curator posts one.
+  reopenHold(task: TaskSnapshot, taskId: string): Item {
+    const existing = this.state.items[taskId];
+    if (existing && itemState(existing) !== "applied") throw new ValidationError("this task already has a card");
+    const priority = (LOOP_PRIORITIES as readonly unknown[]).includes(task.priority) ? (task.priority as LoopPriority) : "P3";
+    this.state.items[taskId] = {
+      taskId,
+      task,
+      proposal: { choice: "hold", priority, why: "Nil brought it back from hold." },
+      proposedAt: this.now(),
+      decision: null,
+      applied: null,
+      fromHold: true,
+    };
     this.save();
     return this.state.items[taskId];
   }
@@ -326,6 +374,7 @@ export class Store {
       if (item && !item.decision && item.undone?.decidedAt === decidedAt) {
         item.applied = { at, ok: r.ok !== false, error: str(r.error, "error", 2000, true), decidedAt };
         item.reopenedAt = at;
+        if (item.applied.ok) delete this.state.recs[taskId];
         out.recorded.push(taskId);
         continue;
       }
@@ -340,6 +389,8 @@ export class Store {
         error: str(r.error, "error", 2000, true),
         decidedAt,
       };
+      // The decision reached the board: the backlog recommendation is spent.
+      if (item.applied.ok) delete this.state.recs[taskId];
       out.recorded.push(taskId);
     }
     this.save();

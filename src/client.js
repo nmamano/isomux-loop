@@ -79,7 +79,7 @@ const HELP = {
   note: "Optional words for the curator. A note can change anything, for example the scope; the curator applies it when it writes your decision to the board. Ctrl+Enter (Cmd+Enter on a Mac) confirms; Enter adds a line.",
   confirm: "Confirm (or Ctrl+Enter / Cmd+Enter) saves your choice in the rows above. The curator writes it to the board a few minutes after your last decision. Undo is in the notice that follows, on the Decided tab, and after it is applied on the Past decisions tab.",
   later: "Later moves this card to the end of the list. Nothing is saved; the notice that follows has Undo.",
-  undo: "Undo puts the card back in Triage with your choice and note filled in. The curator has not written it to the board yet. A Bring in goes back to the Backlog.",
+  undo: "Undo puts the card back in Triage with your choice and note filled in. The curator has not written it to the board yet. A decision from the Backlog tab goes back to the Backlog.",
   reopen: "Undo reopens the card in Triage with your choice and note filled in. The board keeps this decision until you decide again; the curator writes your next decision over it, so no separate revert is needed.",
   toastUndo: "Undo this (or Ctrl+Z / Cmd+Z while this notice shows): the card comes back with your choice and note filled in.",
   decision: "What you chose for this task.",
@@ -104,7 +104,7 @@ const HELP = {
   tabOpen: "Cards that wait for your decision: workers' design packets first, then the curator's proposals.",
   tabDecided: "Your decisions that the curator has not written to the board yet. You can undo them.",
   tabApplied: "Decisions already on the board, newest first. Not a stage: each task is in the diagram where the board puts it. Undo reopens one in Triage.",
-  tabBacklog: "The Backlog state: P4 tasks with no card. The loop never picks them. Bring one in as go, design or on hold, with a priority.",
+  tabBacklog: "The Backlog state: P4 tasks with no card. The loop never picks them. Decide one: go, design or on hold with a priority, keep it in the backlog, or close it as obsolete.",
   copyId: "Copy the task id.",
   idLink: "Go to this task's card: it opens the tab that holds it and flashes the card.",
   keys: "Keyboard shortcuts for triage: j/k move between cards, g d h b o w pick, 0-3 set the priority, Ctrl+Enter (Cmd+Enter) confirms. Press ? to show the list.",
@@ -115,7 +115,10 @@ const HELP = {
   toggleAll: "Expand or collapse every description and packet in this list at once.",
   splitView: "Show the task-state diagram beside Triage. It updates after each decision and every 15 s. Drag the line between them to change the widths. A narrow screen shows Triage only.",
   divider: "Drag to change the widths of the diagram and Triage.",
-  bringIn: "Bring in: give this backlog task go, design or on hold and a priority (P0-P3). It goes to the curator like any triage decision, and you can undo it in Decided until then.",
+  bringIn: "Decide this backlog task: go, design or on hold with a priority (P0-P3), backlog to keep it, or obsolete to close it (the note gives the reason). It goes to the curator like any triage decision, and you can undo it in Decided until then.",
+  recommend: "The curator's recommendation for this backlog task, preselected below.",
+  backToTriage: "Back to Triage: a card for this task in Triage, so you decide it again. The curator proposes it; the task stays on hold until your decision reaches the board.",
+  backOnHold: "Put back on hold: take this card away. The task stays on hold, as before.",
   tabSignoff: "Merged copy and visible changes that wait for your approve or reject, and rejections that wait for their revert, oldest merge first. An approved item moves to Push; approving from the top moves the push point.",
   tabPush: "Merged work not pushed yet: approved sign-off items and merges with nothing to sign off. The same tasks as the diagram's Push stage. Push sends everything up to the push point; the rest waits.",
   pushPoint: "The push point is the newest merge with every sign-off item at or before it approved. Main is linear, so a push takes everything up to it. A rejected item holds it back until Isomux Main reports the revert, and an item approved with comments until its Sign-off changes task is merged or closed.",
@@ -231,6 +234,11 @@ function briefLine(t) {
   const when = t.closedAt ? " · closed " + clock(t.closedAt) : "";
   return taskLine({ id: t.id, title: t.title, priority: t.priority }, null, when);
 }
+// An on-hold task, with the button that brings it back to Triage (Nil, 2026-10-23).
+function holdLine(t) {
+  return briefLine(t).replace(/<\/div>$/, ' <button class="btn ghost small-btn" data-reopen="' + esc(t.id) + '"' + tip("backToTriage") + ">Back to Triage</button></div>") +
+    '<div class="err" data-err="' + esc(t.id) + '"></div>';
+}
 function renderStates(b) {
   let h = "<h2" + tip("diagram") + ">Task states " + q("diagram") + "</h2>" + helpBox(["diagram"], "diagram") + diagram(b.states);
   if (b.states.other.count) h += '<div class="small"' + tip("other") + '><a href="#" data-state="other">' + b.states.other.count + (b.states.other.count === 1 ? " task fits" : " tasks fit") + " no state</a> " + q("other") + "</div>" + helpBox(["other"], "other");
@@ -241,7 +249,7 @@ function renderStates(b) {
     const recent = pickedState === "done" || pickedState === "obsolete";
     h += '<div class="picked-list"><h2 title="' + esc(help) + '">' + esc(label) + " (" + v.count + ")" + (recent ? " · last " + v.tasks.length : "") + "</h2>" +
       '<div class="small">' + esc(help) + "</div>" +
-      (v.tasks.length ? v.tasks.map(briefLine).join("") : '<div class="small">None.</div>') + "</div>";
+      (v.tasks.length ? v.tasks.map(pickedState === "hold" ? holdLine : briefLine).join("") : '<div class="small">None.</div>') + "</div>";
   }
   return h;
 }
@@ -277,7 +285,7 @@ const KEY_HELP = [
   ["p", "packet: fill in the next option (choice and note)"],
   ["e", "expand or collapse the description"],
   ["n", "write in the note; Esc leaves it"],
-  ["Ctrl+Enter / Cmd+Enter", "confirm (Backlog: bring in), in the note or not; the next card becomes current. Enter and Shift+Enter never confirm"],
+  ["Ctrl+Enter / Cmd+Enter", "confirm, in the note or not; the next card becomes current. Enter and Shift+Enter never confirm"],
   ["Ctrl+Z / Cmd+Z", "undo the last confirm or Later while its notice shows"],
   ["/", "search the cards; Esc leaves the box"],
   ["?", "show or hide this list"],
@@ -463,8 +471,14 @@ function onKey(e) {
     return Boolean(d);
   }
   if (tab === "backlog") {
-    const cls = { g: "go", d: "design", h: "hold" }[k];
+    const cls = { g: "go", d: "design", h: "hold", b: "backlog", o: "obsolete" }[k];
     const pri = /^[0-3]$/.test(k) ? "P" + k : null;
+    const rec = (backlogTasks.find((x) => x.id === id) || {}).recommendation;
+    if (k === "a" && rec) {
+      backlogPicks[id] = { choice: rec.choice, priority: rec.priority, note: (backlogPicks[id] || {}).note || "" };
+      render();
+      return true;
+    }
     if (cls || pri || k === "n") {
       if (!backlogPicks[id]) press("[data-bring]");
       if (cls) press('[data-bpick=choice][data-v="' + cls + '"]');
@@ -785,7 +799,7 @@ function renderStatus() {
   h += section("Ready queue (" + b.ready.length + ")", "ready", b.ready.map((x) => taskLine(x)), "Nothing is ready.");
   h += section("Merging (" + b.merging.length + ")", "merging", b.merging.map((x) => taskLine(x)), "Nothing is merging.");
   const st = b.states;
-  h += section("On hold (" + st.hold.count + ")", "hold", st.hold.tasks.map(briefLine), "No task is on hold.");
+  h += section("On hold (" + st.hold.count + ")", "hold", st.hold.tasks.map(holdLine), "No task is on hold.");
   h += section("Done (" + st.done.count + ") · last " + st.done.tasks.length, "recentDone", st.done.tasks.map(briefLine), "Nothing is done yet.");
   h += section("Obsolete (" + st.obsolete.count + ") · last " + st.obsolete.tasks.length, "recentObsolete", st.obsolete.tasks.map(briefLine), "Nothing is obsolete.");
   return h;
@@ -864,7 +878,8 @@ function openCard(i) {
     '<textarea rows="1" placeholder="' + (k.choice === "rewrite" ? "Note: what to write differently (needed)" : "Note for the curator (optional)") + '" data-note="' + esc(i.taskId) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
     '<div class="err" data-err="' + esc(i.taskId) + '"></div>' +
     '<div class="actions"><button class="btn primary" data-decide="' + esc(i.taskId) + '"' + tip("confirm") + ">Confirm</button>" +
-    '<button class="btn ghost" data-later="' + esc(i.taskId) + '"' + tip("later") + ">Later</button>" + q("actions", i.taskId) + "</div>" +
+    '<button class="btn ghost" data-later="' + esc(i.taskId) + '"' + tip("later") + ">Later</button>" +
+    (i.fromHold ? '<button class="btn ghost" data-unhold="' + esc(i.taskId) + '"' + tip("backOnHold") + ">Put back on hold</button>" : "") + q("actions", i.taskId) + "</div>" +
     helpBox(["confirm", "later", "note"], "actions", i.taskId) + "</div>"
   );
 }
@@ -1334,22 +1349,26 @@ function backlogCards() {
   if (!shown.length) return '<div class="empty">No task matches the filters.</div>';
   let h = "";
   for (const t of shown.map((e) => e.x)) {
+    const r = t.recommendation;
+    // The curator's recommendation is preselected, like a triage proposal.
+    if (r && !backlogPicks[t.id]) backlogPicks[t.id] = { choice: r.choice, priority: r.priority, note: "" };
     const k = backlogPicks[t.id];
     h += cardOpen(t.id) + '<div class="meta"><span>Filed by ' + esc(t.createdBy || "unknown") + "</span><span>" + filed(t.createdAt) + "</span><span>Task " + idCopy(t.id) + "</span>" +
       (t.effort ? '<span title="' + esc(HELP[t.effort] + (t.effortWhy ? " " + t.effortWhy : "")) + '">effort ' + esc(t.effort) + "</span>" : "") + "</div>" +
       '<div class="title">' + esc(t.title) + "</div>" +
+      (r ? '<div class="why"><span class="label"' + tip("recommend") + ">Curator recommends: " + esc(summary(r)) + "</span><br>" + esc(r.why) +
+        (r.effortWhy ? "<br><span" + tip("effort") + ">Effort: " + esc(r.effortWhy) + "</span>" : "") + "</div>" : "") +
       (t.description ? details("bdesc:" + t.id, "description", "Description", '<div class="desc">' + esc(t.description) + "</div>") : "");
     if (!k) {
-      h += '<div class="actions"><button class="btn ghost" data-bring="' + esc(t.id) + '"' + tip("bringIn") + ">Bring in</button></div>";
+      h += '<div class="actions"><button class="btn ghost" data-bring="' + esc(t.id) + '"' + tip("bringIn") + ">Decide</button></div>";
     } else {
-      const chipRow = (kind, list) =>
-        list.map((v) => '<button class="chip' + (k[kind] === v ? " on" : "") + '" data-bpick="' + kind + '" data-id="' + esc(t.id) + '" data-v="' + v + '"' + tip(v) + ">" + label(v) + "</button>").join("");
-      h += '<div class="row"><span class="label"' + tip("choice") + ">Choice</span>" + chipRow("choice", TAGGED) + "</div>" +
-        '<div class="row"><span class="label"' + tip("priority") + ">Priority</span>" + chipRow("priority", PRIORITIES) + "</div>" +
-        '<textarea rows="1" placeholder="Note for the curator (optional)" data-bnote="' + esc(t.id) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
+      const chipRow = (kind, list) => chips(kind, list, k[kind], r ? r[kind] : null, t.id, "bpick");
+      h += '<div class="row"><span class="label"' + tip("choice") + ">Choice</span>" + chipRow("choice", CHOICES) + "</div>" +
+        (tagged(k.choice) ? '<div class="row"><span class="label"' + tip("priority") + ">Priority</span>" + chipRow("priority", PRIORITIES) + "</div>" : "") +
+        '<textarea rows="1" placeholder="' + (k.choice === "obsolete" ? "Note: why it is obsolete" : "Note for the curator (optional)") + '" data-bnote="' + esc(t.id) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
         '<div class="err" data-err="' + esc(t.id) + '"></div>' +
-        '<div class="actions"><button class="btn primary" data-bconfirm="' + esc(t.id) + '"' + tip("bringIn") + ">Bring in</button>" +
-        '<button class="btn ghost" data-bcancel="' + esc(t.id) + '">Cancel</button></div>';
+        '<div class="actions"><button class="btn primary" data-bconfirm="' + esc(t.id) + '"' + tip("bringIn") + ">Confirm</button>" +
+        (r ? "" : '<button class="btn ghost" data-bcancel="' + esc(t.id) + '">Cancel</button>') + "</div>";
     }
     h += "</div>";
   }
@@ -1803,11 +1822,26 @@ document.addEventListener("click", async (e) => {
   if (d.bconfirm) {
     const id = d.bconfirm;
     const k = backlogPicks[id];
-    if (!k.choice || !k.priority) return showErr(id, "Pick a choice and a priority first.");
+    if (!k.choice) return showErr(id, "Pick a choice first.");
+    if (tagged(k.choice) && !k.priority) return showErr(id, "Pick a priority first.");
     return sendOff(id, t, async () => {
-      await api("/api/backlog/" + encodeURIComponent(id) + "/bring", { method: "POST", body: k });
+      await api("/api/backlog/" + encodeURIComponent(id) + "/bring", { method: "POST", body: { choice: k.choice, priority: tagged(k.choice) ? k.priority : null, note: k.note } });
       delete backlogPicks[id];
-    }, "Brought in: " + id, () => undoTriage(id));
+    }, "Decided: " + id, () => undoTriage(id));
+  }
+  if (d.reopen) {
+    const id = d.reopen;
+    return act(id, async () => {
+      await api("/api/hold/" + encodeURIComponent(id) + "/reopen", { method: "POST" });
+      showToast("Back in Triage: " + id, async () => {
+        await api("/api/items/" + encodeURIComponent(id), { method: "DELETE" }).catch((err) => showErr(id, err.message));
+        await load();
+      });
+    });
+  }
+  if (d.unhold) {
+    const id = d.unhold;
+    return sendOff(id, t, () => api("/api/items/" + encodeURIComponent(id), { method: "DELETE" }), "Back on hold: " + id, null);
   }
   if (d.preset) {
     const o = packets.find((x) => x.taskId === d.id).options.find((x) => x.label === d.preset);

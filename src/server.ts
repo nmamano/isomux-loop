@@ -1,7 +1,7 @@
 import { CLASSIFY_MS, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, SCOUT_NAME, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
 import { ClosedTimes } from "./closed-times";
 import { type ImageDir } from "./images";
-import { dispatch, dueIn, staleCards, status, tick, unclassified, type DispatchResult, type Status, type TickResult } from "./loop";
+import { dispatch, dueIn, parseTag, staleCards, status, tick, unclassified, type DispatchResult, type Status, type TickResult } from "./loop";
 import { join } from "node:path";
 import { readJson, writeJson } from "./json-file";
 import { httpOffice, type Task } from "./office";
@@ -10,7 +10,7 @@ import { PacketStore, packetState } from "./packets";
 import { PauseFlag } from "./pause";
 import { SignoffStore, signoffState, withAudience } from "./signoff";
 import { classify, stateViews, type Card, type StateKey, type StateView } from "./states";
-import { itemState, Store, ValidationError } from "./store";
+import { itemState, Store, ValidationError, type TaskSnapshot } from "./store";
 
 const port = Number(process.env.PORT);
 const dataDir = process.env.ISOMUX_APP_DATA_DIR;
@@ -41,8 +41,9 @@ POST /api/proposals               {"proposals":[{"taskId","task":{"title","descr
                                   priority; backlog sets P4 and no tag; obsolete closes it. A go/design/hold card may carry a new
                                   proposal.title and/or proposal.scope, which Nil accepts with the card.
                                   An item with a decision not yet applied is skipped; an applied item gets the new proposal and reopens.
-                                  A P4 task is proposed only to promote it: a proposal for it that is not go, design or hold comes
-                                  back under "refused".
+                                  A P4 (backlog) task gets no card: its proposal, any choice (backlog: keep it at P4), is its
+                                  recommendation on the Backlog tab, preselected for Nil, and comes back under "recommended".
+                                  A newer one replaces it; it is dropped when a decision on the task is reported applied.
 DELETE /api/items/:taskId         withdraw a card (the task closed meanwhile)
 GET  /api/decisions               decisions to write to the board (decided, or failed earlier), triage and packets:
                                   each has "kind": "triage" or "packet"; both carry decision: choice, priority, note
@@ -57,6 +58,8 @@ POST /api/applied                 {"results":[{"taskId","decidedAt","kind?":"tri
                                   Nil can undo a decision, also after it was applied: the card reopens in Triage and his
                                   next decision overwrites the board (an obsolete task is reopened, backlog moves it to P4).
                                   A decision he undid after you read it still counts when you report it.
+                                  An open card with "fromHold": true is a [hold] task Nil brought back to Triage (the app
+                                  messages you its id): propose it as usual; your proposal replaces the app's placeholder.
 
 Packets (for workers; a card for Nil in Triage):
 POST /api/packets                 {"taskId","question","options":[{"label","cost","recommended":true|false,
@@ -73,9 +76,16 @@ DELETE /api/packets/:taskId       withdraw a packet, for example one Nil answere
                                   decision waits in /api/decisions (apply it, or ask him to undo it).
 
 Backlog (Nil's tab):
-GET  /api/backlog                 the tasks of the Backlog state (P4, no card), oldest first, with effort when a card estimated it
-POST /api/backlog/:taskId/bring   {"choice":"go|design|hold","priority":"P0-P3","note?"}: a decided card that goes to the curator
-                                  with the next burst, like any triage decision
+GET  /api/backlog                 the tasks of the Backlog state (P4, no card), oldest first, with the curator's "recommendation"
+                                  (choice, priority, why, effort, at) when it posted one, and effort when a card estimated it
+POST /api/backlog/:taskId/bring   {"choice":"go|design|hold|backlog|obsolete","priority":"P0-P3 (go, design, hold only)","note?"}:
+                                  Nil's decision, a decided card that goes to the curator with the next burst, like any triage
+                                  decision (fromBacklog: true; backlog keeps the task at P4, nothing to change on the board)
+
+On hold (Nil's button on the Status tab):
+POST /api/hold/:taskId/reopen     a [hold] task back to Triage: an open card (fromHold: true) with a placeholder proposal (hold at
+                                  its priority); the app messages the curator to propose it. DELETE /api/items/:taskId takes the
+                                  card back before Nil decides; the task stays on hold
 
 Loop (for Isomux PM):
 GET  /api/status                  pause state, last dispatch and tick, ready queue, holders, merging, and the
@@ -372,10 +382,11 @@ async function backlog(): Promise<unknown[]> {
     .filter((t) => (t.roomId ?? ROOM_ID) === ROOM_ID && classify(t, c.get(t.id) ?? null, so.has(t.id)) === "backlog")
     .sort((a, b) => a.createdAt - b.createdAt)
     .map((t) => {
-      // The curator's estimate from the card that sent it to the backlog, when known.
-      const p = store.get(t.id)?.proposal;
+      // The curator's estimate: its recommendation's, else the card's that sent it to the backlog.
+      const rec = store.recommendation(t.id);
+      const p = rec ?? store.get(t.id)?.proposal;
       return { id: t.id, title: t.title, description: t.description ?? "", createdBy: (t as { createdBy?: string }).createdBy ?? "", createdAt: t.createdAt,
-        ...(p?.effort ? { effort: p.effort, effortWhy: p.effortWhy } : {}) };
+        ...(p?.effort ? { effort: p.effort, effortWhy: p.effortWhy } : {}), ...(rec ? { recommendation: rec } : {}) };
     });
   backlogCache = { at: Date.now(), value };
   return value;
@@ -619,6 +630,26 @@ async function route(req: Request): Promise<Response> {
     );
     backlogCache = null;
     statusCache = null;
+    return json(item);
+  }
+
+  // On hold
+  const hr = path.match(/^\/api\/hold\/([^/]+)\/reopen$/);
+  if (hr && m === "POST") {
+    const taskId = decodeURIComponent(hr[1]);
+    const t = await office.task(taskId).catch(() => null);
+    const cls = t ? parseTag(t.title)?.class : undefined;
+    if (!t || t.status === "done" || t.status === "obsolete" || (cls !== "hold" && cls !== "authority"))
+      throw new ValidationError("this task is no longer an open [hold] task");
+    const item = store.reopenHold(
+      { title: t.title, description: t.description ?? "", priority: (t.priority ?? null) as TaskSnapshot["priority"], createdBy: (t as { createdBy?: string }).createdBy ?? "", createdAt: t.createdAt },
+      taskId,
+    );
+    statusCache = null;
+    const sent = await office.message(
+      `/isomux-curator Nil brought task ${taskId} back from hold to Triage. Propose it (POST ${local}/api/proposals); your proposal replaces the app's placeholder. API: curl -s ${local}/api/help`,
+    );
+    if (!sent) console.error(`hold reopen: the message to the curator failed (${taskId})`);
     return json(item);
   }
 

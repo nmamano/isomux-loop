@@ -204,23 +204,70 @@ describe("store", () => {
     expect(["class" in saved, "outcome" in saved, saved.choice]).toEqual([false, false, "go"]);
   });
 
-  test("a P4 task gets a card only to promote it", () => {
-    const { store } = setup();
+  test("a P4 task's proposal is its backlog recommendation, never a card; a decision reported applied drops it", () => {
+    const { store, clock } = setup();
     const p4 = (id: string, over: Record<string, unknown>) => ({ ...proposal(id, over), task: { ...proposal(id).task, priority: "P4" } });
-    const out = store.propose([p4("stay", { choice: "backlog" }), p4("gone", { choice: "obsolete" }), p4("up", { choice: "design", priority: "P3" })]);
-    expect([out.refused, out.created]).toEqual([["stay", "gone"], ["up"]]);
-    expect(store.get("stay")).toBeUndefined();
+    const out = store.propose([p4("stay", { choice: "backlog", priority: "P1" }), p4("gone", { choice: "obsolete" }), p4("up", { choice: "design", priority: "P3", effort: "S" })]);
+    expect([out.recommended, out.created]).toEqual([["stay", "gone", "up"], []]);
+    expect(["stay", "gone", "up"].map((id) => store.get(id))).toEqual([undefined, undefined, undefined]);
+    expect(store.recommendation("stay")).toMatchObject({ choice: "backlog", priority: null });
+    expect(store.recommendation("up")).toMatchObject({ choice: "design", priority: "P3", effort: "S" });
+    // A newer one replaces it.
+    store.propose([p4("up", { choice: "go", priority: "P2" })]);
+    expect(store.recommendation("up")!.choice).toBe("go");
+    // Nil decides: the card's proposal is the recommendation; it stays until the apply.
+    const i = store.bringIn(proposal("up").task as never, "up", { choice: "obsolete", note: "done elsewhere" });
+    expect([i.proposal.choice, i.proposal.why, i.decision!.choice]).toEqual(["go", "needed for the pilot", "obsolete"]);
+    expect(store.propose([p4("up", { choice: "hold", priority: "P3" })]).skipped).toEqual(["up"]);
+    expect(store.recommendation("up")!.choice).toBe("go");
+    clock.advance(5);
+    store.markApplied([{ taskId: "up", decidedAt: i.decision!.decidedAt, ok: false, error: "board down" }]);
+    expect(store.recommendation("up")).toBeDefined();
+    store.markApplied([{ taskId: "up", decidedAt: i.decision!.decidedAt, ok: true }]);
+    expect(store.recommendation("up")).toBeUndefined();
+    expect(store.recommendation("stay")).toBeDefined();
   });
 
-  test("bring in from the backlog: a decided card at P0-P3, refused when a card is open", () => {
+  test("decide from the backlog: go, design or hold at P0-P3, backlog or obsolete; refused when a card is open", () => {
     const { store } = setup();
     const snap = { title: "Old idea", description: "", priority: "P4" as const, createdBy: "Nil", createdAt: 1 };
     expect(() => store.bringIn(snap, "b1", { choice: "go", priority: "P4" })).toThrow(ValidationError);
-    expect(() => store.bringIn(snap, "b1", { choice: "backlog", priority: "P2" })).toThrow(ValidationError);
+    expect(() => store.bringIn(snap, "b1", { choice: "rewrite", note: "x" })).toThrow(ValidationError);
     const i = store.bringIn(snap, "b1", { choice: "design", priority: "P2", note: "now matters" });
-    expect([itemState(i), i.decision!.choice, i.decision!.priority, i.decision!.note]).toEqual(["decided", "design", "P2", "now matters"]);
+    expect([itemState(i), i.decision!.choice, i.decision!.priority, i.decision!.note, i.fromBacklog]).toEqual(["decided", "design", "P2", "now matters", true]);
     expect(store.pending().map((x) => x.taskId)).toEqual(["b1"]);
     expect(() => store.bringIn(snap, "b1", { choice: "go", priority: "P1" })).toThrow(ValidationError);
+    expect(store.bringIn(snap, "b2", { choice: "obsolete", priority: "P2", note: "dup of b1" }).decision).toMatchObject({ choice: "obsolete", priority: null, note: "dup of b1" });
+    expect(store.bringIn(snap, "b3", { choice: "backlog" }).decision).toMatchObject({ choice: "backlog", priority: null });
+    // Undo before the apply: no card, back on the Backlog tab.
+    expect(store.undo("b2")).toEqual({ withdrawn: true });
+    expect(store.get("b2")).toBeUndefined();
+  });
+
+  test("back from hold: an open card holding the task where it is, until the curator proposes it", () => {
+    const { store } = setup();
+    const snap = { title: "[hold | nil] Big idea", description: "", priority: "P1" as const, createdBy: "Nil", createdAt: 1 };
+    const i = store.reopenHold(snap, "h1");
+    expect([itemState(i), i.proposal.choice, i.proposal.priority, i.fromHold]).toEqual(["open", "hold", "P1", true]);
+    expect(store.reopenHold({ ...snap, priority: null }, "h2").proposal.priority).toBe("P3");
+    expect(() => store.reopenHold(snap, "h1")).toThrow(ValidationError);
+    // The curator's proposal replaces the placeholder and keeps the mark.
+    expect(store.propose([proposal("h1", { choice: "design", priority: "P2" })]).updated).toEqual(["h1"]);
+    expect([store.get("h1")!.proposal.choice, store.get("h1")!.fromHold]).toEqual(["design", true]);
+    // Taken back before a decision: no card.
+    expect(store.withdraw("h2")).toBe(true);
+    // Nil decides: a normal triage decision for the curator.
+    store.decide("h1", { choice: "go", priority: "P1", note: "" });
+    expect(store.pending().map((x) => x.taskId)).toEqual(["h1"]);
+    // After the apply, a new proposal is an ordinary card.
+    store.markApplied([{ taskId: "h1", decidedAt: store.get("h1")!.decision!.decidedAt, ok: true }]);
+    store.propose([proposal("h1")]);
+    expect(store.get("h1")!.fromHold).toBeUndefined();
+    // A task whose earlier card was applied can come back from hold.
+    store.propose([proposal("h3", { choice: "hold" })]);
+    store.decide("h3", { choice: "hold", priority: "P2", note: "" });
+    store.markApplied([{ taskId: "h3", decidedAt: store.get("h3")!.decision!.decidedAt, ok: true }]);
+    expect(itemState(store.reopenHold(snap, "h3"))).toBe("open");
   });
 
 });
