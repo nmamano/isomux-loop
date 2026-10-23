@@ -4,6 +4,7 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DECIDER } from "./config";
 
 // The board's priorities; P4 is its backlog.
 export const PRIORITIES = ["P0", "P1", "P2", "P3", "P4"] as const;
@@ -83,6 +84,13 @@ export type Item = {
 // the task to Triage.
 export type Recommendation = ProposalBody & { at: number };
 
+// Nil kept the task in the backlog (Nil, 2026-10-23): a backlog decision
+// reached the board. The Backlog tab folds it away and the curator does not
+// recommend it again until the task changes. title and description are the
+// board's text at the first read after the curator applied the decision (its
+// write may add Nil's note); a different text later ends the mark.
+export type Kept = { at: number; by: string; title?: string; description?: string };
+
 export type ItemState = "open" | "decided" | "applied" | "failed";
 
 export function itemState(item: Item): ItemState {
@@ -95,6 +103,7 @@ export function itemState(item: Item): ItemState {
 type State = {
   items: Record<string, Item>;
   recs?: Record<string, Recommendation>;
+  kept?: Record<string, Kept>;
   notify: { lastDecisionAt: number; lastSentAt: number };
 };
 
@@ -180,7 +189,7 @@ export function decisionNote(choice: string, raw: unknown): string {
 }
 
 export class Store {
-  private state: State & { recs: Record<string, Recommendation> };
+  private state: State & { recs: Record<string, Recommendation>; kept: Record<string, Kept> };
   private file: string;
 
   constructor(
@@ -192,7 +201,7 @@ export class Store {
     const state: State = existsSync(this.file)
       ? (JSON.parse(readFileSync(this.file, "utf8")) as State)
       : { items: {}, notify: { lastDecisionAt: 0, lastSentAt: 0 } };
-    this.state = { ...state, recs: state.recs ?? {} };
+    this.state = { ...state, recs: state.recs ?? {}, kept: state.kept ?? {} };
     if (migrate(this.state)) this.save();
   }
 
@@ -229,15 +238,17 @@ export class Store {
   // Nil, 2026-10-23: a proposal for a P4 (backlog) task, any choice, is the
   // task's recommendation on the Backlog tab, not a card. A task that still
   // has a card (not applied) is skipped.
-  propose(raws: unknown[]): { created: string[]; updated: string[]; skipped: string[]; recommended: string[] } {
+  // A kept task that has not changed gets no recommendation (under "kept").
+  propose(raws: unknown[]): { created: string[]; updated: string[]; skipped: string[]; recommended: string[]; kept: string[] } {
     const parsed = raws.map(parseProposal);
-    const out = { created: [] as string[], updated: [] as string[], skipped: [] as string[], recommended: [] as string[] };
+    const out = { created: [] as string[], updated: [] as string[], skipped: [] as string[], recommended: [] as string[], kept: [] as string[] };
     const at = this.now();
     for (const p of parsed) {
       const existing = this.state.items[p.taskId];
       const hasCard = existing && itemState(existing) !== "applied";
       if (p.task.priority === "P4") {
         if (hasCard) out.skipped.push(p.taskId);
+        else if (this.isKept(p.taskId, p.task.title, p.task.description)) out.kept.push(p.taskId);
         else {
           this.state.recs[p.taskId] = { ...p.proposal, at };
           out.recommended.push(p.taskId);
@@ -259,6 +270,40 @@ export class Store {
 
   recommendation(taskId: string): Recommendation | undefined {
     return this.state.recs[taskId];
+  }
+
+  // Whether the task is still kept, given its text on the board. The first
+  // read after readAt > kept.at records the text; a later different text
+  // ends the mark.
+  keptMark(taskId: string, title: string, description: string, readAt = this.now()): Kept | undefined {
+    const k = this.state.kept[taskId];
+    if (!k) return undefined;
+    if (k.title === undefined) {
+      if (readAt > k.at) {
+        k.title = title;
+        k.description = description;
+        this.save();
+      }
+      return k;
+    }
+    if (k.title === title && k.description === description) return k;
+    delete this.state.kept[taskId];
+    this.save();
+    return undefined;
+  }
+
+  private isKept(taskId: string, title: string, description: string): boolean {
+    const k = this.state.kept[taskId];
+    if (!k) return false;
+    return k.title === undefined || this.keptMark(taskId, title, description) !== undefined;
+  }
+
+  // A decision reached the board (a triage card or a packet): backlog marks
+  // the task kept, any other choice ends the mark.
+  noteApplied(taskId: string, choice: string): void {
+    if (choice === "backlog") this.state.kept[taskId] = { at: this.now(), by: DECIDER };
+    else delete this.state.kept[taskId];
+    this.save();
   }
 
   // Nil decides a P4 task on the Backlog tab (go, design or hold with a
@@ -390,7 +435,10 @@ export class Store {
         decidedAt,
       };
       // The decision reached the board: the backlog recommendation is spent.
-      if (item.applied.ok) delete this.state.recs[taskId];
+      if (item.applied.ok) {
+        delete this.state.recs[taskId];
+        this.noteApplied(taskId, item.decision.choice);
+      }
       out.recorded.push(taskId);
     }
     this.save();

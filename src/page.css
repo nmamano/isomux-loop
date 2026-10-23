@@ -197,6 +197,8 @@
   .entry.agent.sug-open { opacity: 1; }
   .badge { background: var(--accent); color: var(--accent-fg); border-radius: 6px; padding: 0 6px; font-weight: 600; }
   .card.packet { border-color: var(--accent); }
+  .card.kept { padding-top: 8px; padding-bottom: 8px; }
+  .card.kept > details { margin: 0; }
   .question { font-size: 16px; font-weight: 600; margin: 8px 0; overflow-wrap: anywhere; }
   .options { display: flex; flex-direction: column; gap: 6px; width: 100%; }
   .option { position: relative; text-align: left; border: 1px solid var(--line); background: var(--chip); color: var(--fg);

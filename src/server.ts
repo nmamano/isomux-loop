@@ -44,6 +44,8 @@ POST /api/proposals               {"proposals":[{"taskId","task":{"title","descr
                                   A P4 (backlog) task gets no card: its proposal, any choice (backlog: keep it at P4), is its
                                   recommendation on the Backlog tab, preselected for Nil, and comes back under "recommended".
                                   A newer one replaces it; it is dropped when a decision on the task is reported applied.
+                                  A task Nil kept in the backlog gets none: it comes back under "kept" until its title or
+                                  description changes (GET /api/backlog marks it "kept").
 DELETE /api/items/:taskId         withdraw a card (the task closed meanwhile)
 GET  /api/decisions               decisions to write to the board (decided, or failed earlier), triage and packets:
                                   each has "kind": "triage" or "packet"; both carry decision: choice, priority, note
@@ -77,7 +79,9 @@ DELETE /api/packets/:taskId       withdraw a packet, for example one Nil answere
 
 Backlog (Nil's tab):
 GET  /api/backlog                 the tasks of the Backlog state (P4, no card), oldest first, with the curator's "recommendation"
-                                  (choice, priority, why, effort, at) when it posted one, and effort when a card estimated it
+                                  (choice, priority, why, effort, at) when it posted one, and effort when a card estimated it.
+                                  "kept": {at, by}: Nil kept the task in the backlog (a backlog decision reached the board).
+                                  Do not recommend a kept task: the app skips it (under "kept") until its title or description changes
 POST /api/backlog/:taskId/bring   {"choice":"go|design|hold|backlog|obsolete","priority":"P0-P3 (go, design, hold only)","note?"}:
                                   Nil's decision, a decided card that goes to the curator with the next burst, like any triage
                                   decision (fromBacklog: true; backlog keeps the task at P4, nothing to change on the board)
@@ -376,6 +380,7 @@ let backlogCache: { at: number; value: unknown[] } | null = null;
 async function backlog(): Promise<unknown[]> {
   if (backlogCache && Date.now() - backlogCache.at < STATUS_CACHE_MS) return backlogCache.value;
   const all = await boardTasks();
+  const readAt = tasksCache?.at ?? 0;
   const c = cards();
   const so = signoffIds();
   const value = all
@@ -385,8 +390,10 @@ async function backlog(): Promise<unknown[]> {
       // The curator's estimate: its recommendation's, else the card's that sent it to the backlog.
       const rec = store.recommendation(t.id);
       const p = rec ?? store.get(t.id)?.proposal;
+      const k = store.keptMark(t.id, t.title, t.description ?? "", readAt);
       return { id: t.id, title: t.title, description: t.description ?? "", createdBy: (t as { createdBy?: string }).createdBy ?? "", createdAt: t.createdAt,
-        ...(p?.effort ? { effort: p.effort, effortWhy: p.effortWhy } : {}), ...(rec ? { recommendation: rec } : {}) };
+        ...(p?.effort ? { effort: p.effort, effortWhy: p.effortWhy } : {}), ...(rec ? { recommendation: rec } : {}),
+        ...(k ? { kept: { at: k.at, by: k.by } } : {}) };
     });
   backlogCache = { at: Date.now(), value };
   return value;
@@ -681,8 +688,12 @@ async function route(req: Request): Promise<Response> {
       const taskId = String(r?.taskId ?? "");
       let ok = false;
       if (r?.kind !== "packet") ok = store.markApplied([r]).recorded.length === 1;
-      if (!ok && r?.kind !== "triage")
+      if (!ok && r?.kind !== "triage") {
         ok = packets.markApplied(taskId, Number(r?.decidedAt), r?.ok !== false, typeof r?.error === "string" ? r.error : undefined);
+        // A packet decision that reached the board keeps or un-keeps the task like a triage one.
+        const p = packets.get(taskId);
+        if (ok && r?.ok !== false && p?.decision) store.noteApplied(taskId, p.decision.choice);
+      }
       (ok ? out.recorded : out.stale).push(taskId);
     }
     return json(out);

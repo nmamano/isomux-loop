@@ -26,6 +26,8 @@ let loopState = null;
 let packets = [];
 let backlogTasks = [];
 const backlogPicks = {};
+// Kept tasks are hidden until Nil asks for them (Nil, 2026-10-23).
+let showKept = false;
 let signoffData = { items: [], push: { ok: false, reason: "" } };
 const later = new Set();
 const picks = {};
@@ -117,6 +119,8 @@ const HELP = {
   divider: "Drag to change the widths of the diagram and Triage.",
   bringIn: "Decide this backlog task: go, design or on hold with a priority (P0-P3), backlog to keep it, or obsolete to close it (the note gives the reason). It goes to the curator like any triage decision, and you can undo it in Decided until then.",
   recommend: "The curator's recommendation for this backlog task, preselected below.",
+  kept: "You kept this task in the backlog on this date. The curator does not recommend it again until the task changes.",
+  showKept: "Tasks you kept in the backlog, at the bottom. A task comes back to the list when its title or description changes.",
   backToTriage: "Back to Triage: a card for this task in Triage, so you decide it again. The curator proposes it; the task stays on hold until your decision reaches the board.",
   backOnHold: "Put back on hold: take this card away. The task stays on hold, as before.",
   tabSignoff: "Merged copy and visible changes that wait for your approve or reject, and rejections that wait for their revert, oldest merge first. An approved item moves to Push; approving from the top moves the push point.",
@@ -1345,27 +1349,35 @@ function backlogCards() {
   const shown = viewList("backlog", all);
   setShown("backlog", shown.length, all.length);
   if (!shown.length) return '<div class="empty">No task matches the filters.</div>';
-  let h = "";
-  for (const t of shown.map((e) => e.x)) {
-    const r = t.recommendation;
-    // The choices show at once, with the curator's recommendation preselected
-    // like a triage proposal (Nil, 2026-10-23).
-    if (!backlogPicks[t.id]) backlogPicks[t.id] = r ? { choice: r.choice, priority: r.priority, note: "" } : { choice: null, priority: null, note: "" };
-    const k = backlogPicks[t.id];
-    h += cardOpen(t.id) + '<div class="meta"><span>Filed by ' + esc(t.createdBy || "unknown") + "</span><span>" + filed(t.createdAt) + "</span><span>Task " + idCopy(t.id) + "</span>" +
-      (t.effort ? '<span title="' + esc(HELP[t.effort] + (t.effortWhy ? " " + t.effortWhy : "")) + '">effort ' + esc(t.effort) + "</span>" : "") + "</div>" +
-      '<div class="title">' + esc(t.title) + "</div>" +
-      (r ? '<div class="why"><span class="label"' + tip("recommend") + ">Curator recommends: " + esc(summary(r)) + "</span><br>" + esc(r.why) +
-        (r.effortWhy ? "<br><span" + tip("effort") + ">Effort: " + esc(r.effortWhy) + "</span>" : "") + "</div>" : "") +
-      (t.description ? details("bdesc:" + t.id, "description", "Description", '<div class="desc">' + esc(t.description) + "</div>") : "");
-    const chipRow = (kind, list) => chips(kind, list, k[kind], r ? r[kind] : null, t.id, "bpick");
-    h += '<div class="row"><span class="label"' + tip("choice") + ">Choice</span>" + chipRow("choice", CHOICES) + "</div>" +
-      (!k.choice || tagged(k.choice) ? '<div class="row"><span class="label"' + tip("priority") + ">Priority</span>" + chipRow("priority", PRIORITIES) + "</div>" : "") +
-      '<textarea rows="1" placeholder="' + (k.choice === "obsolete" ? "Note: why it is obsolete" : "Note for the curator (optional)") + '" data-bnote="' + esc(t.id) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
-      '<div class="err" data-err="' + esc(t.id) + '"></div>' +
-      '<div class="actions"><button class="btn primary" data-bconfirm="' + esc(t.id) + '"' + tip("bringIn") + ">Confirm</button></div>";
-    h += "</div>";
-  }
+  const tasks = shown.map((e) => e.x);
+  const kept = tasks.filter((t) => t.kept);
+  let h = tasks.filter((t) => !t.kept).map((t) => cardOpen(t.id) + backlogCard(t) + "</div>").join("");
+  if (!kept.length) return h;
+  if (!h) h = '<div class="empty">Every task shown is kept.</div>';
+  h += '<div class="small toolbar"><button class="btn ghost" data-showkept="1"' + tip("showKept") + ">" + (showKept ? "Hide" : "Show") + " kept (" + kept.length + ")</button></div>";
+  if (showKept)
+    for (const t of kept)
+      h += cardOpen(t.id, "kept") + details("kept:" + t.id, "kept", "Kept " + esc(new Date(t.kept.at).toLocaleDateString("en-US", { month: "short", day: "numeric" })) + " · " + esc(t.title), backlogCard(t)) + "</div>";
+  return h;
+}
+function backlogCard(t) {
+  const r = t.recommendation;
+  // The choices show at once, with the curator's recommendation preselected
+  // like a triage proposal (Nil, 2026-10-23).
+  if (!backlogPicks[t.id]) backlogPicks[t.id] = r ? { choice: r.choice, priority: r.priority, note: "" } : { choice: null, priority: null, note: "" };
+  const k = backlogPicks[t.id];
+  let h = '<div class="meta"><span>Filed by ' + esc(t.createdBy || "unknown") + "</span><span>" + filed(t.createdAt) + "</span><span>Task " + idCopy(t.id) + "</span>" +
+    (t.effort ? '<span title="' + esc(HELP[t.effort] + (t.effortWhy ? " " + t.effortWhy : "")) + '">effort ' + esc(t.effort) + "</span>" : "") + "</div>" +
+    '<div class="title">' + esc(t.title) + "</div>" +
+    (r ? '<div class="why"><span class="label"' + tip("recommend") + ">Curator recommends: " + esc(summary(r)) + "</span><br>" + esc(r.why) +
+      (r.effortWhy ? "<br><span" + tip("effort") + ">Effort: " + esc(r.effortWhy) + "</span>" : "") + "</div>" : "") +
+    (t.description ? details("bdesc:" + t.id, "description", "Description", '<div class="desc">' + esc(t.description) + "</div>") : "");
+  const chipRow = (kind, list) => chips(kind, list, k[kind], r ? r[kind] : null, t.id, "bpick");
+  h += '<div class="row"><span class="label"' + tip("choice") + ">Choice</span>" + chipRow("choice", CHOICES) + "</div>" +
+    (!k.choice || tagged(k.choice) ? '<div class="row"><span class="label"' + tip("priority") + ">Priority</span>" + chipRow("priority", PRIORITIES) + "</div>" : "") +
+    '<textarea rows="1" placeholder="' + (k.choice === "obsolete" ? "Note: why it is obsolete" : "Note for the curator (optional)") + '" data-bnote="' + esc(t.id) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
+    '<div class="err" data-err="' + esc(t.id) + '"></div>' +
+    '<div class="actions"><button class="btn primary" data-bconfirm="' + esc(t.id) + '"' + tip("bringIn") + ">Confirm</button></div>";
   return h;
 }
 
@@ -1801,6 +1813,10 @@ document.addEventListener("click", async (e) => {
       showErr(id, err.message);
     }
   };
+  if (d.showkept) {
+    showKept = !showKept;
+    return render();
+  }
   if (d.bpick) {
     backlogPicks[d.id][d.bpick] = d.v;
     return render();

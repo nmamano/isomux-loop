@@ -270,4 +270,55 @@ describe("store", () => {
     expect(itemState(store.reopenHold(snap, "h3"))).toBe("open");
   });
 
+
+  // Nil, 2026-10-23: a task he keeps in the backlog does not come back as if new.
+  test("a backlog keep marks the task kept, and the curator's next recommendation for it is skipped until it changes", () => {
+    const { store, clock, dir } = setup();
+    const snap = { title: "Old idea", description: "d", priority: "P4" as const, createdBy: "Nil", createdAt: 1 };
+    const rec = { taskId: "k", task: snap, proposal: { choice: "backlog", priority: null, why: "still not now" } };
+    store.propose([rec]);
+    const i = store.bringIn(snap, "k", { choice: "backlog" });
+    expect(store.keptMark("k", "Old idea", "d")).toBeUndefined();
+    clock.advance(10);
+    store.markApplied([{ taskId: "k", decidedAt: i.decision!.decidedAt, ok: true }]);
+    const at = clock.now();
+    expect(store.keptMark("k", "Old idea", "d", at - 1)).toEqual({ at, by: "Nil" });
+    // The curator's write added Nil's note; the first read after the apply records that text.
+    clock.advance(10);
+    expect(store.keptMark("k", "Old idea", "Nil: keep.\nd")).toMatchObject({ at, by: "Nil" });
+    expect(store.propose([{ ...rec, task: { ...snap, description: "Nil: keep.\nd" } }])).toMatchObject({ kept: ["k"], recommended: [] });
+    expect(store.recommendation("k")).toBeUndefined();
+    // Survives a reload.
+    expect(new Store(dir, clock.now).keptMark("k", "Old idea", "Nil: keep.\nd")).toMatchObject({ at });
+    // The task changed: no longer kept, and the curator's recommendation counts.
+    expect(store.keptMark("k", "Old idea, now urgent", "Nil: keep.\nd")).toBeUndefined();
+    expect(store.propose([rec]).recommended).toEqual(["k"]);
+  });
+
+  test("a kept task changed on the board takes the curator's recommendation; a decision other than backlog ends the mark", () => {
+    const { store, clock } = setup();
+    const snap = { title: "Old idea", description: "d", priority: "P4" as const, createdBy: "Nil", createdAt: 1 };
+    const keep = (id: string) => {
+      const d = store.bringIn(snap, id, { choice: "backlog" }).decision!.decidedAt;
+      store.markApplied([{ taskId: id, decidedAt: d, ok: true }]);
+      clock.advance(10);
+      store.keptMark(id, "Old idea", "d");
+    };
+    keep("a");
+    expect(store.propose([{ taskId: "a", task: { ...snap, title: "Old idea (scoped)" }, proposal: { choice: "go", priority: "P2", why: "now cheap" } }]).recommended).toEqual(["a"]);
+    expect(store.keptMark("a", "Old idea (scoped)", "d")).toBeUndefined();
+    keep("b");
+    const d = store.bringIn(snap, "b", { choice: "go", priority: "P1" }).decision!.decidedAt;
+    store.markApplied([{ taskId: "b", decidedAt: d, ok: true }]);
+    expect(store.keptMark("b", "Old idea", "d")).toBeUndefined();
+    // A failed apply changes nothing; a triage card demoted to backlog is kept too.
+    store.propose([proposal("c")]);
+    store.decide("c", { choice: "backlog", note: "" });
+    store.markApplied([{ taskId: "c", decidedAt: store.get("c")!.decision!.decidedAt, ok: false, error: "board down" }]);
+    expect(store.keptMark("c", "Task c", "d")).toBeUndefined();
+    store.decide("c", { choice: "backlog", note: "" });
+    store.markApplied([{ taskId: "c", decidedAt: store.get("c")!.decision!.decidedAt, ok: true }]);
+    expect(store.keptMark("c", "Task c", "d", 0)).toMatchObject({ by: "Nil" });
+  });
+
 });
