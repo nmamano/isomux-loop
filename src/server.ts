@@ -1,7 +1,7 @@
 import { CLASSIFY_MS, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, SCOUT_NAME, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
 import { ClosedTimes } from "./closed-times";
 import { type ImageDir } from "./images";
-import { dispatch, dueIn, parseTag, staleCards, status, tick, unclassified, unrecommended, wakeText, type DispatchResult, type Status, type TickResult } from "./loop";
+import { dispatch, dueIn, parseTag, proposalRefusal, staleCards, status, tick, unclassified, unrecommended, wakeText, type DispatchResult, type Status, type TickResult, withdrawLine } from "./loop";
 import { join } from "node:path";
 import { readJson, writeJson } from "./json-file";
 import { httpOffice, type Task } from "./office";
@@ -46,6 +46,7 @@ POST /api/proposals               {"proposals":[{"taskId","task":{"title","descr
                                   priority; backlog sets P4 and no tag; obsolete closes it. A go/design/hold card may carry a new
                                   proposal.title and/or proposal.scope, which Nil accepts with the card.
                                   An item with a decision not yet applied is skipped; an applied item gets the new proposal and reopens.
+                                  A task that is not in the room, or is done or obsolete, refuses the whole request (400, nothing taken).
                                   A P4 (backlog) task gets no card: its proposal, any choice (backlog: keep it at P4), is its
                                   recommendation on the Backlog tab, preselected for Nil, and comes back under "recommended".
                                   A newer one replaces it; it is dropped when a decision on the task is reported applied.
@@ -341,7 +342,7 @@ function withdrawStale(all: Task[]): string[] {
   }
   if (ids.length) {
     statusCache = null;
-    console.log(`withdrew cards of closed tasks: ${ids.join(", ")}`);
+    console.log(withdrawLine(ids, all));
   }
   return ids;
 }
@@ -685,6 +686,13 @@ async function route(req: Request): Promise<Response> {
   if (m === "POST" && path === "/api/proposals") {
     const b = await body(req);
     if (!Array.isArray(b.proposals)) throw new ValidationError("proposals must be an array");
+    // A fresh read, so a task the curator just moved into the room counts.
+    const all = await boardTasks(true).catch(() => null);
+    if (!all) throw new ValidationError("the room's task list is unreadable; no proposals were taken");
+    // An empty taskId is the store's to refuse.
+    const ids = (b.proposals as Record<string, unknown>[]).map((p) => String(p?.taskId ?? "")).filter(Boolean);
+    const refusal = proposalRefusal(ids, all, ROOM_ID);
+    if (refusal) throw new ValidationError(refusal);
     return json(store.propose(b.proposals));
   }
   if (m === "GET" && path === "/api/decisions")

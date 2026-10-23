@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ageLine, dispatch, dueIn, freeWorkers, holdings, parseTag, readyQueue, staleCards, status, tick, unclassified, unrecommended, wakeText } from "../src/loop";
+import { ageLine, dispatch, dueIn, freeWorkers, holdings, parseTag, proposalRefusal, readyQueue, staleCards, status, tick, unclassified, unrecommended, wakeText, withdrawLine } from "../src/loop";
 import type { Agent, Office, PatchResult, Task } from "../src/office";
 
 const ROOM = "e6818e47";
@@ -289,5 +289,50 @@ describe("stale cards", () => {
     const working = task({ title: "d", status: "in_progress" });
     const ids = [open.id, done.id, obsolete.id, working.id, "gone1"];
     expect(staleCards(ids, [open, done, obsolete, working])).toEqual([done.id, obsolete.id, "gone1"]);
+  });
+
+  test("the withdraw line names closed and gone tasks under their own cause", () => {
+    const done = task({ title: "b", status: "done" });
+    const obsolete = task({ title: "c", status: "obsolete" });
+    const line = withdrawLine([done.id, "gone1", obsolete.id], [done, obsolete]);
+    const [, closedPart, gonePart] = line.split("; ");
+    expect(closedPart).toContain(done.id);
+    expect(closedPart).toContain(obsolete.id);
+    expect(closedPart).not.toContain("gone1");
+    expect(gonePart).toContain("gone1");
+    expect(gonePart).not.toContain(done.id);
+    // The two causes carry different labels.
+    expect(closedPart.split(":")[0]).not.toEqual(gonePart.split(":")[0]);
+    // One cause only: no empty part for the other.
+    expect(withdrawLine(["gone1"], []).split("; ")).toHaveLength(2);
+    expect(withdrawLine([done.id], [done]).split("; ")).toHaveLength(2);
+  });
+});
+
+describe("proposal refusal", () => {
+  test("takes tasks open or in progress in the room", () => {
+    const open = task({ title: "a" });
+    const working = task({ title: "b", status: "in_progress" });
+    const backlog = task({ title: "c", priority: "P4" });
+    expect(proposalRefusal([open.id, working.id, backlog.id], [open, working, backlog], ROOM)).toBeNull();
+  });
+
+  test("refuses a task the room's list does not have, naming it and the room", () => {
+    const open = task({ title: "a" });
+    const msg = proposalRefusal([open.id, "global1"], [open], ROOM);
+    expect(msg).not.toBeNull();
+    expect(msg).toContain("global1");
+    expect(msg).toContain(ROOM);
+    expect(msg).not.toContain(open.id);
+  });
+
+  test("refuses a closed task for another cause than a task outside the room", () => {
+    const done = task({ title: "a", status: "done" });
+    const closedMsg = proposalRefusal([done.id], [done], ROOM)!;
+    const goneMsg = proposalRefusal([done.id], [], ROOM)!;
+    expect(closedMsg).toContain(done.id);
+    expect(goneMsg).toContain(done.id);
+    expect(closedMsg).not.toContain(ROOM);
+    expect(goneMsg).toContain(ROOM);
   });
 });

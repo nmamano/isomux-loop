@@ -215,12 +215,43 @@ export function wakeText(found: string[], backlog: string[], api: string): strin
   return `/isomux-curator ${parts.join(" ")} API: curl -s ${api}/api/help`;
 }
 
+// The ids among taskIds that cannot carry a card, given every task of the
+// room: gone (the room's list does not have it: another room, global or
+// deleted) and closed (done or obsolete).
+export function offBoard(taskIds: string[], tasks: Task[]): { gone: string[]; closed: string[] } {
+  const byId = new Map(tasks.map((t) => [t.id, t]));
+  const out = { gone: [] as string[], closed: [] as string[] };
+  for (const id of taskIds) {
+    const t = byId.get(id);
+    if (!t) out.gone.push(id);
+    else if (t.status === "done" || t.status === "obsolete") out.closed.push(id);
+  }
+  return out;
+}
+
 // Undecided triage cards whose task closed (done or obsolete) or left the
 // board: Nil should not triage them. A decided card stays: it is his.
 export function staleCards(openCardIds: string[], tasks: Task[]): string[] {
-  const byId = new Map(tasks.map((t) => [t.id, t]));
-  return openCardIds.filter((id) => {
-    const t = byId.get(id);
-    return !t || t.status === "done" || t.status === "obsolete";
-  });
+  const { gone, closed } = offBoard(openCardIds, tasks);
+  return openCardIds.filter((id) => gone.includes(id) || closed.includes(id));
+}
+
+// The log line for withdrawn cards, which tells the two causes apart.
+export function withdrawLine(ids: string[], tasks: Task[]): string {
+  const { gone, closed } = offBoard(ids, tasks);
+  const parts: string[] = [];
+  if (closed.length) parts.push(`closed (done or obsolete): ${closed.join(", ")}`);
+  if (gone.length) parts.push(`gone from the room's task list: ${gone.join(", ")}`);
+  return `withdrew cards; ${parts.join("; ")}`;
+}
+
+// Why POST /api/proposals refuses these tasks, or null when it takes them all.
+// A card for a task outside the room is withdrawn at the next board read.
+export function proposalRefusal(taskIds: string[], tasks: Task[], roomId: string): string | null {
+  const { gone, closed } = offBoard(taskIds, tasks);
+  const parts: string[] = [];
+  if (gone.length)
+    parts.push(`not in the loop's room (${roomId}): ${gone.join(", ")}. Move each task to the room (PATCH /api/tasks/<id> with its version and "roomId":"${roomId}") and propose again`);
+  if (closed.length) parts.push(`closed (done or obsolete): ${closed.join(", ")}`);
+  return parts.length ? `no proposals were taken; tasks ${parts.join("; tasks ")}` : null;
 }
