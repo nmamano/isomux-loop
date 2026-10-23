@@ -104,8 +104,11 @@ GET  /api/status                  pause state, last dispatch and tick, ready que
                                   board.states.triage and .decided are the open and the decided cards (the Triage and Decided tabs)
 POST /api/pause | /api/resume     pause stops dispatch and the tick; the first tick after a resume (within a minute) catches what stopped
                                   meanwhile. The tick is due an hour after the last one, also across app restarts (timers.json).
-POST /api/settings                {"workers": 1-6}: the loop dispatches to Workers 1..N (also on the status page).
-                                  Lowering N takes no task away; a worker above N keeps its tick while it holds a loop task.
+POST /api/settings                {"workers": 1-6, "minPriority": "P0"-"P3" | null}, either or both (also on the status page).
+                                  workers: the loop dispatches to Workers 1..N. Lowering N takes no task away; a worker above N
+                                  keeps its tick while it holds a loop task. minPriority: dispatch takes only ready tasks at that
+                                  priority or higher ("P1": P0 and P1); null (the default) takes every priority. GET /api/status
+                                  gives both, and board.belowFloor counts the ready tasks the floor holds back.
 POST /api/dispatch | /api/tick    run one now (both refuse while paused)
 POST /api/classify                run the curator wake now: every 10 minutes, also while paused, open P0-P3 tasks with no tag
                                   and no card go to the curator to propose, and backlog (P4, no card) tasks with no
@@ -183,7 +186,7 @@ async function exclusive<T>(fn: () => Promise<T>): Promise<Run<T> | null> {
 
 async function runDispatch(): Promise<Run<DispatchResult> | null> {
   if (pause.paused) return null;
-  const run = await exclusive(() => dispatch(office, pause.workers));
+  const run = await exclusive(() => dispatch(office, pause.workers, Date.now(), pause.minPriority));
   if (run) {
     lastDispatch = run;
     statusCache = null;
@@ -363,7 +366,7 @@ async function loopStatus(): Promise<Record<string, unknown>> {
       statusCache = {
         at: Date.now(),
         value: {
-          ...status(agents, live, pause.workers),
+          ...status(agents, live, pause.workers, pause.minPriority),
           states: stateViews(all, cards(), (t) => closed.get(t), signoffIds(), signoff.unpushedIds(), new Set(agents.map((a) => a.id))),
           closedPending: closed.missing(all).length,
         },
@@ -378,7 +381,7 @@ async function loopStatus(): Promise<Record<string, unknown>> {
     error = String(err instanceof Error ? err.message : err);
   }
   const signoffWaiting = signoff.visible().filter((i) => signoffState(i) === "waiting").length;
-  return { paused: pause.paused, pausedSince: pause.since, workers: pause.workers, lastDispatch, lastTick, lastClassify, board, error, signoffWaiting };
+  return { paused: pause.paused, pausedSince: pause.since, workers: pause.workers, minPriority: pause.minPriority, lastDispatch, lastTick, lastClassify, board, error, signoffWaiting };
 }
 
 // --- backlog -------------------------------------------------------------------
@@ -491,9 +494,10 @@ async function route(req: Request): Promise<Response> {
   }
   if (m === "POST" && path === "/api/settings") {
     const b = await body(req);
-    pause.setWorkers(b.workers);
+    if (b.workers === undefined && b.minPriority === undefined) throw new ValidationError("give workers, minPriority or both");
+    pause.update(b);
     statusCache = null;
-    return json({ workers: pause.workers });
+    return json({ workers: pause.workers, minPriority: pause.minPriority });
   }
   if (m === "POST" && path === "/api/dispatch") {
     if (pause.paused) return json({ error: "paused" }, 409);

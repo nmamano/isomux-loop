@@ -6,6 +6,8 @@ export const ROOM_ID = "e6818e47";
 export const WORKER_NAMES = [1, 2, 3, 4, 5, 6].map((n) => `Isomux Worker ${n}`);
 export const MAX_WORKERS = WORKER_NAMES.length;
 export const DEFAULT_WORKERS = 2;
+// The priorities the loop dispatches, highest first.
+export const LOOP_PRIORITIES = ["P0", "P1", "P2", "P3"];
 // The member who decides on the app's pages; a kept mark names him.
 export const DECIDER = "Nil";
 export const MAIN_NAME = "Isomux Main";

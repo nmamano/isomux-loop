@@ -92,6 +92,33 @@ describe("ready queue", () => {
   });
 });
 
+describe("priority floor", () => {
+  test("dispatch takes only ready tasks at the floor or higher; status counts the rest; no floor takes all", async () => {
+    const p0 = task({ title: "[go | ready] p0", priority: "P0" });
+    const p1 = task({ title: "[go | ready] p1", priority: "P1" });
+    const p2 = task({ title: "[go | ready] p2", priority: "P2" });
+    const p3 = task({ title: "[go | ready] p3", priority: "P3" });
+    const all = [p3, p2, p1, p0];
+    expect(readyQueue(all, "P1").map((t) => t.id)).toEqual([p0.id, p1.id]);
+    expect(readyQueue(all, "P0").map((t) => t.id)).toEqual([p0.id]);
+    expect(readyQueue(all, null).map((t) => t.id)).toEqual([p0.id, p1.id, p2.id, p3.id]);
+    const st = status([], all, 2, "P1");
+    expect([st.ready.map((t) => t.id), st.belowFloor]).toEqual([[p0.id, p1.id], 2]);
+    expect(status([], all, 2).belowFloor).toBe(0);
+
+    // Three free workers, floor P1: two take P0 and P1, the third gets nothing.
+    const agents = [agent("Isomux Worker 1"), agent("Isomux Worker 2"), agent("Isomux Worker 3")];
+    const { office, messages } = stubOffice(all, agents);
+    const res = await dispatch(office, 3, NOW, "P1");
+    expect(res.assigned.map((x) => [x.worker, x.taskId])).toEqual([
+      ["Isomux Worker 1", p0.id],
+      ["Isomux Worker 2", p1.id],
+    ]);
+    expect(messages).toHaveLength(2);
+    expect([p2.assignee, p3.assignee]).toEqual([undefined, undefined]);
+  });
+});
+
 describe("dispatch", () => {
   test("each free worker gets the next ready task, claimed with the read version, and a message", async () => {
     const a = task({ title: "[go | ready] A", priority: "P1" });

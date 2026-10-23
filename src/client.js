@@ -91,6 +91,7 @@ const HELP = {
   pause: "Pause stops dispatch and the hourly tick. Workers keep the tasks they hold.",
   resume: "Resume starts dispatch (every 2 minutes) and the hourly tick again.",
   pairs: "How many worker/reviewer pairs the loop uses: it gives new tasks to Workers 1 to N. Lowering it takes no task away.",
+  floor: "The lowest priority the loop takes. Ready tasks below it wait. Changing it takes no task away.",
   runs: "Dispatch gives free workers the next ready task every 2 minutes. The tick nudges idle workers once an hour.",
   classify: "Every 10 minutes, also while paused, the app looks for open tasks with no tag and no card and wakes the curator to propose them. It also withdraws undecided cards whose task closed meanwhile.",
   working: "Workers that hold a task now.",
@@ -781,6 +782,12 @@ function renderStatus() {
     helpBox(["pairs"], "pairs") +
     [1, 2, 3, 4, 5, 6].map((n) => '<button class="chip' + (n === s.workers ? " on" : "") + '" data-workers="' + n + '"' + tip("pairs") + ">" + n + "</button>").join("") +
     '<div class="small">The loop dispatches to Workers 1 to ' + s.workers + ". Lowering it takes no task away.</div></div>";
+  h += '<div class="row"><span class="label"' + tip("floor") + ">Priorities " + q("floor") + "</span>" +
+    helpBox(["floor"], "floor") +
+    [[null, "All"], ["P0", "P0"], ["P1", "P0-P1"], ["P2", "P0-P2"]]
+      .map(([v, l]) => '<button class="chip' + (v === s.minPriority ? " on" : "") + '" data-floor="' + (v || "all") + '"' + tip("floor") + ">" + l + "</button>")
+      .join("") +
+    '<div class="small">' + (s.minPriority ? "The loop takes only " + (s.minPriority === "P0" ? "P0" : "P0 to " + esc(s.minPriority)) + " tasks." : "The loop takes every priority.") + "</div></div>";
   const d = s.lastDispatch;
   const t = s.lastTick;
   h += '<div class="small"' + tip("runs") + ">Last dispatch: " + (d ? clock(d.at) : "not yet");
@@ -799,6 +806,7 @@ function renderStatus() {
   h += section("Working", "working", b.holding.map((x) => taskLine(x.task, x.worker)), "No worker holds a task.");
   h += '<div class="small" style="margin-top:6px"' + tip("free") + ">Free: " + (b.freeWorkers.length ? esc(b.freeWorkers.join(", ")) : "none") + " " + q("free") + "</div>" + helpBox(["free"], "free");
   h += section("Ready queue (" + b.ready.length + ")", "ready", b.ready.map((x) => taskLine(x)), "Nothing is ready.");
+  if (b.belowFloor) h += '<div class="small"' + tip("floor") + ">Held back by the priority floor: " + plural(b.belowFloor, "ready task") + ".</div>";
   h += section("Merging (" + b.merging.length + ")", "merging", b.merging.map((x) => taskLine(x)), "Nothing is merging.");
   const st = b.states;
   h += section("On hold (" + st.hold.count + ")", "hold", st.hold.tasks.map(holdLine), "No task is on hold.");
@@ -1930,6 +1938,15 @@ document.addEventListener("click", async (e) => {
       later.delete(id);
       render();
     }, false);
+  }
+  if (d.floor) {
+    try {
+      t.disabled = true;
+      await api("/api/settings", { method: "POST", body: { minPriority: d.floor === "all" ? null : d.floor } });
+    } finally {
+      await load();
+    }
+    return;
   }
   if (d.workers) {
     try {

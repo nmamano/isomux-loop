@@ -1,13 +1,12 @@
 // Dispatch and tick. The board is the loop's only state: every run reads it
 // fresh and keeps nothing between runs.
 
-import { MAIN_NAME, ROOM_ID, WORKER_NAMES } from "./config";
+import { LOOP_PRIORITIES, MAIN_NAME, ROOM_ID, WORKER_NAMES } from "./config";
 import type { Agent, Office, Task } from "./office";
 
 // "auto" and "decide" are the old names of go and design (Nil, 2026-10-19);
 // old tags still count.
 const DISPATCH_CLASSES = ["go", "design", "auto", "decide"];
-const LOOP_PRIORITIES = ["P0", "P1", "P2", "P3"];
 
 export type Tag = { class: string; state: string; rest: string };
 
@@ -21,7 +20,9 @@ function inRoom(t: Task): boolean {
   return t.roomId === undefined || t.roomId === ROOM_ID;
 }
 
-export function readyQueue(tasks: Task[]): Task[] {
+// floor: the lowest priority dispatch takes ("P1": P0 and P1); null takes all.
+export function readyQueue(tasks: Task[], floor: string | null = null): Task[] {
+  const allowed = floor === null ? LOOP_PRIORITIES : LOOP_PRIORITIES.slice(0, LOOP_PRIORITIES.indexOf(floor) + 1);
   return tasks
     .filter((t) => {
       const tag = parseTag(t.title);
@@ -29,7 +30,7 @@ export function readyQueue(tasks: Task[]): Task[] {
         inRoom(t) &&
         t.status === "open" &&
         !t.assignee &&
-        LOOP_PRIORITIES.includes(t.priority ?? "") &&
+        allowed.includes(t.priority ?? "") &&
         tag !== null &&
         tag.state === "ready" &&
         DISPATCH_CLASSES.includes(tag.class)
@@ -96,10 +97,10 @@ export function ageLine(createdAt: number, editedAt: number | null | undefined, 
   return `Filed ${ago(createdAt, now)}${edit}.`;
 }
 
-export async function dispatch(office: Office, n: number, now = Date.now()): Promise<DispatchResult> {
+export async function dispatch(office: Office, n: number, now = Date.now(), floor: string | null = null): Promise<DispatchResult> {
   const out: DispatchResult = { assigned: [], conflicts: [], killed: [], errors: [] };
   const [tasks, agents] = await Promise.all([office.tasks(), office.agents()]);
-  const queue = readyQueue(tasks);
+  const queue = readyQueue(tasks, floor);
   for (const worker of freeWorkers(agents, tasks, n)) {
     while (queue.length > 0) {
       const task = queue.shift()!;
@@ -167,15 +168,20 @@ export async function tick(office: Office, n: number): Promise<TickResult> {
 }
 
 export type Status = {
+  // What dispatch takes: the ready tasks at the floor or higher.
   ready: Task[];
+  // Ready tasks below the floor, which wait until it is lowered.
+  belowFloor: number;
   holding: { worker: string; task: Task }[];
   freeWorkers: string[];
   merging: Task[];
 };
 
-export function status(agents: Agent[], tasks: Task[], n: number): Status {
+export function status(agents: Agent[], tasks: Task[], n: number, floor: string | null = null): Status {
+  const ready = readyQueue(tasks, floor);
   return {
-    ready: readyQueue(tasks),
+    ready,
+    belowFloor: readyQueue(tasks).length - ready.length,
     holding: holdings(agents, tasks).map((h) => ({ worker: h.worker.name, task: h.task })),
     freeWorkers: freeWorkers(agents, tasks, n).map((w) => w.name),
     merging: withState(tasks, "merging"),
