@@ -24,6 +24,11 @@ const publicUrl = (process.env.ISOMUX_APP_URL || local).replace(/\/$/, "");
 const office = httpOffice(appToken);
 const store = new Store(dataDir);
 const packets = new PacketStore(dataDir);
+{
+  const others = packets.list().filter((p) => packetState(p) === "applied").map((p) => ({ taskId: p.taskId, choice: p.decision!.choice, at: p.applied!.at }));
+  const kept = store.backfillKept(others);
+  if (kept.length) console.log(`kept marks backfilled: ${kept.length}`);
+}
 const signoff = new SignoffStore(dataDir);
 const pause = new PauseFlag(dataDir);
 const closed = new ClosedTimes(dataDir, office);

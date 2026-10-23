@@ -321,4 +321,40 @@ describe("store", () => {
     expect(store.keptMark("c", "Task c", "d", 0)).toMatchObject({ by: "Nil" });
   });
 
+
+  test("the one-time backfill keeps the tasks whose latest applied decision, card or packet, was backlog", () => {
+    const { store, clock, dir } = setup();
+    const apply = (id: string, choice: string) => {
+      store.propose([proposal(id)]);
+      store.decide(id, { choice, priority: choice === "go" ? "P1" : null, note: "" });
+      store.markApplied([{ taskId: id, decidedAt: store.get(id)!.decision!.decidedAt, ok: true }]);
+      clock.advance(10);
+    };
+    apply("old", "backlog");
+    const oldAt = store.get("old")!.applied!.at;
+    apply("go", "go");
+    apply("pkt", "go");
+    apply("later", "backlog");
+    // Kept marks predate this store: start from the file without them.
+    const raw = JSON.parse(readFileSync(join(dir, "triage.json"), "utf8"));
+    delete raw.kept;
+    writeFileSync(join(dir, "triage.json"), JSON.stringify(raw));
+    const s2 = new Store(dir, clock.now);
+    s2.noteApplied("later", "backlog");
+    const laterAt = s2.keptMark("later", "x", "y", 0)!.at;
+    const out = s2.backfillKept([
+      { taskId: "pkt", choice: "backlog", at: clock.now() },
+      { taskId: "go", choice: "backlog", at: 0 },
+      { taskId: "p2", choice: "backlog", at: 5 },
+    ]);
+    expect(out.sort()).toEqual(["old", "p2", "pkt"]);
+    expect(s2.keptMark("old", "x", "y", 0)).toEqual({ at: oldAt, by: "Nil" });
+    expect(s2.keptMark("go", "x", "y", 0)).toBeUndefined();
+    expect(s2.keptMark("later", "x", "y", 0)!.at).toBe(laterAt);
+    // Once only, also after a reload.
+    s2.noteApplied("pkt", "go");
+    expect(new Store(dir, clock.now).backfillKept([{ taskId: "pkt", choice: "backlog", at: clock.now() + 1 }])).toEqual([]);
+    expect(new Store(dir, clock.now).keptMark("pkt", "x", "y", 0)).toBeUndefined();
+  });
+
 });

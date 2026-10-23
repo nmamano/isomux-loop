@@ -104,6 +104,8 @@ type State = {
   items: Record<string, Item>;
   recs?: Record<string, Recommendation>;
   kept?: Record<string, Kept>;
+  // The one-time backfill of kept marks from decisions applied before them ran.
+  keptBackfilled?: boolean;
   notify: { lastDecisionAt: number; lastSentAt: number };
 };
 
@@ -296,6 +298,31 @@ export class Store {
     const k = this.state.kept[taskId];
     if (!k) return false;
     return k.title === undefined || this.keptMark(taskId, title, description) !== undefined;
+  }
+
+  // One time (Isomux PM, 2026-10-23): decisions applied before kept marks
+  // existed. Per task the latest applied decision, a triage card's or a
+  // packet's (others), counts; when it is backlog, the task is kept since
+  // that apply. A mark set since then is not overwritten.
+  backfillKept(others: { taskId: string; choice: string; at: number }[] = []): string[] {
+    if (this.state.keptBackfilled) return [];
+    const latest = new Map<string, { choice: string; at: number }>();
+    const applied = Object.values(this.state.items)
+      .filter((i) => itemState(i) === "applied")
+      .map((i) => ({ taskId: i.taskId, choice: i.decision!.choice, at: i.applied!.at }));
+    for (const d of [...applied, ...others]) {
+      const l = latest.get(d.taskId);
+      if (!l || d.at > l.at) latest.set(d.taskId, d);
+    }
+    const out: string[] = [];
+    for (const [taskId, d] of latest)
+      if (d.choice === "backlog" && !this.state.kept[taskId]) {
+        this.state.kept[taskId] = { at: d.at, by: DECIDER };
+        out.push(taskId);
+      }
+    this.state.keptBackfilled = true;
+    this.save();
+    return out;
   }
 
   // A decision reached the board (a triage card or a packet): backlog marks
