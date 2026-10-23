@@ -1441,7 +1441,8 @@ function hasComments(taskId) {
   const c = soComments[taskId];
   return Boolean(c && [...Object.values(c.copy), ...Object.values(c.images)].some((v) => v && v.trim()));
 }
-// The Scout's suggested edits on an item (Nil, 2026-10-22: easy to miss).
+// The Scout's suggested edits on an item (Nil, 2026-10-22: easy to miss). Only
+// Use fills the field, so the text selects (Nil, 2026-10-23: pick parts of it).
 function suggestionsOf(it, kind, n) {
   const s = it.scout && it.scout.suggestions && it.scout.suggestions[kind];
   return s ? (n === undefined ? Object.keys(s).length : s[String(n)]) : n === undefined ? 0 : undefined;
@@ -1457,7 +1458,7 @@ function suggestJump(it, extra) {
 function commentBox(it, kind, n) {
   const v = commentsOf(it)[kind][String(n)] || "";
   const sug = suggestionsOf(it, kind, n);
-  return (sug ? '<button class="suggest" data-suggest="' + esc(it.taskId + ":" + kind + ":" + n) + '"' + tip("suggested") + '><span class="sughead"><b>Suggested edit</b><span class="sinuse">Use</span></span>' + esc(sug) + "</button>" : "") +
+  return (sug ? '<div class="suggest"><div class="sughead"><b>Suggested edit</b><button class="sinuse" data-suggest="' + esc(it.taskId + ":" + kind + ":" + n) + '"' + tip("suggested") + ">Use</button></div>" + esc(sug) + "</div>" : "") +
     '<textarea rows="1" class="comment" placeholder="Comment: a note, or new text in quotes" data-comment="' +
     esc(it.taskId) + ":" + kind + ":" + n + '"' + tip("comment") + ">" + esc(v) + "</textarea>";
 }
