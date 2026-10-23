@@ -30,7 +30,18 @@ let signoffData = { items: [], push: { ok: false, reason: "" } };
 const later = new Set();
 const picks = {};
 const packetPicks = {};
-const rejectNotes = {};
+// Nil's sign-off drafts (the note and the comments) per item, also kept in
+// localStorage until the decision is sent (Nil, 2026-10-23: a note must never be lost).
+const draftKey = (taskId) => "loop.signoffDraft." + taskId;
+const draftOf = (taskId) => JSON.parse(localStorage.getItem(draftKey(taskId)) || "{}");
+const rejectNotes = new Proxy({}, { get: (o, id) => (id in o ? o[id] : (o[id] = draftOf(id).note || "")) });
+function saveDraft(taskId) {
+  localStorage.setItem(draftKey(taskId), JSON.stringify({ note: rejectNotes[taskId], comments: soComments[taskId] }));
+}
+function clearDraft(taskId) {
+  delete rejectNotes[taskId];
+  localStorage.removeItem(draftKey(taskId));
+}
 // Help rows opened with "?" (for phones, where hover does not exist).
 const openHelp = new Set();
 // Descriptions the reader opened, by key: a render keeps them open.
@@ -126,11 +137,11 @@ const HELP = {
   images: "Screenshots from the worker. Tap one to open it in the viewer: a tap on the image zooms to 100%, arrows or a swipe go to the next, Esc or a tap outside closes.",
   links: "The branch with the work, and the diff when there is one.",
   packetConfirm: "Confirm saves your choice. The curator writes it to the task a few minutes after your last decision; until then you can undo it in Decided.",
-  approve: "Approve: this copy or change goes out with the next push. If you wrote comments, Approve also files a P0 Sign-off changes task with them, and the push waits until that task is merged or closed; the changes come as their own commit and sign-off item.",
+  approve: "Approve: this copy or change goes out with the next push. If you wrote comments or a note, Approve also files a P0 Sign-off changes task with them, and the push waits until that task is merged or closed; the changes come as their own commit and sign-off item.",
   reject: "Reject: Isomux Main reverts the commit at once and the task goes back to ready with your note (and your comments). Needs a note.",
   comment: "Optional. A note (\"shorter\"), or the exact new text in quotes. Saved as you type. Comments can ask for any change, not only copy: Approve turns them into a Sign-off changes task, and the push waits for it; Reject adds them to its note.",
   editsFiled: "Approved, and your comments became a Sign-off changes task. This commit does not go out until that task is merged or closed; the changes come as their own commit.",
-  rejectNote: "Why you reject it, and what to do instead. The worker reads it when the task comes back.",
+  rejectNote: "Sent with either button, and kept on this device until you send it. With Approve it goes in the Sign-off changes task, word for word. With Reject it says why and what to do instead; the worker reads it when the task comes back. Reject needs one.",
   undoApprove: "Undo the approval: the item goes back to Sign-off. Possible until you press Push.",
   push: "Push up to: tells Isomux Main to push main up to the push point, which sends every task under Goes out. Enabled when the push point is ahead of the last push go.",
   sha: "The main commit from Isomux Main's latest merge or revert. Push names this commit.",
@@ -1382,6 +1393,7 @@ function setComment(taskId, kind, n, value) {
   const c = soComments[taskId];
   if (!c) return;
   c[kind][n] = value;
+  saveDraft(taskId);
   const btn = document.querySelector('[data-approve="' + CSS.escape(taskId) + '"]');
   if (btn) btn.textContent = approveLabel(taskId);
   clearTimeout(commentTimers[taskId]);
@@ -1394,11 +1406,11 @@ function setComment(taskId, kind, n, value) {
 const soComments = {};
 const commentTimers = {};
 function commentsOf(it) {
-  return soComments[it.taskId] || (soComments[it.taskId] = JSON.parse(JSON.stringify(it.comments || { copy: {}, images: {} })));
+  return soComments[it.taskId] || (soComments[it.taskId] = draftOf(it.taskId).comments || JSON.parse(JSON.stringify(it.comments || { copy: {}, images: {} })));
 }
-// The button says what it will do: with comments it also files the edits.
+// The button says what it will do: with comments or a note it also files the edits.
 function approveLabel(taskId) {
-  return hasComments(taskId) ? "Approve, file changes" : "Approve";
+  return hasComments(taskId) || rejectNotes[taskId].trim() ? "Approve, file changes" : "Approve";
 }
 function hasComments(taskId) {
   const c = soComments[taskId];
@@ -1568,7 +1580,7 @@ function renderSignoff() {
     h += '<div class="err" data-err="' + esc(it.taskId) + '"></div>';
     if (waiting)
       h += '<div class="entry">' + (sugs ? '<div class="sugcall">' + suggestJump(it, "big") + " on this card. Tap one to use it.</div>" : "") +
-        '<textarea rows="1" placeholder="Why you reject it (needed to reject)" data-rnote="' + esc(it.taskId) + '"' + tip("rejectNote") + ">" + esc(rejectNotes[it.taskId] || "") + "</textarea>" +
+        '<textarea rows="1" placeholder="Note (sent with Approve or Reject)" data-rnote="' + esc(it.taskId) + '"' + tip("rejectNote") + ">" + esc(rejectNotes[it.taskId] || "") + "</textarea>" +
         '<div class="actions"><button class="btn primary" data-approve="' + esc(it.taskId) + '"' + tip("approve") + ">" + approveLabel(it.taskId) + "</button>" +
         '<button class="btn ghost" data-reject="' + esc(it.taskId) + '"' + tip("reject") + ">Reject</button>" + q("sactions", it.taskId) + "</div>" +
         helpBox(["approve", "reject", "comment", "rejectNote"], "sactions", it.taskId) + "</div>";
@@ -1820,8 +1832,9 @@ document.addEventListener("click", async (e) => {
     return sendOff(id, t, async () => {
       clearTimeout(commentTimers[id]);
       if (soComments[id]) await api("/api/signoff/" + encodeURIComponent(id) + "/comments", { method: "POST", body: soComments[id] });
-      const it = await api("/api/signoff/" + encodeURIComponent(id) + "/approve", { method: "POST" });
+      const it = await api("/api/signoff/" + encodeURIComponent(id) + "/approve", { method: "POST", body: { note: rejectNotes[id].trim() } });
       edits = it && it.decision && it.decision.edits;
+      clearDraft(id);
     }, () =>
       edits
         ? { text: "Approved, changes filed: task " + edits, undo: null }
@@ -1856,12 +1869,12 @@ document.addEventListener("click", async (e) => {
   if (d.sundo) return act(d.sundo, () => api("/api/signoff/" + encodeURIComponent(d.sundo) + "/undo", { method: "POST" }));
   if (d.reject) {
     const note = (rejectNotes[d.reject] || "").trim();
-    if (!note) return showErr(d.reject, "Write why you reject it first.");
+    if (!note) return showErr(d.reject, "Write in the note why you reject it first.");
     return act(d.reject, async () => {
       clearTimeout(commentTimers[d.reject]);
       if (soComments[d.reject]) await api("/api/signoff/" + encodeURIComponent(d.reject) + "/comments", { method: "POST", body: soComments[d.reject] });
       await api("/api/signoff/" + encodeURIComponent(d.reject) + "/reject", { method: "POST", body: { note } });
-      delete rejectNotes[d.reject];
+      clearDraft(d.reject);
     });
   }
   if (d.push) return act("push", () => api("/api/signoff/push", { method: "POST" }));
@@ -1944,7 +1957,12 @@ document.addEventListener("input", (e) => {
   }
   if (ds.note !== undefined && picks[ds.note]) picks[ds.note].note = e.target.value;
   if (ds.pnote !== undefined && packetPicks[ds.pnote]) packetPicks[ds.pnote].note = e.target.value;
-  if (ds.rnote !== undefined) rejectNotes[ds.rnote] = e.target.value;
+  if (ds.rnote !== undefined) {
+    rejectNotes[ds.rnote] = e.target.value;
+    saveDraft(ds.rnote);
+    const btn = document.querySelector('[data-approve="' + CSS.escape(ds.rnote) + '"]');
+    if (btn) btn.textContent = approveLabel(ds.rnote);
+  }
   if (ds.bnote !== undefined && backlogPicks[ds.bnote]) backlogPicks[ds.bnote].note = e.target.value;
   if (ds.comment !== undefined) {
     const [taskId, kind, n] = ds.comment.split(":");

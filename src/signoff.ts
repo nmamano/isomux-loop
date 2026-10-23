@@ -320,18 +320,33 @@ export class SignoffStore {
     return lines;
   }
 
-  // Approve. With comments the caller files a Sign-off changes task first and
-  // passes its id; the push waits until that task is merged or closed.
-  checkApprove(taskId: string): { item: SignoffItem; hasComments: boolean } {
+  // Approve. With comments or a note (Nil, 2026-10-23: his notes must never be
+  // lost) the caller files a Sign-off changes task first and passes its id; the
+  // push waits until that task is merged or closed.
+  checkApprove(taskId: string, raw?: unknown): { item: SignoffItem; note: string; filesTask: boolean } {
     const i = this.mergedItem(taskId);
     if (signoffState(i) !== "waiting") throw new ValidationError("only an item that waits for you can be approved");
-    return { item: i, hasComments: this.commentLines(i, false).length > 0 };
+    const note = text((raw as Record<string, unknown> | null)?.note, "note", 4000, false).trim();
+    return { item: i, note, filesTask: Boolean(note) || this.commentLines(i, false).length > 0 };
   }
 
-  approve(taskId: string, editsTaskId?: string): SignoffItem {
+  // The Sign-off changes task's description: Nil's note word for word, then his comments.
+  editsDescription(i: SignoffItem, note: string, day: string): string {
+    return [
+      `Changes Nil asked for when he approved this at sign-off in the loop app (${day}): copy, or anything else he commented on. The push waits for this task: the merged commit does not go out until this task is merged or closed. The changes come as their own commit with their own sign-off item.`,
+      `Source task: ${i.taskId}. Merged commit: ${i.merged!.commit}.`,
+      "",
+      "Rule: Nil's quoted text goes in verbatim; for a note, make the change it asks for and create a sign-off item for it.",
+      ...(note ? ["", "Nil's note (written in the note field when he approved):", note] : []),
+      "",
+      ...this.commentLines(i, true),
+    ].join("\n");
+  }
+
+  approve(taskId: string, editsTaskId?: string, note = ""): SignoffItem {
     const i = this.mergedItem(taskId);
     if (signoffState(i) !== "waiting") throw new ValidationError("only an item that waits for you can be approved");
-    i.decision = { approved: true, note: "", at: this.now(), ...(editsTaskId ? { edits: editsTaskId } : {}) };
+    i.decision = { approved: true, note, at: this.now(), ...(editsTaskId ? { edits: editsTaskId } : {}) };
     this.remember(i);
     this.save();
     return i;

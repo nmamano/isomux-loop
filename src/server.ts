@@ -124,7 +124,7 @@ GET  /api/signoff                 merged items, the merges not pushed yet (unpus
                                   takes, push.blockers the items that hold it back (oldest first). A rejected item holds it
                                   back until Main reports the revert, and no point between the rejected merge and its revert
                                   is used. The push go names push.sha, never main's tip.
-Nil's buttons on the Sign-off tab: approve (with comments on any entry it also files a P0
+Nil's buttons on the Sign-off tab: approve (optional {"note"}; with a note or comments on any entry it also files a P0
 "[go | ready] Sign-off changes: <title>" task with them, and the item holds the push point back, as a blocker with
 state "edits", until that task's merge is reported or the task is closed);
 reject (a note, plus any comments; messages Main "/isomux-main revert ..."); and "Push" on the Push tab
@@ -564,18 +564,14 @@ async function route(req: Request): Promise<Response> {
       case "reverted":
         return json(signoff.reverted(taskId, await body(req)));
       case "approve": {
-        // Comments make the approval file a Sign-off changes task as well.
-        const { item, hasComments } = signoff.checkApprove(taskId);
-        if (!hasComments) return json(signoff.approve(taskId));
+        // Comments or a note make the approval file a Sign-off changes task as well.
+        // An approve without a body (as before the note) is still valid.
+        const sent = await req.text();
+        const raw = sent.trim() ? await body(new Request(req.url, { method: "POST", body: sent })) : {};
+        const { item, note, filesTask } = signoff.checkApprove(taskId, raw);
+        if (!filesTask) return json(signoff.approve(taskId));
         const title = item.title.replace(/^\[[^\]]*\]\s*/, "");
-        const description = [
-          `Changes Nil asked for when he approved this at sign-off in the loop app (${new Date().toISOString().slice(0, 10)}): copy, or anything else he commented on. The push waits for this task: the merged commit does not go out until this task is merged or closed. The changes come as their own commit with their own sign-off item.`,
-          `Source task: ${item.taskId}. Merged commit: ${item.merged!.commit}.`,
-          "",
-          "Rule: Nil's quoted text goes in verbatim; for a note, make the change it asks for and create a sign-off item for it.",
-          "",
-          ...signoff.commentLines(item, true),
-        ].join("\n");
+        const description = signoff.editsDescription(item, note, new Date().toISOString().slice(0, 10));
         let created;
         try {
           created = await office.createTask({ title: `[go | ready] Sign-off changes: ${title}`, description, priority: "P0", roomId: ROOM_ID });
@@ -583,7 +579,7 @@ async function route(req: Request): Promise<Response> {
           return json({ error: `the board refused the Sign-off changes task (${String(err instanceof Error ? err.message : err)}); the item is not approved yet` }, 502);
         }
         statusCache = null;
-        return json(signoff.approve(taskId, created.id));
+        return json(signoff.approve(taskId, created.id, note));
       }
       case "undo":
         return json(signoff.undo(taskId));

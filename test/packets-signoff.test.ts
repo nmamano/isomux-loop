@@ -389,9 +389,9 @@ describe("sign-off", () => {
     const s = new SignoffStore(tempDir());
     s.put(item);
     s.merged("t1", { commit: "aaaaaaa1" });
-    expect(s.checkApprove("t1").hasComments).toBe(false);
+    expect(s.checkApprove("t1").filesTask).toBe(false);
     s.setComments("t1", { copy: { "0": '"Agents ask on the Asks page."' } });
-    expect(s.checkApprove("t1").hasComments).toBe(true);
+    expect(s.checkApprove("t1").filesTask).toBe(true);
     const a = s.approve("t1", "ed1");
     expect([signoffState(a), a.decision!.edits]).toEqual(["approved", "ed1"]);
     expect(() => s.undo("t1")).toThrow(ValidationError);
@@ -400,6 +400,24 @@ describe("sign-off", () => {
     expect(s.pushCheck((id) => id === "ed1")).toMatchObject({ ok: true, reason: "", sha: "aaaaaaa1", approved: ["t1"] });
     s.recordPushGo("aaaaaaa1");
     expect(s.visible()).toEqual([]);
+  });
+
+  test("approve with a note: it files a Sign-off changes task with the note word for word, and the history keeps it", () => {
+    const s = new SignoffStore(tempDir());
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    // No note and no comments: a plain approval, also without a body.
+    expect(s.checkApprove("t1")).toMatchObject({ note: "", filesTask: false });
+    expect(s.checkApprove("t1", { note: "   " })).toMatchObject({ note: "", filesTask: false });
+    expect(() => s.checkApprove("t1", { note: 5 })).toThrow(ValidationError);
+    const note = "Fine for now.\nLater: the whole page reads like a manual; cut it by half.";
+    const check = s.checkApprove("t1", { note: "  " + note + "\n" });
+    expect([check.note, check.filesTask]).toEqual([note, true]);
+    const description = s.editsDescription(check.item, check.note, "2026-10-23");
+    expect(description).toContain(note);
+    expect(description).toContain("aaaaaaa1");
+    s.approve("t1", "ed1", check.note);
+    expect(s.history().map((h) => [h.taskId, h.approved, h.note, h.edits])).toEqual([["t1", true, note, "ed1"]]);
   });
 
   test("a rejection note carries the comments", () => {
