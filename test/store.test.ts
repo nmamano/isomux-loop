@@ -290,9 +290,17 @@ describe("store", () => {
     expect(store.recommendation("k")).toBeUndefined();
     // Survives a reload.
     expect(new Store(dir, clock.now).keptMark("k", "Old idea", "Nil: keep.\nd")).toMatchObject({ at });
-    // The task changed: no longer kept, and the curator's recommendation counts.
-    expect(store.keptMark("k", "Old idea, now urgent", "Nil: keep.\nd")).toBeUndefined();
-    expect(store.propose([rec]).recommended).toEqual(["k"]);
+    // The task changed: no longer kept, and a recommendation older than the
+    // keep (the backfill left those) is dropped, so the wake asks for a fresh one.
+    const raw = JSON.parse(readFileSync(join(dir, "triage.json"), "utf8"));
+    raw.recs.k = { choice: "backlog", priority: null, why: "old", at: 1 };
+    writeFileSync(join(dir, "triage.json"), JSON.stringify(raw));
+    const s3 = new Store(dir, clock.now);
+    expect(s3.keptMark("k", "Old idea", "Nil: keep.\nd")).toBeDefined();
+    expect(s3.recommendation("k")?.why).toBe("old");
+    expect(s3.keptMark("k", "Old idea, now urgent", "Nil: keep.\nd")).toBeUndefined();
+    expect(s3.recommendation("k")).toBeUndefined();
+    expect(s3.propose([rec]).recommended).toEqual(["k"]);
   });
 
   test("a kept task changed on the board takes the curator's recommendation; a decision other than backlog ends the mark", () => {

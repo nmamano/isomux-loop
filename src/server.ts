@@ -1,7 +1,7 @@
 import { CLASSIFY_MS, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, SCOUT_NAME, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
 import { ClosedTimes } from "./closed-times";
 import { type ImageDir } from "./images";
-import { dispatch, dueIn, parseTag, staleCards, status, tick, unclassified, type DispatchResult, type Status, type TickResult } from "./loop";
+import { dispatch, dueIn, parseTag, staleCards, status, tick, unclassified, unrecommended, wakeText, type DispatchResult, type Status, type TickResult } from "./loop";
 import { join } from "node:path";
 import { readJson, writeJson } from "./json-file";
 import { httpOffice, type Task } from "./office";
@@ -86,7 +86,8 @@ Backlog (Nil's tab):
 GET  /api/backlog                 the tasks of the Backlog state (P4, no card), oldest first, with the curator's "recommendation"
                                   (choice, priority, why, effort, at) when it posted one, and effort when a card estimated it.
                                   "kept": {at, by}: Nil kept the task in the backlog (a backlog decision reached the board).
-                                  Do not recommend a kept task: the app skips it (under "kept") until its title or description changes
+                                  Do not recommend a kept task: the app skips it (under "kept") until its title or description changes.
+                                  A change ends the mark and drops the old recommendation, so the curator wake asks for a new one
 POST /api/backlog/:taskId/bring   {"choice":"go|design|hold|backlog|obsolete","priority":"P0-P3 (go, design, hold only)","note?"}:
                                   Nil's decision, a decided card that goes to the curator with the next burst, like any triage
                                   decision (fromBacklog: true; backlog keeps the task at P4, nothing to change on the board)
@@ -106,7 +107,9 @@ POST /api/settings                {"workers": 1-6}: the loop dispatches to Worke
                                   Lowering N takes no task away; a worker above N keeps its tick while it holds a loop task.
 POST /api/dispatch | /api/tick    run one now (both refuse while paused)
 POST /api/classify                run the curator wake now: every 10 minutes, also while paused, open P0-P3 tasks with no tag
-                                  and no card go to the curator (P4 is left out) (a task is announced again after an hour).
+                                  and no card go to the curator to propose, and backlog (P4, no card) tasks with no
+                                  recommendation and not kept go to it to recommend, in one message (a task is announced
+                                  again after an hour).
                                   Every board read (status, Triage list, packets, Backlog, this run; shared for 20 s) withdraws
                                   the undecided cards and packets whose task is done, obsolete or gone
 
@@ -253,19 +256,19 @@ async function runClassify(): Promise<ClassifyRun> {
   try {
     const all = await boardTasks(true);
     const withdrawn = lastWithdrawn;
+    const readAt = tasksCache?.at ?? 0;
     const found = unclassified(all, cardIds());
-    const due = found.filter((t) => at - (announced.get(t.id) ?? 0) >= CLASSIFY_REMIND_MS);
+    const recs = unrecommended(backlogOf(all), (id) => !!store.recommendation(id), (t) => !!store.keptMark(t.id, t.title, t.description ?? "", readAt));
+    const due = [...found, ...recs].filter((t) => at - (announced.get(t.id) ?? 0) >= CLASSIFY_REMIND_MS);
     let sent: string | null = null;
     if (due.length > 0) {
-      const text =
-        `/isomux-curator ${found.length} open task${found.length === 1 ? "" : "s"} in the Isomux room ha${found.length === 1 ? "s" : "ve"} no tag and no card in the loop app; propose ${found.length === 1 ? "it" : "them"}: ` +
-        found.map((t) => t.id).join(", ") + `. API: curl -s ${local}/api/help`;
+      const text = wakeText(found.map((t) => t.id), recs.map((t) => t.id), local)!;
       if (await office.message(text)) {
         sent = text;
-        for (const t of found) announced.set(t.id, at);
+        for (const t of [...found, ...recs]) announced.set(t.id, at);
       } else throw new Error("the message to the curator failed");
     }
-    lastClassify = { at, found: found.map((t) => t.id), sent, withdrawn };
+    lastClassify = { at, found: [...found, ...recs].map((t) => t.id), sent, withdrawn };
   } catch (err) {
     lastClassify = { at, found: [], sent: null, withdrawn: [], error: String(err instanceof Error ? err.message : err) };
   }
@@ -381,16 +384,20 @@ async function loopStatus(): Promise<Record<string, unknown>> {
 // The tasks of the diagram's Backlog state (P4, no card), oldest first; Nil
 // can bring one in from here.
 
+function backlogOf(all: Task[]): Task[] {
+  const c = cards();
+  const so = signoffIds();
+  return all
+    .filter((t) => (t.roomId ?? ROOM_ID) === ROOM_ID && classify(t, c.get(t.id) ?? null, so.has(t.id)) === "backlog")
+    .sort((a, b) => a.createdAt - b.createdAt);
+}
+
 let backlogCache: { at: number; value: unknown[] } | null = null;
 async function backlog(): Promise<unknown[]> {
   if (backlogCache && Date.now() - backlogCache.at < STATUS_CACHE_MS) return backlogCache.value;
   const all = await boardTasks();
   const readAt = tasksCache?.at ?? 0;
-  const c = cards();
-  const so = signoffIds();
-  const value = all
-    .filter((t) => (t.roomId ?? ROOM_ID) === ROOM_ID && classify(t, c.get(t.id) ?? null, so.has(t.id)) === "backlog")
-    .sort((a, b) => a.createdAt - b.createdAt)
+  const value = backlogOf(all)
     .map((t) => {
       // The curator's estimate: its recommendation's, else the card's that sent it to the backlog.
       const rec = store.recommendation(t.id);

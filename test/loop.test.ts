@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ageLine, dispatch, dueIn, freeWorkers, holdings, parseTag, readyQueue, staleCards, status, tick, unclassified } from "../src/loop";
+import { ageLine, dispatch, dueIn, freeWorkers, holdings, parseTag, readyQueue, staleCards, status, tick, unclassified, unrecommended, wakeText } from "../src/loop";
 import type { Agent, Office, PatchResult, Task } from "../src/office";
 
 const ROOM = "e6818e47";
@@ -253,6 +253,31 @@ describe("curator wake", () => {
     ];
     const card = tasks[3].id;
     expect(unclassified(tasks, new Set([card])).map((t) => t.title)).toEqual([a.title]);
+  });
+});
+
+describe("curator wake", () => {
+  test("backlog tasks with no recommendation and not kept are asked for one", () => {
+    const [rec, kept, fresh] = [task({ title: "r", priority: "P4" }), task({ title: "k", priority: "P4" }), task({ title: "f", priority: "P4" })];
+    expect(unrecommended([rec, kept, fresh], (id) => id === rec.id, (t) => t.id === kept.id).map((t) => t.title)).toEqual(["f"]);
+  });
+
+  test("one message per run: the propose part, the recommend part, or both; none when both are empty", () => {
+    const api = "http://127.0.0.1:1";
+    expect(wakeText([], [], api)).toBeNull();
+    const both = wakeText(["a1", "a2"], ["b1"], api)!;
+    expect(both.startsWith("/isomux-curator ")).toBe(true);
+    // Each part names its ids, propose before recommend, and the API help ends it.
+    const propose = both.indexOf("propose");
+    const recommend = both.indexOf("recommend");
+    expect(propose).toBeGreaterThan(0);
+    expect(recommend).toBeGreaterThan(propose);
+    expect(both.slice(propose, recommend)).toContain("a1, a2");
+    expect(both.slice(recommend)).toContain("b1");
+    expect(both.endsWith(`${api}/api/help`)).toBe(true);
+    const only = wakeText([], ["b1", "b2"], api)!;
+    expect([only.includes("propose"), only.includes("b1, b2")]).toEqual([false, true]);
+    expect(wakeText(["a1"], [], api)!.includes("recommend")).toBe(false);
   });
 });
 

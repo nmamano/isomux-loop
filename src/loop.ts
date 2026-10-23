@@ -192,6 +192,29 @@ export function unclassified(tasks: Task[], cards: Set<string>): Task[] {
     .sort((a, b) => a.createdAt - b.createdAt);
 }
 
+// Backlog tasks (P4, no card) the curator has not recommended and Nil has
+// not kept: the curator wake asks for their recommendation (Isomux PM,
+// 2026-10-23), so a new backlog task does not wait for a chance read.
+export function unrecommended(backlog: Task[], hasRec: (id: string) => boolean, kept: (t: Task) => boolean): Task[] {
+  return backlog.filter((t) => !hasRec(t.id) && !kept(t));
+}
+
+// The curator wake's one message; null when neither part has a task.
+export function wakeText(found: string[], backlog: string[], api: string): string | null {
+  if (!found.length && !backlog.length) return null;
+  const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many}`;
+  const parts: string[] = [];
+  if (found.length)
+    parts.push(
+      `${n(found.length, "open task", "open tasks")} in the Isomux room ha${found.length === 1 ? "s" : "ve"} no tag and no card in the loop app; propose ${found.length === 1 ? "it" : "them"}: ${found.join(", ")}.`,
+    );
+  if (backlog.length)
+    parts.push(
+      `${n(backlog.length, "backlog (P4) task has", "backlog (P4) tasks have")} no recommendation; recommend ${backlog.length === 1 ? "it" : "them"} (POST /api/proposals with the P4 task as it is, any choice; it shows on the Backlog tab): ${backlog.join(", ")}.`,
+    );
+  return `/isomux-curator ${parts.join(" ")} API: curl -s ${api}/api/help`;
+}
+
 // Undecided triage cards whose task closed (done or obsolete) or left the
 // board: Nil should not triage them. A decided card stays: it is his.
 export function staleCards(openCardIds: string[], tasks: Task[]): string[] {

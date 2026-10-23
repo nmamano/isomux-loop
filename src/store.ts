@@ -276,7 +276,7 @@ export class Store {
 
   // Whether the task is still kept, given its text on the board. The first
   // read after readAt > kept.at records the text; a later different text
-  // ends the mark.
+  // ends the mark and drops the recommendation.
   keptMark(taskId: string, title: string, description: string, readAt = this.now()): Kept | undefined {
     const k = this.state.kept[taskId];
     if (!k) return undefined;
@@ -289,7 +289,10 @@ export class Store {
       return k;
     }
     if (k.title === title && k.description === description) return k;
+    // The task changed since Nil kept it: its old recommendation is stale, so
+    // the curator wake asks for a fresh one (Isomux Curator, 2026-10-23).
     delete this.state.kept[taskId];
+    delete this.state.recs[taskId];
     this.save();
     return undefined;
   }
