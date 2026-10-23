@@ -480,13 +480,11 @@ function onKey(e) {
       return true;
     }
     if (cls || pri || k === "n") {
-      if (!backlogPicks[id]) press("[data-bring]");
       if (cls) press('[data-bpick=choice][data-v="' + cls + '"]');
       if (pri) press('[data-bpick=priority][data-v="' + pri + '"]');
       if (k === "n") currentEl()?.querySelector("textarea")?.focus();
       return true;
     }
-    if (k === "Escape") return press("[data-bcancel]");
     return false;
   }
   if (tab !== "open") return false;
@@ -1350,8 +1348,9 @@ function backlogCards() {
   let h = "";
   for (const t of shown.map((e) => e.x)) {
     const r = t.recommendation;
-    // The curator's recommendation is preselected, like a triage proposal.
-    if (r && !backlogPicks[t.id]) backlogPicks[t.id] = { choice: r.choice, priority: r.priority, note: "" };
+    // The choices show at once, with the curator's recommendation preselected
+    // like a triage proposal (Nil, 2026-10-23).
+    if (!backlogPicks[t.id]) backlogPicks[t.id] = r ? { choice: r.choice, priority: r.priority, note: "" } : { choice: null, priority: null, note: "" };
     const k = backlogPicks[t.id];
     h += cardOpen(t.id) + '<div class="meta"><span>Filed by ' + esc(t.createdBy || "unknown") + "</span><span>" + filed(t.createdAt) + "</span><span>Task " + idCopy(t.id) + "</span>" +
       (t.effort ? '<span title="' + esc(HELP[t.effort] + (t.effortWhy ? " " + t.effortWhy : "")) + '">effort ' + esc(t.effort) + "</span>" : "") + "</div>" +
@@ -1359,17 +1358,12 @@ function backlogCards() {
       (r ? '<div class="why"><span class="label"' + tip("recommend") + ">Curator recommends: " + esc(summary(r)) + "</span><br>" + esc(r.why) +
         (r.effortWhy ? "<br><span" + tip("effort") + ">Effort: " + esc(r.effortWhy) + "</span>" : "") + "</div>" : "") +
       (t.description ? details("bdesc:" + t.id, "description", "Description", '<div class="desc">' + esc(t.description) + "</div>") : "");
-    if (!k) {
-      h += '<div class="actions"><button class="btn ghost" data-bring="' + esc(t.id) + '"' + tip("bringIn") + ">Decide</button></div>";
-    } else {
-      const chipRow = (kind, list) => chips(kind, list, k[kind], r ? r[kind] : null, t.id, "bpick");
-      h += '<div class="row"><span class="label"' + tip("choice") + ">Choice</span>" + chipRow("choice", CHOICES) + "</div>" +
-        (tagged(k.choice) ? '<div class="row"><span class="label"' + tip("priority") + ">Priority</span>" + chipRow("priority", PRIORITIES) + "</div>" : "") +
-        '<textarea rows="1" placeholder="' + (k.choice === "obsolete" ? "Note: why it is obsolete" : "Note for the curator (optional)") + '" data-bnote="' + esc(t.id) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
-        '<div class="err" data-err="' + esc(t.id) + '"></div>' +
-        '<div class="actions"><button class="btn primary" data-bconfirm="' + esc(t.id) + '"' + tip("bringIn") + ">Confirm</button>" +
-        (r ? "" : '<button class="btn ghost" data-bcancel="' + esc(t.id) + '">Cancel</button>') + "</div>";
-    }
+    const chipRow = (kind, list) => chips(kind, list, k[kind], r ? r[kind] : null, t.id, "bpick");
+    h += '<div class="row"><span class="label"' + tip("choice") + ">Choice</span>" + chipRow("choice", CHOICES) + "</div>" +
+      (!k.choice || tagged(k.choice) ? '<div class="row"><span class="label"' + tip("priority") + ">Priority</span>" + chipRow("priority", PRIORITIES) + "</div>" : "") +
+      '<textarea rows="1" placeholder="' + (k.choice === "obsolete" ? "Note: why it is obsolete" : "Note for the curator (optional)") + '" data-bnote="' + esc(t.id) + '"' + tip("note") + ">" + esc(k.note) + "</textarea>" +
+      '<div class="err" data-err="' + esc(t.id) + '"></div>' +
+      '<div class="actions"><button class="btn primary" data-bconfirm="' + esc(t.id) + '"' + tip("bringIn") + ">Confirm</button></div>";
     h += "</div>";
   }
   return h;
@@ -1807,14 +1801,6 @@ document.addEventListener("click", async (e) => {
       showErr(id, err.message);
     }
   };
-  if (d.bring) {
-    backlogPicks[d.bring] = { choice: null, priority: null, note: "" };
-    return render();
-  }
-  if (d.bcancel) {
-    delete backlogPicks[d.bcancel];
-    return render();
-  }
   if (d.bpick) {
     backlogPicks[d.id][d.bpick] = d.v;
     return render();
