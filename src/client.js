@@ -776,7 +776,7 @@ function renderStatus() {
   const c = s.lastClassify;
   h += "<br><span" + tip("classify") + ">Curator wake: " + (c ? clock(c.at) + " · " + (c.error ? '<span class="warn">' + esc(c.error) + "</span>" : c.found.length + " to classify") : "not yet") + "</span>";
   h += q("runs") + "</div>" + helpBox(["runs", "classify"], "runs");
-  h += '<div class="small"' + tip("signoff") + '>Sign-off: <a href="/signoff/" data-go="signoff">' + signoffCount() + '</a> · Push: <a href="/push/" data-go="push">' + pushTasks().length + "</a> " + q("signoff") + "</div>" + helpBox(["signoff", "tabPush"], "signoff");
+  h += '<div class="small"' + tip("signoff") + '>Sign-off: <a href="/signoff/" data-go="signoff">' + plural(signoffCount(), "task") + '</a> · Push: <a href="/push/" data-go="push">' + plural(pushTasks().length, "task") + "</a> " + q("signoff") + "</div>" + helpBox(["signoff", "tabPush"], "signoff");
   if (s.error) return h + '<div class="err">Board unreadable: ' + esc(s.error) + "</div>";
   const b = s.board;
   h += renderStates(b);
@@ -1449,6 +1449,9 @@ function pushTasks() {
   const item = Object.fromEntries(signoffData.items.map((i) => [i.taskId, i]));
   return st.tasks.map((t) => ({ t, u: un[t.id], it: item[t.id] }));
 }
+function plural(n, one) {
+  return n + " " + one + (n === 1 ? "" : "s");
+}
 function pushBanner(goes) {
   const so = signoffData;
   const pt = so.push;
@@ -1456,7 +1459,9 @@ function pushBanner(goes) {
   const last = so.lastSha ? so.lastSha.commit : null;
   return (
     '<div class="banner ' + (pt.ok ? "run" : "paused") + '"><div><b' + tip("push") + ">" +
-    (pt.sha ? "Push up to <code>" + esc(sha8) + "</code>: " + goes + (goes === 1 ? " task" : " tasks") : "Push (" + pushTasks().length + ")") + "</b>" +
+    (pt.sha
+      ? "Push up to <code>" + esc(sha8) + "</code>: " + plural(goes, "task") + ", " + plural(pt.commits, "commit") + " (of " + plural(pt.unpushedCommits, "commit") + " not pushed)"
+      : "Push: " + plural(pushTasks().length, "task") + ", " + plural(pt.unpushedCommits, "commit") + " not pushed") + "</b>" +
     '<div class="small"' + tip("sha") + ">main " + (last ? "<code>" + esc(last.slice(0, 10)) + "</code> · " + clock(so.lastSha.at) : "not reported yet") + "</div>" +
     (pt.ok ? "" : '<div class="small">' + linkIds(pt.reason) + "</div>") +
     '</div><span><button class="btn primary" data-push="1"' + (pt.ok ? "" : " disabled") + tip("push") + ">" + (pt.sha ? "Push up to " + esc(sha8) : "Push") + "</button> " + q("push") + "</span></div>" +
@@ -1496,9 +1501,9 @@ function renderPush() {
   };
   let h = '<div class="small"' + tip("tabPush") + ">" + esc(HELP.tabPush) + "</div>" + pushBanner(goes.length);
   if (!list.length) return h + '<div class="empty">Nothing waits for the push.</div>';
-  if (goes.length) h += "<h2" + tip("goesOut") + ">Goes out (" + goes.length + ") " + q("goesOut") + "</h2>" + helpBox(["goesOut"], "goesOut") + goes.map((x) => pushCard(x, null)).join("");
+  if (goes.length) h += "<h2" + tip("goesOut") + ">Goes out: " + plural(goes.length, "task") + ", " + plural(pt.commits, "commit") + " " + q("goesOut") + "</h2>" + helpBox(["goesOut"], "goesOut") + goes.map((x) => pushCard(x, null)).join("");
   if (waits.length)
-    h += "<h2" + tip("waitsBehind") + ">Waits (" + waits.length + ") " + q("waitsBehind") + "</h2>" + helpBox(["waitsBehind"], "waitsBehind") +
+    h += "<h2" + tip("waitsBehind") + ">Waits: " + plural(waits.length, "task") + " " + q("waitsBehind") + "</h2>" + helpBox(["waitsBehind"], "waitsBehind") +
       waits.map((x) => pushCard(x, waitsFor(x))).join("");
   return h;
 }

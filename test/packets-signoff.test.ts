@@ -281,6 +281,20 @@ describe("sign-off", () => {
     expect(s.pushCheck()).toMatchObject({ sha: "eeeeeee5", tasks: ["after", "later"] });
   });
 
+  test("commit counts: distinct reported shas up to the push point and since the last push", () => {
+    const s = new SignoffStore(tempDir());
+    s.put({ ...item, taskId: "w" });
+    s.merged("a", { commit: "aaaaaaa1" });
+    // A task with no code is reported with the main sha of the time.
+    s.merged("copy", { commit: "aaaaaaa1" });
+    s.merged("b", { commit: "bbbbbbb2" });
+    s.merged("w", { commit: "ccccccc3" });
+    s.merged("c", { commit: "ddddddd4" });
+    expect(s.pushCheck()).toMatchObject({ sha: "bbbbbbb2", tasks: ["a", "copy", "b"], commits: 2, unpushedCommits: 4 });
+    s.pushed({ commit: "aaaaaaa1" });
+    expect(s.pushCheck()).toMatchObject({ commits: 1, unpushedCommits: 3 });
+  });
+
   test("push point: never the rejected merge itself while a later item waits, also after its revert", () => {
     const s = new SignoffStore(tempDir());
     s.put(item);

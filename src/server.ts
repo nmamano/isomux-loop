@@ -121,9 +121,10 @@ GET  /api/signoff                 merged items, the merges not pushed yet (unpus
                                   push go), the main sha, and push: the push point (Nil, 2026-10-20). Main is linear, so a
                                   push is "everything up to sha X": push.sha is the newest reported sha with every item
                                   merged at or before it approved (or nothing to sign off); push.tasks are the merges it
-                                  takes, push.blockers the items that hold it back (oldest first). A rejected item holds it
-                                  back until Main reports the revert, and no point between the rejected merge and its revert
-                                  is used. The push go names push.sha, never main's tip.
+                                  takes, push.commits the distinct commits Main reported up to it, push.unpushedCommits
+                                  all of them since the last push, push.blockers the items that hold it back (oldest
+                                  first). A rejected item holds it back until Main reports the revert, and no point between
+                                  the rejected merge and its revert is used. The push go names push.sha, never main's tip.
 Nil's buttons on the Sign-off tab: approve (optional {"note"}; with a note or comments on any entry it also files a P0
 "[go | ready] Sign-off changes: <title>" task with them, and the item holds the push point back, as a blocker with
 state "edits", until that task's merge is reported or the task is closed);

@@ -99,6 +99,11 @@ export type PushCheck = {
   approved: string[];
   // Every merge the push point takes, item or not.
   tasks: string[];
+  // Distinct commits Main reported (merges and reverts) up to the push point,
+  // and all of them since the last push. A task with no code is reported with
+  // the main sha of the time, so it adds no commit.
+  commits: number;
+  unpushedCommits: number;
   // Items that hold the push point back, oldest first: it stays before them.
   // "edits": approved with comments, and its Sign-off changes task (edits) is
   // neither merged nor closed (Nil, 2026-10-21: a "remove this before it
@@ -482,6 +487,9 @@ export class SignoffStore {
     const seq = best ? best.seq : null;
     const tasks = seq === null ? [] : Object.entries(this.state.unpushed ?? {}).filter(([, u]) => u.seq <= seq).sort((a, b) => a[1].seq - b[1].seq).map(([id]) => id);
     const approved = this.visible().filter((i) => signoffState(i) === "approved" && seq !== null && this.itemSeq(i) <= seq).map((i) => i.taskId);
+    const distinct = (xs: { commit: string }[]) => xs.filter((x, k) => !xs.slice(0, k).some((y) => sameSha(x.commit, y.commit))).length;
+    const shas = this.state.shas ?? [];
+    const commits = seq === null ? 0 : distinct(shas.filter((x) => x.seq <= seq));
     const goSeq = this.shaSeq(this.state.lastPushGo?.commit);
     const b = blockers[0];
     let reason = "";
@@ -495,7 +503,7 @@ export class SignoffStore {
             : `${b.taskId}, the oldest item, waits for your approve or reject`
         : "nothing new to push";
     else if (goSeq !== undefined && goSeq >= seq) reason = `the push go for ${best!.commit.slice(0, 8)} is sent; it waits for Isomux Main`;
-    return { ok: reason === "", reason, sha: best ? best.commit : null, seq, approved, tasks, blockers };
+    return { ok: reason === "", reason, sha: best ? best.commit : null, seq, approved, tasks, commits, unpushedCommits: distinct(shas), blockers };
   }
 
   // After Main got the message: the approved items up to the push point
