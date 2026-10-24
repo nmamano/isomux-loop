@@ -71,7 +71,8 @@ export function classify(t: Task, card: Card, needsSignoff = false, unpushed = f
 }
 
 export type Brief = { id: string; title: string; priority: string | null; assignee: string | null; closedAt?: number };
-export type StateView = { count: number; tasks: Brief[] };
+// belowFloor: on Ready only, the tasks below the dispatch floor.
+export type StateView = { count: number; tasks: Brief[]; belowFloor?: number };
 
 const RECENT = 20;
 
@@ -108,4 +109,12 @@ export function stateViews(
     }
   }
   return out;
+}
+
+// The Ready tasks below the dispatch floor ("P1": the P2 and P3 tasks), which
+// wait until it is lowered (Nil, 2026-10-24: the Ready count shows them).
+export function belowFloor(view: StateView, floor: string | null): number {
+  if (floor === null) return 0;
+  const allowed = LOOP_PRIORITIES.slice(0, LOOP_PRIORITIES.indexOf(floor) + 1);
+  return view.tasks.filter((t) => !allowed.includes(t.priority ?? "")).length;
 }

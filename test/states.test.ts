@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ClosedTimes } from "../src/closed-times";
 import type { Office, Task } from "../src/office";
-import { classify, stateViews, type Card } from "../src/states";
+import { belowFloor, classify, stateViews, type Card } from "../src/states";
 import { tempDir } from "./tmp";
 
 let seq = 0;
@@ -118,5 +118,17 @@ describe("close times", () => {
     expect(again.get({ ...t, version: "changed" })).toBeUndefined();
     await again.fill([{ ...t, version: "changed" }]);
     expect(reads).toEqual([t.id, t.id]);
+  });
+});
+
+describe("belowFloor", () => {
+  test("counts the Ready tasks below the floor, the floor itself not; no floor counts none", () => {
+    const ready = stateViews(
+      ["P0", "P1", "P1", "P2", "P3"].map((priority) => task({ title: "[go | ready] x", priority })),
+      new Map(),
+      () => undefined,
+    ).ready;
+    expect(ready.count).toBe(5);
+    expect([belowFloor(ready, "P0"), belowFloor(ready, "P1"), belowFloor(ready, "P3"), belowFloor(ready, null)]).toEqual([4, 2, 0, 0]);
   });
 });

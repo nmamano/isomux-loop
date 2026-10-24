@@ -9,7 +9,7 @@ import { page } from "./page";
 import { PacketStore, packetState } from "./packets";
 import { PauseFlag } from "./pause";
 import { sendDueReverts, SignoffStore, signoffState, undoDecision, withAudience } from "./signoff";
-import { classify, stateViews, type Card, type StateKey, type StateView } from "./states";
+import { belowFloor, classify, stateViews, type Card, type StateKey, type StateView } from "./states";
 import { itemState, Store, ValidationError, type TaskSnapshot } from "./store";
 
 const port = Number(process.env.PORT);
@@ -108,7 +108,7 @@ POST /api/settings                {"workers": 1-6, "minPriority": "P0"-"P3" | nu
                                   workers: the loop dispatches to Workers 1..N. Lowering N takes no task away; a worker above N
                                   keeps its tick while it holds a loop task. minPriority: dispatch takes only ready tasks at that
                                   priority or higher ("P1": P0 and P1); null (the default) takes every priority. GET /api/status
-                                  gives both, and board.belowFloor counts the ready tasks the floor holds back.
+                                  gives both; board.belowFloor and board.states.ready.belowFloor count the ready tasks the floor holds back.
 POST /api/dispatch | /api/tick    run one now (both refuse while paused)
 POST /api/classify                run the curator wake now: every 10 minutes, also while paused, open P0-P3 tasks with no tag
                                   and no card go to the curator to propose, and backlog (P4, no card) tasks with no
@@ -383,11 +383,13 @@ async function loopStatus(): Promise<Record<string, unknown>> {
       const [agents, all] = await Promise.all([office.agents(), boardTasks()]);
       // The dispatch view sees what dispatch sees: the board's default listing.
       const live = all.filter((t) => (t.status === "open" || t.status === "in_progress") && t.priority !== "P4");
+      const states = stateViews(all, cards(), (t) => closed.get(t), signoffIds(), signoff.unpushedIds(), new Set(agents.map((a) => a.id)));
+      states.ready.belowFloor = belowFloor(states.ready, pause.minPriority);
       statusCache = {
         at: Date.now(),
         value: {
           ...status(agents, live, pause.workers, pause.minPriority),
-          states: stateViews(all, cards(), (t) => closed.get(t), signoffIds(), signoff.unpushedIds(), new Set(agents.map((a) => a.id))),
+          states,
           closedPending: closed.missing(all).length,
         },
       };

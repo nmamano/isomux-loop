@@ -111,7 +111,7 @@ const HELP = {
   copyId: "Copy the task id.",
   idLink: "Go to this task's card: it opens the tab that holds it and flashes the card.",
   keys: "Keyboard shortcuts for triage: j/k move between cards, g d h b o w pick, 0-3 set the priority, Ctrl+Enter (Cmd+Enter) confirms. Press ? to show the list.",
-  viewbar: "Sort and filter the cards. The tab count and the diagram stay the full total; the keys follow the order shown. Your browser keeps these until Clear.",
+  viewbar: "Sort and filter the cards. With a filter on, the tab shows the count shown of the total; the diagram stays the full total. The keys follow the order shown. Your browser keeps these until Clear.",
   search: "Matches the title, the description, the task id and the curator's reason. / puts the cursor here; Esc leaves.",
   filters: "Combine any chips: in one row a card matches any chip, across rows it must match each row. Change compares the proposal with the board's priority. Design packets: Priority matches their board priority, the other rows let them pass, and only Kind and the search can hide them.",
   clearView: "Back to the default order with no filters.",
@@ -170,14 +170,14 @@ const HELP = {
   noVerdict: "No verdict: the Scout has not read this item yet.",
   suggested: "The comment Isomux Sign-off Scout predicts you write here. Tap to put it in the field, then edit or keep it. Nothing is filled in for you.",
   suggestCount: "Isomux Sign-off Scout suggests comments on this card. Tap to go to the first one.",
-  verdictFilter: "Show only the items with these Scout verdicts. Your browser keeps the choice. The tab count stays the full total.",
+  verdictFilter: "Show only the items with these Scout verdicts. Your browser keeps the choice. The tab shows the count shown of the total.",
 };
 // The states: label, definition (board facts), and place in the diagram.
 const STATE_INFO = {
   filed: ["Filed", "Open, no tag in the title, no card in the app yet. The loop never picks it."],
   triage: ["Triage", "An open card in the Triage tab: a curator proposal, or a worker's design packet. A task with an open card counts here whatever the board says."],
   decided: ["Decided", "You confirmed the card; the curator has not written it to the board yet. The same cards as the Decided tab, whatever the board says."],
-  ready: ["Ready", "Tag [go | ready] or [design | ready], open, no assignee, P0-P3. The loop picks these."],
+  ready: ["Ready", "Tag [go | ready] or [design | ready], open, no assignee, P0-P3. The loop picks these; the ones below the priority floor wait."],
   working: ["Working", "In progress, assigned to an Isomux Worker."],
   killed: ["Holder killed", "In progress, assigned to an Isomux Worker that was killed. A new worker with the same name cannot claim it. Isomux PM reassigns it (assignee to none, then to the new worker) or sets it back to ready."],
   merging: ["Merging", "Tag [<class> | merging], in progress, no assignee. Isomux Main merges it after CI."],
@@ -229,13 +229,19 @@ function diagram(states) {
   const boxes = Object.entries(BOX).map(([k, [x, y, w]]) => {
     const [label, help] = STATE_INFO[k];
     const n = states[k] ? states[k].count : 0;
+    const below = (states[k] && states[k].belowFloor) || 0;
     const cls = "st st-" + k + (pickedState === k ? " picked" : "") + (n === 0 ? " zero" : "");
     return '<g class="' + cls + '" data-state="' + k + '" role="button" tabindex="0"><title>' + esc(label + ": " + help + " Tap to list.") + "</title>" +
       '<rect x="' + (x + 1) + '" y="' + (y + 1) + '" width="' + (w - 2) + '" height="42" rx="9"/>' +
       '<text x="' + (x + w / 2) + '" y="' + (y + 19) + '" text-anchor="middle" font-size="12" font-weight="600">' + esc(label) + "</text>" +
-      '<text x="' + (x + w / 2) + '" y="' + (y + 36) + '" text-anchor="middle" font-size="13">' + n + "</text></g>";
+      '<text x="' + (x + w / 2) + '" y="' + (y + 36) + '" text-anchor="middle" font-size="13">' + (n - below) +
+        (below ? '<tspan font-size="10" style="fill:var(--muted)"> (' + belowText(below) + ")</tspan>" : "") + "</text></g>";
   }).join("");
   return '<svg class="diagram" viewBox="0 0 400 696" role="img" aria-label="Task states">' + marker + edges + boxes + "</svg>";
+}
+// Ready tasks the priority floor holds back (Nil, 2026-10-24): "8 below P1".
+function belowText(n) {
+  return n + " below " + esc(loopState.minPriority);
 }
 function briefLine(t) {
   const when = t.closedAt ? " · closed " + clock(t.closedAt) : "";
@@ -254,7 +260,7 @@ function renderStates(b) {
     const v = b.states[pickedState];
     const [label, help] = pickedState === "other" ? ["Other", HELP.other] : STATE_INFO[pickedState];
     const recent = pickedState === "done" || pickedState === "obsolete";
-    h += '<div class="picked-list"><h2 title="' + esc(help) + '">' + esc(label) + " (" + v.count + ")" + (recent ? " · last " + v.tasks.length : "") + "</h2>" +
+    h += '<div class="picked-list"><h2 title="' + esc(help) + '">' + esc(label) + " (" + (v.belowFloor ? v.count - v.belowFloor + ", " + belowText(v.belowFloor) : v.count) + ")" + (recent ? " · last " + v.tasks.length : "") + "</h2>" +
       '<div class="small">' + esc(help) + "</div>" +
       (v.tasks.length ? v.tasks.map(pickedState === "hold" ? holdLine : briefLine).join("") : '<div class="small">None.</div>') + "</div>";
   }
@@ -787,6 +793,10 @@ function renderTabs() {
     push: pushTasks().length,
     backlog: backlogTasks.length,
   };
+  // With a filter on, the tab shows what it shows of the total: "12 of 40" (Nil, 2026-10-24).
+  if (activeFilters("triage")) n.open = new Set(viewList("triage", triageEntries()).map((e) => e.x.taskId)).size + " of " + n.open;
+  if (activeFilters("backlog")) n.backlog = viewList("backlog", backlogTasks.map((t) => ({ kind: "backlog", x: t }))).length + " of " + n.backlog;
+  if (soVerdicts.size) n.signoff = signoffItems().filter((it) => soVerdicts.has(verdictOf(it))).length + " of " + n.signoff;
   document.getElementById("tabs").innerHTML = TABS.map(
     ([k, label]) =>
       '<button class="' + (k === tab ? "on" : "") + '" data-tab="' + k + '"' + tip(TAB_HELP[k]) + ">" + label + (k in n ? " (" + n[k] + ")" : "") + "</button>",
@@ -855,8 +865,7 @@ function renderStatus() {
   h += renderStates(b);
   h += section("Working", "working", b.holding.map((x) => taskLine(x.task, x.worker)), "No worker holds a task.");
   h += '<div class="small" style="margin-top:6px"' + tip("free") + ">Free: " + (b.freeWorkers.length ? esc(b.freeWorkers.join(", ")) : "none") + " " + q("free") + "</div>" + helpBox(["free"], "free");
-  h += section("Ready queue (" + b.ready.length + ")", "ready", b.ready.map((x) => taskLine(x)), "Nothing is ready.");
-  if (b.belowFloor) h += '<div class="small"' + tip("floor") + ">Held back by the priority floor: " + plural(b.belowFloor, "ready task") + ".</div>";
+  h += section("Ready queue (" + b.ready.length + (b.belowFloor ? ", " + belowText(b.belowFloor) : "") + ")", "ready", b.ready.map((x) => taskLine(x)), "Nothing is ready.");
   h += section("Merging (" + b.merging.length + ")", "merging", b.merging.map((x) => taskLine(x)), "Nothing is merging.");
   const st = b.states;
   h += section("On hold (" + st.hold.count + ")", "hold", st.hold.tasks.map(holdLine), "No task is on hold.");
@@ -2065,6 +2074,7 @@ document.addEventListener("input", (e) => {
     view[ds.search].q = e.target.value;
     saveView(ds.search);
     rerenderCards();
+    renderTabs();
     // The bar itself stays, so the box keeps the cursor.
     const n = activeFilters(ds.search);
     const clear = document.querySelector('[data-clearview="' + ds.search + '"]');
