@@ -24,3 +24,7 @@ export const CLASSIFY_MS = 10 * 60_000;
 export const CLASSIFY_REMIND_MS = 60 * 60_000;
 // The status view reads the board at most this often.
 export const STATUS_CACHE_MS = 20_000;
+// A rejection's revert request waits this long, so Nil can undo it (Nil,
+// 2026-10-24); a failed request is tried again after REVERT_RETRY_MS.
+export const REVERT_HOLD_MS = 60_000;
+export const REVERT_RETRY_MS = 30_000;

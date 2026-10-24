@@ -1,11 +1,14 @@
 // Sign-off before the push: a worker posts the copy and visible changes of a
 // task at hand-off, Isomux Main marks it merged, and Nil approves or rejects
 // it here. Only merged items show. A rejection asks Main for a revert; the
-// item stays until Main reports the revert.
+// item stays until Main reports the revert. The revert request waits
+// REVERT_HOLD_MS first, so Nil can undo the rejection (Nil, 2026-10-24).
 
 import { join } from "node:path";
+import { REVERT_HOLD_MS, REVERT_RETRY_MS } from "./config";
 import { checkTaskId, ImageDir, type Image } from "./images";
 import { readJson, writeJson } from "./json-file";
+import type { Office, Task } from "./office";
 import { ValidationError } from "./store";
 
 // audience (Nil, 2026-10-20): "member" for what a person reads (UI, site,
@@ -40,7 +43,18 @@ export type SignoffItem = {
   // edits: the Sign-off changes task an approval with comments filed (Nil,
   // 2026-10-19: approve and request edits are one case, approved with 0 or
   // more edits). editsMerged: when Main reported that task's merge.
-  decision: { approved: boolean; note: string; at: number; edits?: string; editsMerged?: number } | null;
+  // typed: what Nil wrote in the note (a rejection's note adds his comments).
+  // revert: a rejection's request to Main, held until due; sent when Main got
+  // it. A rejection stored before the hold has none: it was sent at once.
+  decision: {
+    approved: boolean;
+    note: string;
+    typed?: string;
+    at: number;
+    edits?: string;
+    editsMerged?: number;
+    revert?: { due: number; sent?: number; error?: string };
+  } | null;
   reverted: { commit: string; at: number } | null;
   scout?: Scout;
 };
@@ -392,18 +406,20 @@ export class SignoffStore {
   }
 
   // Checks only; the caller messages Main and then records the rejection.
-  checkReject(taskId: string, raw: unknown): { item: SignoffItem; note: string } {
+  checkReject(taskId: string, raw: unknown): { item: SignoffItem; note: string; typed: string } {
     const i = this.mergedItem(taskId);
     if (signoffState(i) !== "waiting") throw new ValidationError("only an item that waits for you can be rejected");
     const typed = text((raw as Record<string, unknown> | null)?.note, "note", 4000).trim();
     if (!typed) throw new ValidationError("a rejection needs a note");
     const comments = this.commentLines(i, false);
-    return { item: i, note: comments.length ? `${typed} Comments: ${comments.join("; ")}` : typed };
+    return { item: i, note: comments.length ? `${typed} Comments: ${comments.join("; ")}` : typed, typed };
   }
 
-  recordReject(taskId: string, note: string): SignoffItem {
+  // The revert request waits REVERT_HOLD_MS (sendDueReverts sends it).
+  recordReject(taskId: string, note: string, typed = note): SignoffItem {
     const i = this.mergedItem(taskId);
-    i.decision = { approved: false, note, at: this.now() };
+    const at = this.now();
+    i.decision = { approved: false, note, typed, at, revert: { due: at + REVERT_HOLD_MS } };
     this.remember(i);
     this.save();
     return i;
@@ -454,17 +470,63 @@ export class SignoffStore {
     return i;
   }
 
-  undo(taskId: string): SignoffItem {
+  // Checks only (an approval, or a rejection whose revert Main has not got).
+  checkUndo(taskId: string): SignoffItem {
     const i = this.mergedItem(taskId);
-    if (signoffState(i) !== "approved") throw new ValidationError("only an approval can be undone");
-    if (i.decision?.edits) throw new ValidationError(`the Sign-off changes task ${i.decision.edits} is filed; close it on the board instead`);
-    // An undone approval leaves the history: it was not his decision after all.
+    const st = signoffState(i);
+    if (st === "rejected") {
+      const r = i.decision!.revert;
+      if (!r || r.sent || this.sending.has(taskId)) throw new ValidationError("Isomux Main has the revert request already; this rejection cannot be undone");
+    } else if (st !== "approved") throw new ValidationError("only an approval or a rejection can be undone");
+    return i;
+  }
+
+  // The item waits for Nil again; the note comes back for his field. A
+  // filed Sign-off changes task is the caller's (undoDecision).
+  undo(taskId: string): { item: SignoffItem; note: string } {
+    const i = this.checkUndo(taskId);
+    // An undone decision leaves the history: it was not his decision after all.
     const h = this.state.history ?? [];
     const at = h.map((x) => x.taskId === taskId && x.at === i.decision!.at).lastIndexOf(true);
     if (at >= 0) h.splice(at, 1);
+    const note = i.decision!.typed ?? i.decision!.note;
     i.decision = null;
     this.save();
-    return i;
+    return { item: i, note };
+  }
+
+  // Rejections whose revert request is due, and not on its way.
+  dueReverts(): SignoffItem[] {
+    const now = this.now();
+    return this.visible().filter((i) => {
+      const r = i.decision?.approved === false ? i.decision.revert : undefined;
+      return r && !r.sent && r.due <= now && !this.sending.has(i.taskId);
+    });
+  }
+
+  // The message to Main for a rejection.
+  revertText(i: SignoffItem): string {
+    return `/isomux-main revert ${i.taskId} (${i.merged!.commit}): Nil rejected it at sign-off: ${i.decision!.note}`;
+  }
+
+  // In memory only: after a restart mid-send the request goes again (a
+  // repeated revert request is safer than a lost one).
+  private sending = new Set<string>();
+  revertSending(taskId: string, on: boolean): void {
+    if (on) this.sending.add(taskId);
+    else this.sending.delete(taskId);
+  }
+
+  // Main got the request, or it failed and is tried again REVERT_RETRY_MS later.
+  revertResult(taskId: string, error: string | null): void {
+    const r = this.state.items[taskId]?.decision?.revert;
+    if (!r) return;
+    if (error) Object.assign(r, { due: this.now() + REVERT_RETRY_MS, error });
+    else {
+      r.sent = this.now();
+      delete r.error;
+    }
+    this.save();
   }
 
   // An item's merge in report order. Items from before seq existed: their
@@ -571,4 +633,63 @@ export class SignoffStore {
   meta(): { lastSha: State["lastSha"]; lastPushGo: State["lastPushGo"] } {
     return { lastSha: this.state.lastSha, lastPushGo: this.state.lastPushGo };
   }
+}
+
+// A Sign-off changes task no worker has started: open, no assignee, still
+// tagged [go | ready].
+export function editsUnstarted(t: Task): boolean {
+  return t.status === "open" && !t.assignee && /^\[go \| ready\]/.test(t.title);
+}
+
+export type EditsOutcome = { id: string; closed: boolean; why: string };
+
+// Undo of an approval or a rejection (Nil, 2026-10-24). An approval that
+// filed a Sign-off changes task closes that task as obsolete if no worker has
+// started it; else the task stays and the outcome says why.
+export async function undoDecision(
+  s: SignoffStore,
+  office: Pick<Office, "task" | "patchTask">,
+  taskId: string,
+  today: string,
+): Promise<{ item: SignoffItem; note: string; edits: EditsOutcome | null }> {
+  const d = s.checkUndo(taskId).decision!;
+  let edits: EditsOutcome | null = null;
+  if (d.approved && d.edits) {
+    const id = d.edits;
+    let t: Task;
+    try {
+      t = await office.task(id);
+    } catch {
+      throw new ValidationError(`the board did not give the Sign-off changes task ${id}; nothing was undone`);
+    }
+    if (["done", "obsolete"].includes(t.status)) edits = { id, closed: false, why: `it is ${t.status} already` };
+    else if (d.editsMerged) edits = { id, closed: false, why: "Isomux Main merged it" };
+    else if (!editsUnstarted(t)) edits = { id, closed: false, why: t.assignee ? `${t.assignee} has it` : "a worker started it" };
+    else {
+      const reason = `Obsolete (${today}): Nil undid the approval of ${taskId} at sign-off, so these changes are not asked for. His note and comments are back on the item's sign-off card.`;
+      const res = await office.patchTask(id, { version: t.version, status: "obsolete", description: `${reason}\n\n${t.description ?? ""}`.trimEnd() });
+      if (!res.ok) throw new ValidationError(`the board refused to close the Sign-off changes task ${id} (${res.status}); nothing was undone`);
+      edits = { id, closed: true, why: "no worker had started it" };
+    }
+  }
+  return { ...s.undo(taskId), edits };
+}
+
+// Sends each due revert request to Main (sendDueReverts runs every few seconds).
+export async function sendDueReverts(s: SignoffStore, message: (text: string) => Promise<boolean>): Promise<string[]> {
+  const sent: string[] = [];
+  for (const i of s.dueReverts()) {
+    s.revertSending(i.taskId, true);
+    let error: string | null = null;
+    try {
+      if (!(await message(s.revertText(i)))) error = "the message to Isomux Main failed";
+    } catch (err) {
+      error = String(err instanceof Error ? err.message : err);
+    } finally {
+      s.revertSending(i.taskId, false);
+    }
+    s.revertResult(i.taskId, error);
+    if (!error) sent.push(i.taskId);
+  }
+  return sent;
 }

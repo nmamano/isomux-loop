@@ -8,7 +8,7 @@ import { httpOffice, type Task } from "./office";
 import { page } from "./page";
 import { PacketStore, packetState } from "./packets";
 import { PauseFlag } from "./pause";
-import { SignoffStore, signoffState, withAudience } from "./signoff";
+import { sendDueReverts, SignoffStore, signoffState, undoDecision, withAudience } from "./signoff";
 import { classify, stateViews, type Card, type StateKey, type StateView } from "./states";
 import { itemState, Store, ValidationError, type TaskSnapshot } from "./store";
 
@@ -138,7 +138,7 @@ POST /api/signoff/:taskId/scout   Isomux Sign-off Scout: {"verdict":"stamp|look|
                                   item on the Sign-off tab (also after a re-merge).
 GET  /api/signoff/history?limit=  Nil's sign-off decisions, newest first (max 300): taskId, title, commit, approved, note,
                                   comments, edits, the Scout's verdict at the time ("scout", or null), at. An undone
-                                  approval leaves it. GET /api/signoff items also carry "scout".
+                                  decision leaves it. GET /api/signoff items also carry "scout".
 POST /api/signoff/:taskId/edits   {"task"}: a Sign-off changes task filed by hand for an approved item. The item then holds
                                   the push point back (state "edits") until that task's merge is reported or it is closed.
 POST /api/signoff/:taskId/reverted  Isomux Main after a revert Nil asked for: {"commit"}. The item leaves the list.
@@ -155,7 +155,10 @@ GET  /api/signoff                 merged items, the merges not pushed yet (unpus
 Nil's buttons on the Sign-off tab: approve (optional {"note"}; with a note or comments on any entry it also files a P0
 "[go | ready] Sign-off changes: <title>" task with them, and the item holds the push point back, as a blocker with
 state "edits", until that task's merge is reported or the task is closed);
-reject (a note, plus any comments; messages Main "/isomux-main revert ..."); and "Push" on the Push tab
+reject (a note, plus any comments; the app messages Main "/isomux-main revert ..." a minute later, and the item's
+"revertIn" counts down to it); undo (an approval until the push go, a rejection until Main gets the revert request;
+an unstarted Sign-off changes task the approval filed is closed as obsolete, a started one stays and "edits" says
+why); and "Push" on the Push tab
 (messages Main "/isomux-main push go ..."). Comments are saved as Nil types
 (POST /api/signoff/:taskId/comments {"copy":{"0":"..."},"images":{"0":"..."}}).
 The app cannot tell which member pressed them.
@@ -284,6 +287,22 @@ setTimeout(() => void runClassify(), 30_000);
 setInterval(() => void runClassify(), CLASSIFY_MS);
 
 setInterval(() => void runDispatch(), DISPATCH_MS);
+
+// Held revert requests go to Main when due (a rejection's undo window).
+let revertsBusy = false;
+setInterval(async () => {
+  if (revertsBusy || !signoff.dueReverts().length) return;
+  revertsBusy = true;
+  try {
+    const sent = await sendDueReverts(signoff, async (text) => office.message(text, await mainAgentId()));
+    if (sent.length) {
+      console.log(`revert requests sent: ${sent.join(", ")}`);
+      statusCache = null;
+    }
+  } finally {
+    revertsBusy = false;
+  }
+}, 5_000);
 
 // --- triage notifications ------------------------------------------------------
 
@@ -557,7 +576,11 @@ async function route(req: Request): Promise<Response> {
   // Sign-off
   if (m === "GET" && path === "/api/signoff")
     return json({
-      items: signoff.visible().map((i) => ({ ...i, copy: i.copy.map(withAudience), state: signoffState(i) })),
+      // revertIn: ms until a held revert request goes to Main (the page counts down).
+      items: signoff.visible().map((i) => {
+        const r = i.decision?.revert;
+        return { ...i, copy: i.copy.map(withAudience), state: signoffState(i), ...(r && !r.sent ? { revertIn: Math.max(0, r.due - Date.now()) } : {}) };
+      }),
       unpushed: signoff.unpushedList(),
       ...signoff.meta(),
       push: signoff.pushCheck(await closedOnBoard()),
@@ -619,7 +642,7 @@ async function route(req: Request): Promise<Response> {
         return json(signoff.approve(taskId, created.id, note));
       }
       case "undo":
-        return json(signoff.undo(taskId));
+        return json(await undoDecision(signoff, office, taskId, new Date().toISOString().slice(0, 10)));
       case "edits": {
         const editsId = String((await body(req)).task ?? "");
         try {
@@ -632,11 +655,10 @@ async function route(req: Request): Promise<Response> {
       case "comments":
         return json(signoff.setComments(taskId, await body(req)));
       case "reject": {
-        const { item, note } = signoff.checkReject(taskId, await body(req));
-        const text = `/isomux-main revert ${taskId} (${item.merged!.commit}): Nil rejected it at sign-off: ${note}`;
-        if (!(await office.message(text, await mainAgentId())))
-          return json({ error: "the message to Isomux Main failed; the item is not rejected yet" }, 502);
-        return json(signoff.recordReject(taskId, note));
+        // The revert request waits REVERT_HOLD_MS, so Nil can undo it.
+        const { note, typed } = signoff.checkReject(taskId, await body(req));
+        const i = signoff.recordReject(taskId, note, typed);
+        return json({ ...i, revertIn: i.decision!.revert!.due - Date.now() });
       }
     }
   }

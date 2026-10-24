@@ -146,11 +146,13 @@ const HELP = {
   links: "The branch with the work, and the diff when there is one.",
   packetConfirm: "Confirm saves your choice. The curator writes it to the task a few minutes after your last decision; until then you can undo it in Decided.",
   approve: "Approve: this copy or change goes out with the next push. If you wrote comments or a note, Approve also files a P0 Sign-off changes task with them, and the push waits until that task is merged or closed; the changes come as their own commit and sign-off item.",
-  reject: "Reject: Isomux Main reverts the commit at once and the task goes back to ready with your note (and your comments). Needs a note.",
+  reject: "Reject: Isomux Main reverts the commit and the task goes back to ready with your note (and your comments). Main gets the revert request a minute later; until then you can undo it. Needs a note.",
   comment: "Optional. A note (\"shorter\"), or the exact new text in quotes. Saved as you type. Comments can ask for any change, not only copy: Approve turns them into a Sign-off changes task, and the push waits for it; Reject adds them to its note.",
   editsFiled: "Approved, and your comments became a Sign-off changes task. This commit does not go out until that task is merged or closed; the changes come as their own commit.",
   rejectNote: "Sent with either button, and kept on this device until you send it. With Approve it goes in the Sign-off changes task, word for word. With Reject it says why and what to do instead; the worker reads it when the task comes back. Reject needs one.",
-  undoApprove: "Undo the approval: the item goes back to Sign-off. Possible until you press Push.",
+  undoApprove: "Undo the approval: the item goes back to Sign-off with your note. Possible until you press Push. A Sign-off changes task it filed is closed as obsolete if no worker has started it; else it stays open.",
+  undoReject: "Undo the rejection: the item goes back to Sign-off with your note. Possible until Isomux Main gets the revert request.",
+  rejectHeld: "Rejected. Isomux Main gets the revert request when the countdown ends; until then Undo takes the rejection back.",
   push: "Push up to: tells Isomux Main to push main up to the push point, which sends every task under Goes out. Enabled when the push point is ahead of the last push go.",
   sha: "The main commit from Isomux Main's latest merge or revert. Push names this commit.",
   rejected: "Rejected: Isomux Main was asked to revert it. It stays here until Main reports the revert.",
@@ -349,16 +351,60 @@ async function sendOff(id, button, call, notice, undo, reload = true) {
   if (reload) await load();
   else render();
 }
-function showToast(text, undo) {
+// With a deadline (ms since epoch) the notice shows until then, and "{left}"
+// in the text counts down to it (a rejection's undo window).
+function showToast(text, undo, deadline = null) {
   hideToast();
   let el = document.getElementById("toast");
   if (!el) {
     document.body.insertAdjacentHTML("beforeend", '<div class="toast" id="toast" role="status" hidden></div>');
     el = document.getElementById("toast");
   }
-  el.innerHTML = "<span>" + linkIds(text) + "</span>" + (undo ? '<button class="btn ghost" data-toastundo="1"' + tip("toastUndo") + ">Undo</button>" : "");
+  el.innerHTML = "<span>" + linkIds(text).replace("{left}", countdown(deadline)) + "</span>" + (undo ? '<button class="btn ghost" data-toastundo="1"' + tip("toastUndo") + ">Undo</button>" : "");
   el.hidden = false;
-  toast = { undo, timer: setTimeout(hideToast, 24000) };
+  toast = { undo, timer: setTimeout(hideToast, deadline ? Math.max(0, deadline - Date.now()) : 24000) };
+}
+// m:ss to a deadline; tickCountdowns updates it every second.
+function countdown(deadline) {
+  return '<span class="countdown" data-deadline="' + deadline + '">' + leftText(deadline) + "</span>";
+}
+function leftText(deadline) {
+  const s = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+// A rejection's countdown that ends reloads once: its card then waits for the revert.
+setInterval(() => {
+  let ended = false;
+  for (const el of document.querySelectorAll("[data-deadline]")) {
+    el.textContent = leftText(Number(el.dataset.deadline));
+    if (Number(el.dataset.deadline) <= Date.now() && el.closest("#list")) ended = true;
+  }
+  if (ended && !countdownReload) countdownReload = setTimeout(() => load().finally(() => (countdownReload = null)), 6000);
+}, 1000);
+let countdownReload = null;
+// When each held revert request goes to Main, by task (from revertIn at the last load).
+const revertDeadlines = {};
+// Undo a sign-off approval or rejection: the item waits for Nil again, with his
+// note back in the field; the notice says what happened to a filed changes task.
+async function undoSignoff(id) {
+  let res;
+  try {
+    res = await api("/api/signoff/" + encodeURIComponent(id) + "/undo", { method: "POST" });
+  } catch (err) {
+    showErr(id, err.message);
+    return;
+  }
+  if (res.note && !rejectNotes[id].trim()) {
+    rejectNotes[id] = res.note;
+    saveDraft(id);
+  }
+  const e = res.edits;
+  showToast(
+    "Undone: " + id + " is back on Sign-off." +
+      (e ? (e.closed ? " Its Sign-off changes task " + e.id + " is closed as obsolete." : " Its Sign-off changes task " + e.id + " stays open: " + e.why + ".") : ""),
+    null,
+  );
+  await load();
 }
 function hideToast() {
   if (toast) clearTimeout(toast.timer);
@@ -700,7 +746,11 @@ async function load() {
   if (i.status === "fulfilled") items = i.value;
   if (s.status === "fulfilled") loopState = s.value;
   if (pk.status === "fulfilled") packets = pk.value;
-  if (so.status === "fulfilled") signoffData = so.value;
+  if (so.status === "fulfilled") {
+    signoffData = so.value;
+    for (const k of Object.keys(revertDeadlines)) delete revertDeadlines[k];
+    for (const it of signoffData.items) if (it.revertIn !== undefined) revertDeadlines[it.taskId] = Date.now() + it.revertIn;
+  }
   if (bl.status === "fulfilled") backlogTasks = bl.value;
   render();
 }
@@ -1515,7 +1565,7 @@ function pushCard({ t, u, it }, waitsFor) {
     '<div class="meta"><span>Task ' + idCopy(t.id) + "</span>" +
     (u ? "<span" + tip("sha") + ">commit <code>" + esc(u.commit.slice(0, 10)) + "</code></span><span>merged " + clock(u.at) + "</span>" : "") + status + wait + "</div>" +
     '<div class="err" data-err="' + esc(t.id) + '"></div>' +
-    (approved && !it.decision.edits ? '<div class="actions"><button class="btn ghost" data-sundo="' + esc(t.id) + '"' + tip("undoApprove") + ">Undo</button></div>" : "") +
+    (approved ? '<div class="actions"><button class="btn ghost" data-sundo="' + esc(t.id) + '"' + tip("undoApprove") + ">Undo</button></div>" : "") +
     "</div>";
 }
 // Main is linear: the push takes every merge up to the push point; the
@@ -1555,6 +1605,10 @@ function renderSignoff() {
         ? it.decision.edits
           ? '<span class="ok"' + tip("editsFiled") + ">Approved, changes filed: task " + idLink(it.decision.edits) + "</span>"
           : '<span class="ok"' + tip("approvedSign") + ">Approved</span>"
+      : it.state === "rejected" && revertDeadlines[it.taskId]
+        ? '<span class="warn"' + tip("rejectHeld") + ">Rejected, Isomux Main gets the revert in " + countdown(revertDeadlines[it.taskId]) + ": " + esc(it.decision.note) +
+          (it.decision.revert.error ? " (the last request failed; the app tries again)" : "") + "</span>" +
+          ' <button class="btn ghost" data-sundo="' + esc(it.taskId) + '"' + tip("undoReject") + ">Undo</button>"
       : it.state === "rejected" ? '<span class="warn"' + tip("rejected") + ">Rejected, waiting for revert: " + esc(it.decision.note) + "</span>"
       : "<span" + tip("waitingSign") + ">Waiting for you</span>";
     const sc = it.scout;
@@ -1887,8 +1941,8 @@ document.addEventListener("click", async (e) => {
       clearDraft(id);
     }, () =>
       edits
-        ? { text: "Approved, changes filed: task " + edits, undo: null }
-        : { text: "Approved: " + id + ", moved to Push", undo: () => act(id, () => api("/api/signoff/" + encodeURIComponent(id) + "/undo", { method: "POST" })) });
+        ? { text: "Approved, changes filed: task " + edits, undo: () => undoSignoff(id) }
+        : { text: "Approved: " + id + ", moved to Push", undo: () => undoSignoff(id) });
   }
   if (d.sofilter) {
     if (soVerdicts.has(d.sofilter)) soVerdicts.delete(d.sofilter);
@@ -1916,15 +1970,20 @@ document.addEventListener("click", async (e) => {
     if (box) box.value = it.scout.suggestions[kind][n];
     return;
   }
-  if (d.sundo) return act(d.sundo, () => api("/api/signoff/" + encodeURIComponent(d.sundo) + "/undo", { method: "POST" }));
+  if (d.sundo) {
+    t.disabled = true;
+    return undoSignoff(d.sundo);
+  }
   if (d.reject) {
     const note = (rejectNotes[d.reject] || "").trim();
     if (!note) return showErr(d.reject, "Write in the note why you reject it first.");
     return act(d.reject, async () => {
       clearTimeout(commentTimers[d.reject]);
       if (soComments[d.reject]) await api("/api/signoff/" + encodeURIComponent(d.reject) + "/comments", { method: "POST", body: soComments[d.reject] });
-      await api("/api/signoff/" + encodeURIComponent(d.reject) + "/reject", { method: "POST", body: { note } });
+      const res = await api("/api/signoff/" + encodeURIComponent(d.reject) + "/reject", { method: "POST", body: { note } });
       clearDraft(d.reject);
+      const id = d.reject;
+      showToast("Rejected: " + id + ". Isomux Main gets the revert request in {left}.", () => undoSignoff(id), Date.now() + res.revertIn);
     });
   }
   if (d.push) return act("push", () => api("/api/signoff/push", { method: "POST" }));

@@ -3,7 +3,9 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { sniff } from "../src/images";
 import { PacketStore, packetState } from "../src/packets";
-import { guessAudience, SignoffStore, signoffState, withAudience } from "../src/signoff";
+import { REVERT_HOLD_MS, REVERT_RETRY_MS } from "../src/config";
+import type { Office, PatchResult, Task } from "../src/office";
+import { guessAudience, sendDueReverts, SignoffStore, signoffState, undoDecision, withAudience } from "../src/signoff";
 import { ValidationError } from "../src/store";
 import { tempDir } from "./tmp";
 
@@ -377,15 +379,173 @@ describe("sign-off", () => {
     expect(s.pushed({ commit: "bbbbbbb2" }).pushed).toEqual(["t1"]);
   });
 
-  test("an approval can be undone; a rejection cannot", () => {
+  test("an approval can be undone, with its note back", () => {
     const s = new SignoffStore(tempDir());
     s.put(item);
     s.merged("t1", { commit: "aaaaaaa1" });
-    s.approve("t1");
-    expect(signoffState(s.undo("t1"))).toBe("waiting");
-    s.recordReject("t1", "no");
+    s.approve("t1", "ed1", "shorter");
+    const u = s.undo("t1");
+    expect([signoffState(u.item), u.note]).toEqual(["waiting", "shorter"]);
     expect(() => s.undo("t1")).toThrow(ValidationError);
-    expect(() => s.approve("t1")).toThrow(ValidationError);
+  });
+
+  // Nil, 2026-10-24: the revert request waits REVERT_HOLD_MS, so a rejection can be undone.
+  test("a rejection holds its revert request; undo takes it back until Main has it", async () => {
+    let t = 1000;
+    const dir = tempDir();
+    const s = new SignoffStore(dir, () => t);
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.setComments("t1", { copy: { "0": "too long" } });
+    const { note, typed } = s.checkReject("t1", { note: "Wrong page." });
+    s.recordReject("t1", note, typed);
+    const sent: string[] = [];
+    const send = async (text: string) => (sent.push(text), true);
+    t += REVERT_HOLD_MS - 1;
+    expect(await sendDueReverts(s, send)).toEqual([]);
+    // Undo inside the window: no request went, the item waits, the typed note comes back, the history drops it.
+    const u = s.undo("t1");
+    expect([signoffState(u.item), u.note, sent.length, s.history().length]).toEqual(["waiting", "Wrong page.", 0, 0]);
+    expect(await sendDueReverts(s, send)).toEqual([]);
+
+    // Reject again; the held request survives a restart and goes when due.
+    s.recordReject("t1", note, typed);
+    t += REVERT_HOLD_MS;
+    const again = new SignoffStore(dir, () => t);
+    expect(await sendDueReverts(again, send)).toEqual(["t1"]);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toStartWith("/isomux-main revert t1 (aaaaaaa1): ");
+    expect(sent[0]).toContain("too long");
+    expect(() => again.undo("t1")).toThrow(ValidationError);
+    expect(signoffState(again.get("t1")!)).toBe("rejected");
+    expect(await sendDueReverts(again, send)).toEqual([]);
+    expect(again.reverted("t1", { commit: "ccccccc3" }).removed).toBe(true);
+  });
+
+  test("a revert request that fails is tried again later and can still be undone; one on its way cannot", async () => {
+    let t = 1000;
+    const s = new SignoffStore(tempDir(), () => t);
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.recordReject("t1", "no");
+    t += REVERT_HOLD_MS;
+    expect(await sendDueReverts(s, async () => false)).toEqual([]);
+    expect(s.get("t1")!.decision!.revert).toMatchObject({ due: t + REVERT_RETRY_MS, error: expect.any(String) });
+    expect(s.dueReverts()).toEqual([]);
+    t += REVERT_RETRY_MS;
+    expect(signoffState(s.undo("t1").item)).toBe("waiting");
+    s.recordReject("t1", "no");
+    t += REVERT_HOLD_MS;
+    // An undo while the message is in flight is refused, and the request completes.
+    let refused = false;
+    const out = await sendDueReverts(s, async () => {
+      try {
+        s.undo("t1");
+      } catch (err) {
+        refused = err instanceof ValidationError;
+      }
+      return true;
+    });
+    expect([out, refused, signoffState(s.get("t1")!)]).toEqual([["t1"], true, "rejected"]);
+    expect(s.get("t1")!.decision!.revert).toMatchObject({ sent: t });
+  });
+
+  test("a rejection stored before the hold was sent then: it is neither sent again nor undone", async () => {
+    const dir = tempDir();
+    const s = new SignoffStore(dir);
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.recordReject("t1", "no");
+    const file = join(dir, "signoff.json");
+    const raw = JSON.parse(readFileSync(file, "utf8"));
+    delete raw.items.t1.decision.revert;
+    delete raw.items.t1.decision.typed;
+    writeFileSync(file, JSON.stringify(raw));
+    const old = new SignoffStore(dir, () => Date.now() + 10 * REVERT_HOLD_MS);
+    let sent = 0;
+    expect(await sendDueReverts(old, async () => (sent++, true))).toEqual([]);
+    expect(sent).toBe(0);
+    expect(() => old.undo("t1")).toThrow(ValidationError);
+  });
+
+  // An office stub for the Sign-off changes task: its reads and patches.
+  function editsBoard(task: Partial<Task> | "unreadable", patchStatus = 200) {
+    const patches: { id: string; body: Record<string, unknown> }[] = [];
+    const t: Task = { id: "ed1", title: "[go | ready] Sign-off changes: Docs line", description: "Nil's note: shorter", status: "open", createdAt: 1, version: "v1", ...(task === "unreadable" ? {} : task) };
+    const office: Pick<Office, "task" | "patchTask"> = {
+      async task(id) {
+        if (task === "unreadable" || id !== "ed1") throw new Error("GET answered 500");
+        return { ...t };
+      },
+      async patchTask(id, body): Promise<PatchResult> {
+        patches.push({ id, body });
+        return patchStatus === 200 ? { ok: true, task: { ...t, ...body } as Task } : { ok: false, status: patchStatus };
+      },
+    };
+    return { office, patches };
+  }
+  function approvedWithEdits() {
+    const s = new SignoffStore(tempDir());
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.approve("t1", "ed1", "shorter");
+    return s;
+  }
+
+  test("undo of an approval closes its unstarted Sign-off changes task as obsolete, with the reason first", async () => {
+    const s = approvedWithEdits();
+    const { office, patches } = editsBoard({});
+    const out = await undoDecision(s, office, "t1", "2026-10-24");
+    expect([signoffState(out.item), out.note, out.edits?.closed]).toEqual(["waiting", "shorter", true]);
+    expect(patches).toHaveLength(1);
+    expect(patches[0]).toMatchObject({ id: "ed1", body: { version: "v1", status: "obsolete" } });
+    const d = String(patches[0].body.description);
+    expect(d.indexOf("t1")).toBeLessThan(d.indexOf("Nil's note: shorter"));
+    expect(d).toEndWith("Nil's note: shorter");
+  });
+
+  test("undo of an approval keeps a Sign-off changes task a worker has, and says why", async () => {
+    const cases: [Partial<Task>, string][] = [
+      [{ assignee: "Isomux Worker 2", status: "in_progress" }, "Isomux Worker 2"],
+      [{ title: "[go | merging] Sign-off changes: Docs line" }, "worker"],
+      [{ status: "in_progress" }, "worker"],
+      [{ status: "done" }, "done"],
+    ];
+    for (const [task, why] of cases) {
+      const s = approvedWithEdits();
+      const { office, patches } = editsBoard(task);
+      const out = await undoDecision(s, office, "t1", "2026-10-24");
+      expect([signoffState(out.item), out.edits?.id, out.edits?.closed, patches.length]).toEqual(["waiting", "ed1", false, 0]);
+      expect(out.edits!.why).toContain(why);
+    }
+    // Its merge was reported: kept, also while the board still shows it open.
+    const s = approvedWithEdits();
+    s.merged("ed1", { commit: "bbbbbbb2" });
+    const { office, patches } = editsBoard({});
+    expect((await undoDecision(s, office, "t1", "2026-10-24")).edits).toMatchObject({ closed: false });
+    expect(patches).toHaveLength(0);
+  });
+
+  test("undo of an approval changes nothing when the board cannot read or close its Sign-off changes task", async () => {
+    for (const [task, status] of [["unreadable", 200], [{}, 409]] as const) {
+      const s = approvedWithEdits();
+      const { office } = editsBoard(task, status);
+      await expect(undoDecision(s, office, "t1", "2026-10-24")).rejects.toThrow(ValidationError);
+      expect(signoffState(s.get("t1")!)).toBe("approved");
+      expect(s.history()).toHaveLength(1);
+    }
+  });
+
+  test("undo of a plain approval or a held rejection does not touch the board", async () => {
+    const s = new SignoffStore(tempDir());
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    const { office, patches } = editsBoard("unreadable");
+    s.approve("t1");
+    expect((await undoDecision(s, office, "t1", "2026-10-24")).edits).toBeNull();
+    s.recordReject("t1", "no");
+    expect(signoffState((await undoDecision(s, office, "t1", "2026-10-24")).item)).toBe("waiting");
+    expect(patches).toHaveLength(0);
   });
 
   test("comments: per entry, validated, and only while the item waits", () => {
@@ -399,7 +559,7 @@ describe("sign-off", () => {
     expect(() => s.setComments("t1", { copy: { "0": "y" } })).toThrow(ValidationError);
   });
 
-  test("approve with comments: approved with its Sign-off changes task, which the push waits for; cannot be undone", () => {
+  test("approve with comments: approved with its Sign-off changes task, which the push waits for", () => {
     const s = new SignoffStore(tempDir());
     s.put(item);
     s.merged("t1", { commit: "aaaaaaa1" });
@@ -408,7 +568,6 @@ describe("sign-off", () => {
     expect(s.checkApprove("t1").filesTask).toBe(true);
     const a = s.approve("t1", "ed1");
     expect([signoffState(a), a.decision!.edits]).toEqual(["approved", "ed1"]);
-    expect(() => s.undo("t1")).toThrow(ValidationError);
     expect(s.pushCheck()).toMatchObject({ ok: false, sha: null });
     expect(s.pushCheck().reason).toContain("ed1");
     expect(s.pushCheck((id) => id === "ed1")).toMatchObject({ ok: true, reason: "", sha: "aaaaaaa1", approved: ["t1"] });
@@ -439,7 +598,7 @@ describe("sign-off", () => {
     s.put(item);
     s.merged("t1", { commit: "aaaaaaa1" });
     s.setComments("t1", { copy: { "0": "too long" } });
-    expect(s.checkReject("t1", { note: "Wrong page." }).note).toBe("Wrong page. Comments: docs/features.md: too long");
+    expect(s.checkReject("t1", { note: "Wrong page." })).toMatchObject({ note: "Wrong page. Comments: docs/features.md: too long", typed: "Wrong page." });
   });
 
   test("before/after pairs: one image per side, named pairs only on sign-off, one comment per pair", () => {
