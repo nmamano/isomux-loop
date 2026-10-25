@@ -16,6 +16,7 @@ const TABS = [
   ["decided", "Decided"],
   ["applied", "Past decisions"],
   ["backlog", "Backlog"],
+  ["hold", "On hold"],
   ["signoff", "Sign-off"],
   ["push", "Push"],
 ];
@@ -25,6 +26,7 @@ let counts = {};
 let loopState = null;
 let packets = [];
 let backlogTasks = [];
+let holdTasks = [];
 const backlogPicks = {};
 // Kept tasks are hidden until Nil asks for them (Nil, 2026-10-23).
 let showKept = false;
@@ -122,6 +124,8 @@ const HELP = {
   recommend: "The curator's recommendation for this backlog task, preselected below.",
   kept: "You kept this task in the backlog on this date. The curator does not recommend it again until the task changes.",
   showKept: "Tasks you kept in the backlog, at the bottom. A task comes back to the list when its title or description changes.",
+  tabHold: "The On hold state: tasks tagged [hold | ...]. The loop never touches them. Back to Triage brings one back for you to decide again.",
+  holdWhy: "Why it is on hold: the state part of its tag, and the latest note in its description.",
   backToTriage: "Back to Triage: a card for this task in Triage, so you decide it again. The curator proposes it; the task stays on hold until your decision reaches the board.",
   backOnHold: "Put back on hold: take this card away. The task stays on hold, as before.",
   tabSignoff: "Merged copy and visible changes that wait for your approve or reject, and rejections that wait for their revert, oldest merge first. An approved item moves to Push; approving from the top moves the push point.",
@@ -231,7 +235,7 @@ function diagram(states) {
     const n = states[k] ? states[k].count : 0;
     const below = (states[k] && states[k].belowFloor) || 0;
     const cls = "st st-" + k + (pickedState === k ? " picked" : "") + (n === 0 ? " zero" : "");
-    return '<g class="' + cls + '" data-state="' + k + '" role="button" tabindex="0"><title>' + esc(label + ": " + help + " Tap to list.") + "</title>" +
+    return '<g class="' + cls + '" data-state="' + k + '" role="button" tabindex="0"><title>' + esc(label + ": " + help + (k === "hold" ? " Tap to open the On hold tab." : " Tap to list.")) + "</title>" +
       '<rect x="' + (x + 1) + '" y="' + (y + 1) + '" width="' + (w - 2) + '" height="42" rx="9"/>' +
       '<text x="' + (x + w / 2) + '" y="' + (y + 19) + '" text-anchor="middle" font-size="12" font-weight="600">' + esc(label) + "</text>" +
       '<text x="' + (x + w / 2) + '" y="' + (y + 36) + '" text-anchor="middle" font-size="13">' + (n - below) +
@@ -247,11 +251,6 @@ function briefLine(t) {
   const when = t.closedAt ? " · closed " + clock(t.closedAt) : "";
   return taskLine({ id: t.id, title: t.title, priority: t.priority }, null, when);
 }
-// An on-hold task, with the button that brings it back to Triage (Nil, 2026-10-23).
-function holdLine(t) {
-  return briefLine(t).replace(/<\/div>$/, ' <button class="btn ghost small-btn" data-reopen="' + esc(t.id) + '"' + tip("backToTriage") + ">Back to Triage</button></div>") +
-    '<div class="err" data-err="' + esc(t.id) + '"></div>';
-}
 function renderStates(b) {
   let h = "<h2" + tip("diagram") + ">Task states " + q("diagram") + "</h2>" + helpBox(["diagram"], "diagram") + diagram(b.states);
   if (b.states.other.count) h += '<div class="small"' + tip("other") + '><a href="#" data-state="other">' + b.states.other.count + (b.states.other.count === 1 ? " task fits" : " tasks fit") + " no state</a> " + q("other") + "</div>" + helpBox(["other"], "other");
@@ -262,12 +261,12 @@ function renderStates(b) {
     const recent = pickedState === "done" || pickedState === "obsolete";
     h += '<div class="picked-list"><h2 title="' + esc(help) + '">' + esc(label) + " (" + (v.belowFloor ? v.count - v.belowFloor + ", " + belowText(v.belowFloor) : v.count) + ")" + (recent ? " · last " + v.tasks.length : "") + "</h2>" +
       '<div class="small">' + esc(help) + "</div>" +
-      (v.tasks.length ? v.tasks.map(pickedState === "hold" ? holdLine : briefLine).join("") : '<div class="small">None.</div>') + "</div>";
+      (v.tasks.length ? v.tasks.map(briefLine).join("") : '<div class="small">None.</div>') + "</div>";
   }
   return h;
 }
 
-const TAB_HELP = { status: "tabStatus", open: "tabOpen", decided: "tabDecided", applied: "tabApplied", backlog: "tabBacklog", signoff: "tabSignoff", push: "tabPush" };
+const TAB_HELP = { status: "tabStatus", open: "tabOpen", decided: "tabDecided", applied: "tabApplied", backlog: "tabBacklog", hold: "tabHold", signoff: "tabSignoff", push: "tabPush" };
 
 // title="" for hover.
 function tip(key) {
@@ -453,7 +452,7 @@ function cardOpen(id, extra) {
   return '<div class="card' + (extra ? " " + extra : "") + '" data-card="' + esc(id) + '">';
 }
 function keyTabs() {
-  return tab === "open" || tab === "decided" || tab === "applied" || tab === "backlog";
+  return tab === "open" || tab === "decided" || tab === "applied" || tab === "backlog" || tab === "hold";
 }
 function cardEls() {
   return [...document.querySelectorAll("#list [data-card]")];
@@ -646,6 +645,7 @@ function cardTab(id) {
   if (st === "decided" || st === "failed") return "decided";
   if (st === "applied") return "applied";
   if (backlogTasks.some((t) => t.id === id)) return "backlog";
+  if (holdTasks.some((t) => t.id === id)) return "hold";
   return null;
 }
 function idLink(id) {
@@ -740,13 +740,14 @@ window.addEventListener("popstate", () => {
 });
 
 async function load() {
-  const [c, i, s, pk, so, bl] = await Promise.allSettled([
+  const [c, i, s, pk, so, bl, ho] = await Promise.allSettled([
     api("/api/summary"),
     api("/api/items?state=all"),
     api("/api/status"),
     api("/api/packets"),
     api("/api/signoff"),
     api("/api/backlog"),
+    api("/api/hold"),
   ]);
   if (c.status === "fulfilled") counts = c.value;
   if (i.status === "fulfilled") items = i.value;
@@ -758,6 +759,7 @@ async function load() {
     for (const it of signoffData.items) if (it.revertIn !== undefined) revertDeadlines[it.taskId] = Date.now() + it.revertIn;
   }
   if (bl.status === "fulfilled") backlogTasks = bl.value;
+  if (ho.status === "fulfilled") holdTasks = ho.value;
   render();
 }
 
@@ -792,10 +794,12 @@ function renderTabs() {
     signoff: signoffCount(),
     push: pushTasks().length,
     backlog: backlogTasks.length,
+    hold: holdTasks.length,
   };
   // With a filter on, the tab shows what it shows of the total: "12 of 40" (Nil, 2026-10-24).
   if (activeFilters("triage")) n.open = new Set(viewList("triage", triageEntries()).map((e) => e.x.taskId)).size + " of " + n.open;
   if (activeFilters("backlog")) n.backlog = viewList("backlog", backlogTasks.map((t) => ({ kind: "backlog", x: t }))).length + " of " + n.backlog;
+  if (activeFilters("hold")) n.hold = viewList("hold", holdEntries()).length + " of " + n.hold;
   if (soVerdicts.size) n.signoff = signoffItems().filter((it) => soVerdicts.has(verdictOf(it))).length + " of " + n.signoff;
   document.getElementById("tabs").innerHTML = TABS.map(
     ([k, label]) =>
@@ -868,7 +872,7 @@ function renderStatus() {
   h += section("Ready queue (" + b.ready.length + (b.belowFloor ? ", " + belowText(b.belowFloor) : "") + ")", "ready", b.ready.map((x) => taskLine(x)), "Nothing is ready.");
   h += section("Merging (" + b.merging.length + ")", "merging", b.merging.map((x) => taskLine(x)), "Nothing is merging.");
   const st = b.states;
-  h += section("On hold (" + st.hold.count + ")", "hold", st.hold.tasks.map(holdLine), "No task is on hold.");
+  h += '<div class="small" style="margin-top:6px"' + tip("tabHold") + '>On hold: <a href="/" data-go="hold">' + plural(st.hold.count, "task") + "</a> " + q("tabHold") + "</div>" + helpBox(["tabHold"], "tabHold");
   h += section("Done (" + st.done.count + ") · last " + st.done.tasks.length, "recentDone", st.done.tasks.map(briefLine), "Nothing is done yet.");
   h += section("Obsolete (" + st.obsolete.count + ") · last " + st.obsolete.tasks.length, "recentObsolete", st.obsolete.tasks.map(briefLine), "Nothing is obsolete.");
   return h;
@@ -997,6 +1001,7 @@ function triageCards(all) {
 const VIEW_DEFAULT = {
   triage: { sort: "proposed", kind: [], choice: [], pri: [], effort: [], change: [], by: [], q: "" },
   backlog: { sort: "oldest", by: [], q: "" },
+  hold: { sort: "board", pri: [], by: [], q: "" },
 };
 const view = {};
 for (const k of Object.keys(VIEW_DEFAULT))
@@ -1005,6 +1010,7 @@ const saveView = (k) => localStorage.setItem("loop.view." + k, JSON.stringify(vi
 const SORTS = {
   triage: [["proposed", "proposed priority"], ["board", "board priority"], ["oldest", "oldest task"], ["newest", "newest task"], ["card", "newest card"], ["effort", "smallest effort"]],
   backlog: [["oldest", "oldest task"], ["newest", "newest task"]],
+  hold: [["board", "priority"], ["oldest", "oldest task"], ["newest", "newest task"]],
 };
 const FILTER_ROWS = {
   triage: [
@@ -1016,6 +1022,10 @@ const FILTER_ROWS = {
     ["by", "Filed by", (list) => filers(list)],
   ],
   backlog: [["by", "Filed by", (list) => filers(list)]],
+  hold: [
+    ["pri", "Priority", () => PRIORITIES.map((p) => [p, p])],
+    ["by", "Filed by", (list) => filers(list)],
+  ],
 };
 const shownCount = {};
 // One shape for triage cards, packets and backlog tasks.
@@ -1028,6 +1038,11 @@ function facts(e) {
   if (e.kind === "backlog") {
     const t = e.x;
     return { id: t.id, kind: "backlog", by: t.createdBy || "unknown", board: "P4", created: t.createdAt, card: t.createdAt,
+      text: [t.title, t.description, t.id].join(" ") };
+  }
+  if (e.kind === "hold") {
+    const t = e.x;
+    return { id: t.id, kind: "hold", by: t.createdBy || "unknown", board: t.priority, proposed: t.priority, created: t.createdAt, card: t.createdAt,
       text: [t.title, t.description, t.id].join(" ") };
   }
   const i = e.x;
@@ -1126,7 +1141,7 @@ function viewBar(k, all) {
 function rerenderCards() {
   const box = document.getElementById("cards");
   if (!box) return render();
-  box.innerHTML = tab === "backlog" ? backlogCards() : triageCards(triageEntries());
+  box.innerHTML = tab === "backlog" ? backlogCards() : tab === "hold" ? holdCards() : triageCards(triageEntries());
   syncCurrent();
   syncToggleAll();
 }
@@ -1448,6 +1463,33 @@ function backlogCard(t) {
   return h;
 }
 
+// --- on hold (Nil, 2026-10-25) ----------------------------------------------------
+
+function holdEntries() {
+  return holdTasks.map((t) => ({ kind: "hold", x: t }));
+}
+function renderHold() {
+  let h = '<div class="small"' + tip("tabHold") + ">" + plural(holdTasks.length, "task") + " on hold. The loop never touches them. " + q("tabHold") + "</div>" + helpBox(["tabHold", "backToTriage"], "tabHold") + toggleAll();
+  if (!holdTasks.length) return h + '<div class="empty">No task is on hold.</div>';
+  return h + viewBar("hold", holdEntries()) + '<div id="cards">' + holdCards() + "</div>";
+}
+function holdCards() {
+  const all = holdEntries();
+  const shown = viewList("hold", all);
+  setShown("hold", shown.length, all.length);
+  if (!shown.length) return '<div class="empty">No task matches the filters.</div>';
+  return shown.map((e) => cardOpen(e.x.id) + holdCard(e.x) + "</div>").join("");
+}
+function holdCard(t) {
+  const m = t.title.match(/^\[\s*[a-z]+\s*\|\s*[^\]]*?\s*\]\s*(.*)$/s);
+  return '<div class="meta"><span class="tag">' + esc(t.priority || "-") + "</span><span>Filed by " + esc(t.createdBy || "unknown") + "</span><span>" + filed(t.createdAt) + "</span><span>Task " + idCopy(t.id) + "</span></div>" +
+    '<div class="title">' + esc(m ? m[1] : t.title) + "</div>" +
+    '<div class="why"><span class="label"' + tip("holdWhy") + ">On hold · " + esc(t.reason || "no reason") + "</span>" + (t.note ? "<br>" + esc(t.note) : "") + "</div>" +
+    (t.description ? details("hdesc:" + t.id, "description", "Description", '<div class="desc">' + esc(t.description) + "</div>") : "") +
+    '<div class="err" data-err="' + esc(t.id) + '"></div>' +
+    '<div class="actions"><button class="btn ghost" data-reopen="' + esc(t.id) + '"' + tip("backToTriage") + ">Back to Triage</button></div>";
+}
+
 // --- sign-off -----------------------------------------------------------------
 
 // Source files wrap prose at a fixed width; a single line break inside a
@@ -1707,7 +1749,7 @@ function render() {
     ? '<div class="split" style="--split:' + split.pct + '%"><div class="side" id="side">' + sidePane() + "</div>" +
       '<div class="divider" role="separator" aria-orientation="vertical"' + tip("divider") + "></div>" +
       '<div class="pane">' + renderTriage() + "</div></div>"
-    : tab === "status" ? renderStatus() : tab === "signoff" ? renderSignoff() : tab === "push" ? renderPush() : tab === "backlog" ? renderBacklog() : renderTriage();
+    : tab === "status" ? renderStatus() : tab === "signoff" ? renderSignoff() : tab === "push" ? renderPush() : tab === "backlog" ? renderBacklog() : tab === "hold" ? renderHold() : renderTriage();
   syncCurrent();
   if (pulsing) {
     pulsing = false;
@@ -1854,6 +1896,7 @@ document.addEventListener("click", async (e) => {
   const st = e.target.closest("[data-state]");
   if (st) {
     e.preventDefault();
+    if (st.dataset.state === "hold") return go("hold");
     pickedState = pickedState === st.dataset.state ? null : st.dataset.state;
     render();
     const list = document.querySelector(".picked-list");

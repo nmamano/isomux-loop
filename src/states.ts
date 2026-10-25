@@ -118,3 +118,42 @@ export function belowFloor(view: StateView, floor: string | null): number {
   const allowed = LOOP_PRIORITIES.slice(0, LOOP_PRIORITIES.indexOf(floor) + 1);
   return view.tasks.filter((t) => !allowed.includes(t.priority ?? "")).length;
 }
+
+// An on-hold task as the On hold tab shows it (Nil, 2026-10-25): why it is on
+// hold is the state part of its tag ("nil", a short reason) and the latest
+// note in its description.
+export type HoldTask = {
+  id: string;
+  title: string;
+  priority: string | null;
+  reason: string;
+  note: string;
+  description: string;
+  createdBy: string;
+  createdAt: number;
+};
+
+export function holdTask(t: Task): HoldTask {
+  const description = t.description ?? "";
+  return {
+    id: t.id,
+    title: t.title,
+    priority: t.priority ?? null,
+    reason: parseTag(t.title)?.state ?? "",
+    note: latestNote(description),
+    description,
+    createdBy: (t as { createdBy?: string }).createdBy ?? "",
+    createdAt: t.createdAt,
+  };
+}
+
+// A dated note opens a paragraph with its author and date: "Nil, 2026-10-11:"
+// or "Isomux PM, 2026-10-11: ...".
+const DATED_NOTE = /^[^\n:]{1,60}, \d{4}-\d{2}-\d{2}\b[^\n:]{0,40}:/;
+
+// The last dated note of a description, else its last paragraph.
+export function latestNote(description: string): string {
+  const paras = description.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  for (let i = paras.length - 1; i >= 0; i--) if (DATED_NOTE.test(paras[i])) return paras[i];
+  return paras.at(-1) ?? "";
+}

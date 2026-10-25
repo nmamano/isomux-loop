@@ -9,7 +9,7 @@ import { page } from "./page";
 import { PacketStore, packetState } from "./packets";
 import { PauseFlag } from "./pause";
 import { sendDueReverts, SignoffStore, signoffState, undoDecision, withAudience } from "./signoff";
-import { belowFloor, classify, stateViews, type Card, type StateKey, type StateView } from "./states";
+import { belowFloor, classify, holdTask, stateViews, type Card, type HoldTask, type StateKey, type StateView } from "./states";
 import { itemState, Store, ValidationError, type TaskSnapshot } from "./store";
 
 const port = Number(process.env.PORT);
@@ -93,7 +93,10 @@ POST /api/backlog/:taskId/bring   {"choice":"go|design|hold|backlog|obsolete","p
                                   Nil's decision, a decided card that goes to the curator with the next burst, like any triage
                                   decision (fromBacklog: true; backlog keeps the task at P4, nothing to change on the board)
 
-On hold (Nil's button on the Status tab):
+On hold (Nil's tab):
+GET  /api/hold                    the tasks of the On hold state ([hold | ...], no card), by priority then age: id, title,
+                                  priority, reason (the state part of the tag), note (the last dated note of the
+                                  description, else its last paragraph), description, createdBy, createdAt
 POST /api/hold/:taskId/reopen     a [hold] task back to Triage: an open card (fromHold: true) with a placeholder proposal (hold at
                                   its priority); the app messages the curator to propose it. DELETE /api/items/:taskId takes the
                                   card back before Nil decides; the task stays on hold
@@ -437,6 +440,21 @@ async function backlog(): Promise<unknown[]> {
   return value;
 }
 
+// --- on hold -------------------------------------------------------------------
+// The tasks of the diagram's On hold state, for the On hold tab (Nil, 2026-10-25).
+// No cache of its own: the board read is shared, and the cards are read live,
+// so a task brought back to Triage leaves the list at once.
+
+async function onHold(): Promise<HoldTask[]> {
+  const all = await boardTasks();
+  const c = cards();
+  const so = signoffIds();
+  return all
+    .filter((t) => (t.roomId ?? ROOM_ID) === ROOM_ID && classify(t, c.get(t.id) ?? null, so.has(t.id)) === "hold")
+    .sort((a, b) => (a.priority ?? "P9").localeCompare(b.priority ?? "P9") || a.createdAt - b.createdAt)
+    .map(holdTask);
+}
+
 // --- HTTP --------------------------------------------------------------------
 
 function json(data: unknown, status = 200): Response {
@@ -683,6 +701,7 @@ async function route(req: Request): Promise<Response> {
   }
 
   // On hold
+  if (m === "GET" && path === "/api/hold") return json(await onHold());
   const hr = path.match(/^\/api\/hold\/([^/]+)\/reopen$/);
   if (hr && m === "POST") {
     const taskId = decodeURIComponent(hr[1]);

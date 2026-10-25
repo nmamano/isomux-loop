@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ClosedTimes } from "../src/closed-times";
 import type { Office, Task } from "../src/office";
-import { belowFloor, classify, stateViews, type Card } from "../src/states";
+import { belowFloor, classify, holdTask, latestNote, stateViews, type Card } from "../src/states";
 import { tempDir } from "./tmp";
 
 let seq = 0;
@@ -130,5 +130,21 @@ describe("belowFloor", () => {
     ).ready;
     expect(ready.count).toBe(5);
     expect([belowFloor(ready, "P0"), belowFloor(ready, "P1"), belowFloor(ready, "P3"), belowFloor(ready, null)]).toEqual([4, 2, 0, 0]);
+  });
+});
+
+describe("on hold", () => {
+  test("why a task is on hold: the state part of its tag and the latest dated note, which wins over later undated paragraphs", () => {
+    const t = task({
+      title: "[hold | waits for Nil] x",
+      priority: "P1",
+      description: "Scope.\n\nNil, 2026-10-10: P0.\n\nIsomux PM, 2026-10-11: parked until Nil picks a date.\n\nEvidence: logs (read 2026-10-12): none.",
+    });
+    expect(holdTask(t)).toMatchObject({ id: t.id, priority: "P1", reason: "waits for Nil", note: "Isomux PM, 2026-10-11: parked until Nil picks a date." });
+  });
+
+  test("with no dated note the latest note is the last paragraph; an empty description has none", () => {
+    expect(latestNote("Scope.\n\n  \nBut also the other projects.\n")).toBe("But also the other projects.");
+    expect(latestNote("")).toBe("");
   });
 });
