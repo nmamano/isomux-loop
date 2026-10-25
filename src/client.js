@@ -1471,7 +1471,8 @@ function holdEntries() {
 function renderHold() {
   let h = '<div class="small"' + tip("tabHold") + ">" + plural(holdTasks.length, "task") + " on hold. The loop never touches them. " + q("tabHold") + "</div>" + helpBox(["tabHold", "backToTriage"], "tabHold") + toggleAll();
   if (!holdTasks.length) return h + '<div class="empty">No task is on hold.</div>';
-  return h + viewBar("hold", holdEntries()) + '<div id="cards">' + holdCards() + "</div>";
+  const cards = holdCards();
+  return h + viewBar("hold", holdEntries()) + '<div id="cards">' + cards + "</div>";
 }
 function holdCards() {
   const all = holdEntries();
