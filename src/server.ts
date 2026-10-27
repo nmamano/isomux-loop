@@ -2,6 +2,7 @@ import { CLASSIFY_MS, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, SCOUT
 import { ClosedTimes } from "./closed-times";
 import { type ImageDir } from "./images";
 import { dispatch, dueIn, offBoard, parseTag, proposalRefusal, staleCards, status, tick, unclassified, unrecommended, wakeText, type DispatchResult, type Status, type TickResult, withdrawLine } from "./loop";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readJson, writeJson } from "./json-file";
 import { httpOffice, type Task } from "./office";
@@ -25,6 +26,8 @@ const publicUrl = (process.env.ISOMUX_APP_URL || local).replace(/\/$/, "");
 const office = httpOffice(appToken);
 const store = new Store(dataDir);
 const packets = new PacketStore(dataDir);
+// Before the first record (task 8307e0fb): packets posted earlier get their authors once.
+const returnsNew = !existsSync(join(dataDir, "returns.json"));
 const returns = new Returns(dataDir);
 {
   const others = packets.list().filter((p) => packetState(p) === "applied").map((p) => ({ taskId: p.taskId, choice: p.decision!.choice, at: p.applied!.at }));
@@ -32,6 +35,17 @@ const returns = new Returns(dataDir);
   if (kept.length) console.log(`kept marks backfilled: ${kept.length}`);
 }
 const signoff = new SignoffStore(dataDir);
+// Packets posted before the app kept authors get theirs from the task history,
+// once; a closed task's record leaves at the next board read.
+if (returnsNew)
+  void (async () => {
+    for (const p of packets.list()) {
+      if (returns.get(p.taskId)) continue;
+      const t = await office.task(p.taskId).catch(() => null);
+      const author = t && (await packetAuthor(t, office));
+      if (author) returns.set(p.taskId, author);
+    }
+  })();
 const pause = new PauseFlag(dataDir);
 const closed = new ClosedTimes(dataDir, office);
 
