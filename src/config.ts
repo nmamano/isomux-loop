@@ -11,6 +11,8 @@ export const LOOP_PRIORITIES = ["P0", "P1", "P2", "P3"];
 // The member who decides on the app's pages; a kept mark names him.
 export const DECIDER = "Nil";
 export const MAIN_NAME = "Isomux Main";
+// Main's checkout: a reported merge or revert sha must resolve there.
+export const MAIN_REPO = "/home/nil/nil/isomux";
 // Reads each merged sign-off item and predicts Nil's decision (Nil, 2026-10-21).
 export const SCOUT_NAME = "Isomux Sign-off Scout";
 

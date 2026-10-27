@@ -1,4 +1,4 @@
-import { CLASSIFY_MS, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, SCOUT_NAME, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
+import { CLASSIFY_MS, MAIN_REPO, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, SCOUT_NAME, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
 import { ClosedTimes } from "./closed-times";
 import { type ImageDir } from "./images";
 import { dispatch, dueIn, offBoard, parseTag, proposalRefusal, staleCards, status, tick, unclassified, unrecommended, wakeText, type DispatchResult, type Status, type TickResult, withdrawLine } from "./loop";
@@ -34,7 +34,13 @@ const returns = new Returns(dataDir);
   const kept = store.backfillKept(others);
   if (kept.length) console.log(`kept marks backfilled: ${kept.length}`);
 }
-const signoff = new SignoffStore(dataDir);
+// A full sha, or null when the repository has no such commit.
+function resolveSha(sha: string): string | null {
+  const r = Bun.spawnSync(["git", "-C", MAIN_REPO, "rev-parse", "--verify", "-q", `${sha}^{commit}`]);
+  const out = r.stdout.toString().trim();
+  return r.exitCode === 0 && /^[0-9a-f]{40,64}$/.test(out) ? out : null;
+}
+const signoff = new SignoffStore(dataDir, Date.now, resolveSha);
 // Packets posted before the app kept authors get theirs from the task history,
 // once; a closed task's record leaves at the next board read.
 if (returnsNew)
@@ -151,6 +157,8 @@ POST /api/signoff/:taskId/merged  Isomux Main after EVERY merge, item or not: {"
                                   Only merged items show, so an item waits unseen until this call. A task with no code
                                   (copy only, for example a comment draft) has nothing to merge: Main reports it with the
                                   current main sha when it closes the task, and the item shows then.
+                                  The sha must resolve in main's repository (else 400; reverted too). A re-report of the
+                                  task's unpushed commit (its item was posted after the report) keeps its push order.
 POST /api/signoff/:taskId/scout   Isomux Sign-off Scout: {"verdict":"stamp|look|pushback","reason":"one line (max 300)",
                                   "suggestions":{"copy":{"<entry index>":"comment"},"images":{"<image index>":"comment"}}}
                                   (suggestions optional; a before/after pair has one field, so either image's index

@@ -206,6 +206,36 @@ describe("sign-off", () => {
     expect(() => s.merged("t1", { commit: "not a sha" })).toThrow(ValidationError);
   });
 
+  test("an item posted after its merge report, then reported again, keeps its place in push order", () => {
+    let t = 1;
+    const s = new SignoffStore(tempDir(), () => t++);
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.merged("plain", { commit: "bbbbbbb2" });
+    // The worker posts the item again after the report: it is unmerged until Main reports again.
+    s.put(item);
+    expect(s.visible()).toEqual([]);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    expect(s.visible().map((i) => i.taskId)).toEqual(["t1"]);
+    expect(s.unpushedList().map((u) => [u.taskId, u.seq])).toEqual([["t1", 1], ["plain", 2]]);
+    s.approve("t1");
+    expect(s.pushCheck()).toMatchObject({ ok: true, sha: "bbbbbbb2", tasks: ["t1", "plain"] });
+    // A new commit for the task is a re-merge: it moves behind the merges before it.
+    s.merged("t1", { commit: "ccccccc3" });
+    expect(s.unpushedList().map((u) => [u.taskId, u.seq])).toEqual([["plain", 2], ["t1", 3]]);
+  });
+
+  test("a merge or revert sha the repository cannot resolve is refused and changes nothing; a short one is stored in full", () => {
+    const full = "a".repeat(40);
+    const s = new SignoffStore(tempDir(), Date.now, (sha) => (full.startsWith(sha) ? full : null));
+    s.put(item);
+    expect(() => s.merged("t1", { commit: "aaaaaaab" })).toThrow(ValidationError);
+    expect(() => s.reverted("t1", { commit: "aaaaaaab" })).toThrow(ValidationError);
+    expect([s.visible(), s.meta().lastSha, s.unpushedList()]).toEqual([[], null, []]);
+    s.merged("t1", { commit: "aaaaaaa" });
+    expect([s.get("t1")!.merged!.commit, s.meta().lastSha!.commit]).toEqual([full, full]);
+  });
+
   test("push point: everything up to the first item that waits; later approvals wait for the next push", () => {
     const s = new SignoffStore(tempDir());
     for (const id of ["t1", "t2", "t4"]) s.put({ ...item, taskId: id });

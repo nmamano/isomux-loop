@@ -170,9 +170,13 @@ export class SignoffStore {
   private state: State;
   readonly images: ImageDir;
 
+  // resolve: a reported sha to the full sha of a commit in main's repository,
+  // or null when it names none (Isomux PM, 2026-10-27: a wrong short sha
+  // became an unresolvable push point).
   constructor(
     dataDir: string,
     private now: () => number = Date.now,
+    private resolve: (sha: string) => string | null = (sha) => sha,
   ) {
     this.file = join(dataDir, "signoff.json");
     this.state = readJson<State>(this.file, { items: {}, lastSha: null, lastPushGo: null });
@@ -266,15 +270,30 @@ export class SignoffStore {
     return img;
   }
 
+  private resolved(raw: unknown): string {
+    const sha = commitOf(raw);
+    const full = this.resolve(sha);
+    if (!full) throw new ValidationError(`commit ${sha} is not a commit in main's repository; report the sha git rev-parse gives`);
+    return full;
+  }
+
   // Main calls this after every merge, with or without an item: the sha is
   // what a push go names.
   merged(taskId: string, raw: unknown): { signoff: boolean } {
     checkTaskId(taskId);
-    const commit = commitOf(raw);
+    const commit = this.resolved(raw);
+    const i = this.state.items[taskId];
+    const u = this.state.unpushed?.[taskId];
+    if (u && sameSha(u.commit, commit)) {
+      // The same merge reported again (an item posted after the first
+      // report): it keeps its place in push order.
+      if (i && signoffState(i) !== "rejected") i.merged = { commit: u.commit, at: u.at, seq: u.seq };
+      this.save();
+      return { signoff: Boolean(i) };
+    }
     const at = this.now();
     this.state.lastSha = { commit, at };
     this.record(taskId, commit, at);
-    const i = this.state.items[taskId];
     // A re-merge (after a red CI, say) moves the item to the new commit.
     if (i && signoffState(i) !== "rejected") i.merged = { commit, at, seq: this.state.seq };
     // This merge may be the Sign-off changes task an approval waits for.
@@ -285,7 +304,7 @@ export class SignoffStore {
 
   reverted(taskId: string, raw: unknown): { removed: boolean } {
     checkTaskId(taskId);
-    const commit = commitOf(raw);
+    const commit = this.resolved(raw);
     this.state.lastSha = { commit, at: this.now() };
     // The revert commit goes out with the next push; the task itself left
     // main and goes back to ready.
