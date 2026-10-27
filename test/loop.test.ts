@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ageLine, dispatch, dueIn, freeWorkers, holdings, parseTag, proposalRefusal, readyQueue, staleCards, status, tick, unclassified, unrecommended, wakeText, withdrawLine } from "../src/loop";
 import type { Agent, Office, PatchResult, Task } from "../src/office";
+import type { Author } from "../src/returns";
 
 const ROOM = "e6818e47";
 const NOW = Date.UTC(2026, 9, 20, 12);
@@ -29,6 +30,7 @@ function stubOffice(tasks: Task[], agents: Agent[], conflict: string[] = [], edi
       if (id === brokenHistory) throw new Error("GET /history answered 500");
       return edits[id] ?? null;
     },
+    lastAssignee: async () => null,
     agents: async () => agents,
     async patchTask(id, body): Promise<PatchResult> {
       patches.push({ id, body });
@@ -202,6 +204,61 @@ describe("dispatch", () => {
   test("a merging task (in progress, no assignee) does not hold its worker", () => {
     const merging = task({ title: "[go | merging] M", status: "in_progress" });
     expect(freeWorkers([agent("Isomux Worker 1")], [merging], 2).map((a) => a.name)).toEqual(["Isomux Worker 1"]);
+  });
+});
+
+describe("back to the packet's author", () => {
+  const w = (n: number) => agent(`Isomux Worker ${n}`);
+  const by = (map: Record<string, Author>) => (id: string) => map[id];
+
+  test("a free author gets its task back, before a new task and also above n; the others take the rest in order", async () => {
+    const fresh = task({ title: "[go | ready] fresh", priority: "P0" });
+    const own3 = task({ title: "[go | ready] own3", priority: "P3" });
+    const own1 = task({ title: "[design | ready] own1", priority: "P3" });
+    const next = task({ title: "[go | ready] next", priority: "P1" });
+    const { office, messages } = stubOffice([fresh, own3, own1, next], [w(1), w(2), w(3)]);
+    const res = await dispatch(office, 2, NOW, null, by({ [own3.id]: { name: "Isomux Worker 3", agentId: "id-Isomux Worker 3" }, [own1.id]: { name: "Isomux Worker 1" } }));
+    expect(res.assigned.map((x) => [x.worker, x.taskId])).toEqual([
+      ["Isomux Worker 3", own3.id],
+      ["Isomux Worker 1", own1.id],
+      ["Isomux Worker 2", fresh.id],
+    ]);
+    expect(messages.map((m) => [m.to, m.text.split("\n")[0]])).toContainEqual(["id-Isomux Worker 3", `/isomux-loop-worker ${own3.id}`]);
+    expect(next.assignee).toBeUndefined();
+  });
+
+  test("a busy author's task waits for it; no other worker takes it", async () => {
+    const held = task({ title: "[go | ready] held", status: "in_progress", assignee: "Isomux Worker 1" });
+    const own = task({ title: "[go | ready] own", priority: "P0" });
+    const other = task({ title: "[go | ready] other", priority: "P2" });
+    const returnTo = by({ [own.id]: { name: "Isomux Worker 1" } });
+    const { office } = stubOffice([held, own, other], [w(1), w(2)]);
+    const res = await dispatch(office, 2, NOW, null, returnTo);
+    expect(res.assigned.map((x) => [x.worker, x.taskId])).toEqual([["Isomux Worker 2", other.id]]);
+    expect(own.assignee).toBeUndefined();
+    expect(status([w(1), w(2)], [held, own], 2, null, returnTo).returnTo).toEqual({ [own.id]: "Isomux Worker 1" });
+  });
+
+  test("a gone author (no live agent with its id, or not a loop worker) lets any free worker take the task", async () => {
+    const replaced = task({ title: "[go | ready] replaced", priority: "P1" });
+    const outsider = task({ title: "[go | ready] outsider", priority: "P2" });
+    const returnTo = by({ [replaced.id]: { name: "Isomux Worker 1", agentId: "killed-id" }, [outsider.id]: { name: "Isomux PM" } });
+    const agents = [w(1), w(2), agent("Isomux PM")];
+    expect(status(agents, [replaced, outsider], 2, null, returnTo).returnTo).toEqual({});
+    const { office } = stubOffice([replaced, outsider], agents);
+    const res = await dispatch(office, 2, NOW, null, returnTo);
+    expect(res.assigned.map((x) => [x.worker, x.taskId])).toEqual([
+      ["Isomux Worker 1", replaced.id],
+      ["Isomux Worker 2", outsider.id],
+    ]);
+  });
+
+  test("a 409 on the author's own task leaves the author free to take a new one", async () => {
+    const own = task({ title: "[go | ready] own", priority: "P0" });
+    const other = task({ title: "[go | ready] other", priority: "P2" });
+    const { office } = stubOffice([own, other], [w(1)], [own.id]);
+    const res = await dispatch(office, 2, NOW, null, by({ [own.id]: { name: "Isomux Worker 1" } }));
+    expect([res.conflicts, res.assigned.map((x) => [x.worker, x.taskId])]).toEqual([[own.id], [["Isomux Worker 1", other.id]]]);
   });
 });
 

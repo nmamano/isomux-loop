@@ -41,6 +41,8 @@ export interface Office {
   closedAt(id: string): Promise<number | null>;
   // When the description last changed, from its history; null if none is on record.
   lastEdited(id: string): Promise<number | null>;
+  // The last assignee from names that the history records, with its agent id; null if none.
+  lastAssignee(id: string, names: string[]): Promise<{ name: string; agentId?: string } | null>;
   agents(): Promise<Agent[]>;
   patchTask(id: string, body: Record<string, unknown>): Promise<PatchResult>;
   // Without a target the message goes to the app's configured target.
@@ -80,6 +82,17 @@ export function httpOffice(token: string, base = OFFICE): Office {
       const h = await getJson<{ items: Item[] }>(`/api/tasks/${encodeURIComponent(id)}/history`);
       const times = h.items.filter((i) => i.fields?.includes("description")).map((i) => i.time);
       return times.length > 0 ? Math.max(...times) : null;
+    },
+    async lastAssignee(id, names) {
+      type Change = { new?: string | null };
+      type Item = { time: number; taskChanges?: { assignee?: Change; assigneeAgentId?: Change } };
+      const h = await getJson<{ items: Item[] }>(`/api/tasks/${encodeURIComponent(id)}/history`);
+      const hit = h.items
+        .filter((i) => names.includes(i.taskChanges?.assignee?.new ?? ""))
+        .sort((a, b) => b.time - a.time)[0];
+      if (!hit) return null;
+      const agentId = hit.taskChanges?.assigneeAgentId?.new;
+      return { name: hit.taskChanges!.assignee!.new!, ...(agentId ? { agentId } : {}) };
     },
     async agents() {
       const list = await getJson<Agent[] | { agents: Agent[] }>("/agents?back=1");

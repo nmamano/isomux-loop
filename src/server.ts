@@ -1,13 +1,14 @@
 import { CLASSIFY_MS, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, SCOUT_NAME, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
 import { ClosedTimes } from "./closed-times";
 import { type ImageDir } from "./images";
-import { dispatch, dueIn, parseTag, proposalRefusal, staleCards, status, tick, unclassified, unrecommended, wakeText, type DispatchResult, type Status, type TickResult, withdrawLine } from "./loop";
+import { dispatch, dueIn, offBoard, parseTag, proposalRefusal, staleCards, status, tick, unclassified, unrecommended, wakeText, type DispatchResult, type Status, type TickResult, withdrawLine } from "./loop";
 import { join } from "node:path";
 import { readJson, writeJson } from "./json-file";
 import { httpOffice, type Task } from "./office";
 import { page } from "./page";
 import { PacketStore, packetState } from "./packets";
 import { PauseFlag } from "./pause";
+import { type Author, packetAuthor, Returns } from "./returns";
 import { sendDueReverts, SignoffStore, signoffState, undoDecision, withAudience } from "./signoff";
 import { belowFloor, classify, holdTask, stateViews, type Card, type HoldTask, type StateKey, type StateView } from "./states";
 import { itemState, Store, ValidationError, type TaskSnapshot } from "./store";
@@ -24,6 +25,7 @@ const publicUrl = (process.env.ISOMUX_APP_URL || local).replace(/\/$/, "");
 const office = httpOffice(appToken);
 const store = new Store(dataDir);
 const packets = new PacketStore(dataDir);
+const returns = new Returns(dataDir);
 {
   const others = packets.list().filter((p) => packetState(p) === "applied").map((p) => ({ taskId: p.taskId, choice: p.decision!.choice, at: p.applied!.at }));
   const kept = store.backfillKept(others);
@@ -77,6 +79,8 @@ POST /api/packets                 {"taskId","question","options":[{"label","cost
                                   Nil decides a packet like a triage card (choice, priority, note); an option is a preset:
                                   picking it sets its decision and fills the note with its note (default: the label).
                                   obsolete is always a choice: no option needs to offer "close, no change".
+                                  Post it while you still hold the task: when the task is ready again, dispatch gives it
+                                  back to you (also after a DELETE below), and to another worker only if you are gone.
 POST /api/packets/:taskId/images  raw PNG/JPEG/WebP bytes, ?caption=..., one per call, at most 5 MB, 20 per packet
 GET  /api/packets                 all packets with their state
 DELETE /api/packets/:taskId       withdraw a packet, for example one Nil answered in the chat instead of on the card:
@@ -193,8 +197,10 @@ async function exclusive<T>(fn: () => Promise<T>): Promise<Run<T> | null> {
 
 async function runDispatch(): Promise<Run<DispatchResult> | null> {
   if (pause.paused) return null;
-  const run = await exclusive(() => dispatch(office, pause.workers, Date.now(), pause.minPriority));
+  const run = await exclusive(() => dispatch(office, pause.workers, Date.now(), pause.minPriority, (id) => returns.get(id)));
   if (run) {
+    // A task given out no longer goes back: its next packet records its author anew.
+    returns.drop(run.result?.assigned.map((a) => a.taskId) ?? []);
     lastDispatch = run;
     statusCache = null;
     if (run.result?.assigned.length) console.log(`dispatch ${JSON.stringify(run.result.assigned)}`);
@@ -349,6 +355,8 @@ function boardTasks(fresh = false): Promise<Task[]> {
       .then((all) => {
         tasksCache = { at: Date.now(), value: all };
         lastWithdrawn = withdrawStale(all);
+        const off = offBoard(returns.ids(), all);
+        returns.drop([...off.gone, ...off.closed]);
         return all;
       })
       .finally(() => {
@@ -391,7 +399,7 @@ async function loopStatus(): Promise<Record<string, unknown>> {
       statusCache = {
         at: Date.now(),
         value: {
-          ...status(agents, live, pause.workers, pause.minPriority),
+          ...status(agents, live, pause.workers, pause.minPriority, (id) => returns.get(id)),
           states,
           closedPending: closed.missing(all).length,
         },
@@ -556,13 +564,16 @@ async function route(req: Request): Promise<Response> {
     const b = await body(req);
     const taskId = String(b.taskId ?? "");
     let task: { title: string; priority: string | null };
+    let authorOf: Author | undefined;
     try {
       const t = await office.task(taskId);
       task = { title: t.title, priority: t.priority ?? null };
+      authorOf = await packetAuthor(t, office);
     } catch {
       throw new ValidationError(`task ${taskId} is not on the board (or the board is unreadable)`);
     }
     const p = packets.put(b, task);
+    if (authorOf) returns.set(taskId, authorOf);
     statusCache = null;
     return json({ ...p, url: publicUrl + "/" });
   }

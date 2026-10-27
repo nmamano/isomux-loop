@@ -3,6 +3,7 @@
 
 import { LOOP_PRIORITIES, MAIN_NAME, ROOM_ID, WORKER_NAMES } from "./config";
 import type { Agent, Office, Task } from "./office";
+import type { Author } from "./returns";
 
 // "auto" and "decide" are the old names of go and design (Nil, 2026-10-19);
 // old tags still count.
@@ -97,34 +98,64 @@ export function ageLine(createdAt: number, editedAt: number | null | undefined, 
   return `Filed ${ago(createdAt, now)}${edit}.`;
 }
 
-export async function dispatch(office: Office, n: number, now = Date.now(), floor: string | null = null): Promise<DispatchResult> {
+// The live agent a packet's author names (by id when the record has one), or
+// undefined when that author is gone.
+export function liveAuthor(author: Author | undefined, agents: Agent[]): Agent | undefined {
+  if (!author || !WORKER_NAMES.includes(author.name)) return undefined;
+  return agents.find((a) => (author.agentId ? a.id === author.agentId : a.name === author.name));
+}
+
+// returnTo: who wrote the task's design packet. Such a task goes back to its
+// author, also a worker above n, and waits while the author holds another
+// task; only a gone author lets another worker take it (task 8307e0fb).
+export async function dispatch(
+  office: Office,
+  n: number,
+  now = Date.now(),
+  floor: string | null = null,
+  returnTo: (taskId: string) => Author | undefined = () => undefined,
+): Promise<DispatchResult> {
   const out: DispatchResult = { assigned: [], conflicts: [], killed: [], errors: [] };
   const [tasks, agents] = await Promise.all([office.tasks(), office.agents()]);
   const queue = readyQueue(tasks, floor);
-  for (const worker of freeWorkers(agents, tasks, n)) {
-    while (queue.length > 0) {
-      const task = queue.shift()!;
-      const res = await office.patchTask(task.id, {
-        version: task.version,
-        assignee: worker.name,
-        status: "in_progress",
-      });
-      if (!res.ok) {
-        // 409: someone changed the task since our read, or its holder is a
-        // killed agent; either way it is not ours to take.
-        if (res.status === 409 && res.killed) out.killed.push(task.id);
-        else if (res.status === 409) out.conflicts.push(task.id);
-        else out.errors.push(`PATCH ${task.id} answered ${res.status}`);
-        continue;
-      }
-      // An unreadable history leaves the edit out, not the dispatch.
-      const edited = await office.lastEdited(task.id).catch(() => undefined);
-      const text = `/isomux-loop-worker ${task.id}\n${task.title}\n${ageLine(task.createdAt, edited, now)}`;
-      const messaged = await office.message(text, worker.id);
-      if (!messaged) out.errors.push(`message to ${worker.name} about ${task.id} failed; the tick retries it`);
-      out.assigned.push({ worker: worker.name, taskId: task.id, messaged });
-      break;
+  const author = new Map(queue.map((t) => [t.id, liveAuthor(returnTo(t.id), agents)]));
+  const busy = new Set(workers(agents).filter((w) => heldBy(tasks, w).length > 0).map((w) => w.id));
+
+  // One claim; true when the worker got the task.
+  async function claim(worker: Agent, task: Task): Promise<boolean> {
+    const res = await office.patchTask(task.id, {
+      version: task.version,
+      assignee: worker.name,
+      status: "in_progress",
+    });
+    if (!res.ok) {
+      // 409: someone changed the task since our read, or its holder is a
+      // killed agent; either way it is not ours to take.
+      if (res.status === 409 && res.killed) out.killed.push(task.id);
+      else if (res.status === 409) out.conflicts.push(task.id);
+      else out.errors.push(`PATCH ${task.id} answered ${res.status}`);
+      return false;
     }
+    busy.add(worker.id);
+    // An unreadable history leaves the edit out, not the dispatch.
+    const edited = await office.lastEdited(task.id).catch(() => undefined);
+    const text = `/isomux-loop-worker ${task.id}\n${task.title}\n${ageLine(task.createdAt, edited, now)}`;
+    const messaged = await office.message(text, worker.id);
+    if (!messaged) out.errors.push(`message to ${worker.name} about ${task.id} failed; the tick retries it`);
+    out.assigned.push({ worker: worker.name, taskId: task.id, messaged });
+    return true;
+  }
+
+  // A free author takes its own task first, before any new one.
+  for (const task of queue) {
+    const w = author.get(task.id);
+    if (w && !busy.has(w.id)) await claim(w, task);
+  }
+  // The rest go in queue order; a task whose author lives waits for it.
+  const rest = queue.filter((t) => !author.get(t.id));
+  for (const worker of freeWorkers(agents, tasks, n)) {
+    if (busy.has(worker.id)) continue;
+    while (rest.length > 0) if (await claim(worker, rest.shift()!)) break;
   }
   return out;
 }
@@ -170,6 +201,8 @@ export async function tick(office: Office, n: number): Promise<TickResult> {
 export type Status = {
   // What dispatch takes: the ready tasks at the floor or higher.
   ready: Task[];
+  // Ready tasks that wait for their packet's author: task id -> worker name.
+  returnTo: Record<string, string>;
   // Ready tasks below the floor, which wait until it is lowered.
   belowFloor: number;
   holding: { worker: string; task: Task }[];
@@ -177,10 +210,21 @@ export type Status = {
   merging: Task[];
 };
 
-export function status(agents: Agent[], tasks: Task[], n: number, floor: string | null = null): Status {
+export function status(
+  agents: Agent[],
+  tasks: Task[],
+  n: number,
+  floor: string | null = null,
+  returnTo: (taskId: string) => Author | undefined = () => undefined,
+): Status {
   const ready = readyQueue(tasks, floor);
+  const back = ready.flatMap((t) => {
+    const w = liveAuthor(returnTo(t.id), agents);
+    return w ? [[t.id, w.name] as const] : [];
+  });
   return {
     ready,
+    returnTo: Object.fromEntries(back),
     belowFloor: readyQueue(tasks).length - ready.length,
     holding: holdings(agents, tasks).map((h) => ({ worker: h.worker.name, task: h.task })),
     freeWorkers: freeWorkers(agents, tasks, n).map((w) => w.name),
