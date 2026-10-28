@@ -20,6 +20,9 @@ export const DISPATCH_MS = 2 * 60_000;
 export const TICK_MS = 60 * 60_000;
 // Nil decides in bursts; the curator hears once he has paused this long.
 export const TRIAGE_QUIET_MS = 3 * 60_000;
+// Untagged P0-P3 triage moved to Antifeed (Nil, 2026-10-28): the curator wake
+// no longer announces those tasks. Set true to roll back.
+export const ANNOUNCE_UNTAGGED = false;
 // How often the app looks for open tasks the curator has not proposed yet.
 export const CLASSIFY_MS = 10 * 60_000;
 // An unproposed task is announced again after this long.

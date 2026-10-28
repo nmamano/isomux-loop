@@ -1,4 +1,4 @@
-import { CLASSIFY_MS, MAIN_REPO, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, SCOUT_NAME, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
+import { ANNOUNCE_UNTAGGED, CLASSIFY_MS, MAIN_REPO, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, SCOUT_NAME, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
 import { ClosedTimes } from "./closed-times";
 import { type ImageDir } from "./images";
 import { dispatch, dueIn, offBoard, parseTag, proposalRefusal, staleCards, status, tick, unclassified, unrecommended, wakeText, type DispatchResult, type Status, type TickResult, withdrawLine } from "./loop";
@@ -296,7 +296,7 @@ async function runClassify(): Promise<ClassifyRun> {
     const all = await boardTasks(true);
     const withdrawn = lastWithdrawn;
     const readAt = tasksCache?.at ?? 0;
-    const found = unclassified(all, cardIds());
+    const found = ANNOUNCE_UNTAGGED ? unclassified(all, cardIds()) : [];
     const recs = unrecommended(backlogOf(all), (id) => !!store.recommendation(id), (t) => !!store.keptMark(t.id, t.title, t.description ?? "", readAt));
     const due = [...found, ...recs].filter((t) => at - (announced.get(t.id) ?? 0) >= CLASSIFY_REMIND_MS);
     let sent: string | null = null;
