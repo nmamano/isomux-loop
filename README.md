@@ -2,6 +2,9 @@
 
 An [isomux](https://github.com/nmamano/isomux) app (registered in the office's apps) for the continuous loop (design: isomux `internal-docs/continuous-loop-design.md`, task 178dbb5a).
 
+Since 2026-10-31 (Nil) Isomux decisions are asks in the Isomux Inbox, which the crew opens. The page shows only the Status tab (`SHOWN_TABS` in `src/client.js`; list every tab to roll back). The tab descriptions below stay for that; every API they use still runs, for the Scout, Isomux Main and the curator.
+
+- New-task wake-up, every minute, also while paused: each open P0-P3 task in the room with no tag goes to the curator once, as one line `<id> <title>` in one `/isomux-curator New tasks for triage: ...` message. The app keeps the reported ids and versions in `new-tasks.json`; its first run takes the tasks it finds as reported (Antifeed reported them before).
 - Pause stops dispatch and the tick (Isomux PM pauses around restarts and while batch work holds workers).
 - Dispatch, every 2 minutes: each free Isomux Worker among Workers 1..N (N set on the status page, 1 to 6, default 2) gets the next ready board task (priority, then age), claimed with a versioned PATCH, and a `/isomux-loop-worker <task id>` message. A task with a design packet goes back to the worker that posted it (the task's worker assignee at the post, else the last one in its history), before any new task and also above N; it waits while that worker holds another task, and another worker takes it only if that worker is gone (task 8307e0fb).
 - Tick, hourly: idle workers that hold a task get a nudge; Isomux Main hears how many tasks wait to merge.

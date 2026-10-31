@@ -1,4 +1,4 @@
-import { ANNOUNCE_UNTAGGED, CLASSIFY_MS, MAIN_REPO, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, SCOUT_NAME, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
+import { ANNOUNCE_UNTAGGED, NEW_TASKS_MS, CLASSIFY_MS, MAIN_REPO, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, SCOUT_NAME, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
 import { ClosedTimes } from "./closed-times";
 import { type ImageDir } from "./images";
 import { dispatch, dueIn, offBoard, parseTag, proposalRefusal, staleCards, status, tick, unclassified, unrecommended, wakeText, type DispatchResult, type Status, type TickResult, withdrawLine } from "./loop";
@@ -8,6 +8,7 @@ import { readJson, writeJson } from "./json-file";
 import { httpOffice, type Task } from "./office";
 import { page } from "./page";
 import { PacketStore, packetState } from "./packets";
+import { NewTasks, type NewTasksRun } from "./new-tasks";
 import { PauseFlag } from "./pause";
 import { type Author, packetAuthor, Returns } from "./returns";
 import { sendDueReverts, SignoffStore, signoffState, undoDecision, withAudience } from "./signoff";
@@ -317,6 +318,28 @@ async function runClassify(): Promise<ClassifyRun> {
 setTimeout(() => void runClassify(), 30_000);
 setInterval(() => void runClassify(), CLASSIFY_MS);
 
+// The new-task wake-up, every minute, also while paused (new-tasks.ts).
+const newTasks = new NewTasks(dataDir);
+let lastNewTasks: NewTasksRun | null = null;
+let newTasksBusy = false;
+async function runNewTasks(): Promise<void> {
+  if (newTasksBusy) return;
+  newTasksBusy = true;
+  const at = Date.now();
+  try {
+    lastNewTasks = await newTasks.run(office, at);
+  } catch (err) {
+    lastNewTasks = { at, reported: [], error: String(err instanceof Error ? err.message : err) };
+  } finally {
+    newTasksBusy = false;
+  }
+  if (lastNewTasks.reported.length) console.log(`new tasks reported: ${lastNewTasks.reported.join(", ")}`);
+  if (lastNewTasks.seeded !== undefined) console.log(`new tasks: first run took ${lastNewTasks.seeded} open untagged tasks as reported`);
+  if (lastNewTasks.error) console.error(`new tasks: ${lastNewTasks.error}`);
+}
+setTimeout(() => void runNewTasks(), 5_000);
+setInterval(() => void runNewTasks(), NEW_TASKS_MS);
+
 setInterval(() => void runDispatch(), DISPATCH_MS);
 
 // Held revert requests go to Main when due (a rejection's undo window).
@@ -436,7 +459,7 @@ async function loopStatus(): Promise<Record<string, unknown>> {
     error = String(err instanceof Error ? err.message : err);
   }
   const signoffWaiting = signoff.visible().filter((i) => signoffState(i) === "waiting").length;
-  return { paused: pause.paused, pausedSince: pause.since, workers: pause.workers, minPriority: pause.minPriority, lastDispatch, lastTick, lastClassify, board, error, signoffWaiting };
+  return { paused: pause.paused, pausedSince: pause.since, workers: pause.workers, minPriority: pause.minPriority, lastDispatch, lastTick, lastClassify, lastNewTasks, board, error, signoffWaiting };
 }
 
 // --- backlog -------------------------------------------------------------------

@@ -20,6 +20,11 @@ const TABS = [
   ["signoff", "Sign-off"],
   ["push", "Push"],
 ];
+// The tabs the page shows. Nil, 2026-10-31: Isomux decisions moved to the
+// Isomux Inbox as asks, so only Status shows; the APIs behind the other tabs
+// stay. List every TABS key to roll back.
+const SHOWN_TABS = ["status"];
+const shown = (k) => SHOWN_TABS.includes(k);
 let tab = "status";
 let items = [];
 let counts = {};
@@ -95,8 +100,9 @@ const HELP = {
   pairs: "How many worker/reviewer pairs the loop uses: it gives new tasks to Workers 1 to N. Lowering it takes no task away.",
   floor: "The lowest priority the loop takes. Ready tasks below it wait. Changing it takes no task away.",
   runs: "Dispatch gives free workers the next ready task every 2 minutes. The tick nudges idle workers once an hour.",
-  classify: "Every 10 minutes, also while paused, the app looks for open tasks with no tag and no card and wakes the curator to propose them. It also withdraws undecided cards whose task closed meanwhile.",
+  classify: "Every 10 minutes, also while paused, the app wakes the curator to recommend Backlog tasks that have no recommendation. It also withdraws undecided cards whose task closed meanwhile.",
   working: "Workers that hold a task now.",
+  newTasks: "Every minute the app tells Isomux Curator about each new open P0-P3 task with no tag, once.",
   free: "Loop workers without a task. They get the next ready task at the next dispatch.",
   ready: "Tasks the loop can take now, in the order it takes them. A task with a design packet goes back to the worker that wrote it, once that worker is free.",
   merging: "Approved work that Isomux Main merges after CI.",
@@ -635,6 +641,10 @@ const DONE_ICON = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="
 // A task id mentioned as a reference is a link to its card: a click opens the
 // tab that holds the card, scrolls to it and flashes it.
 function cardTab(id) {
+  const t = anyCardTab(id);
+  return t && shown(t) ? t : null;
+}
+function anyCardTab(id) {
   const it = signoffData.items.find((x) => x.taskId === id);
   if (it && (it.state === "waiting" || it.state === "rejected")) return "signoff";
   if (pushTasks().some((x) => x.t.id === id)) return "push";
@@ -719,10 +729,11 @@ async function api(path, opts) {
 // --- routing -------------------------------------------------------------------
 
 function readLocation() {
-  if (location.pathname.startsWith("/signoff")) tab = "signoff";
-  if (location.pathname.startsWith("/push")) tab = "push";
+  if (location.pathname.startsWith("/signoff") && shown("signoff")) tab = "signoff";
+  if (location.pathname.startsWith("/push") && shown("push")) tab = "push";
 }
 function go(nextTab) {
+  if (!shown(nextTab)) return;
   // A new tab starts at its first card.
   if (nextTab !== tab) {
     currentId = null;
@@ -801,7 +812,7 @@ function renderTabs() {
   if (activeFilters("backlog")) n.backlog = viewList("backlog", backlogTasks.map((t) => ({ kind: "backlog", x: t }))).length + " of " + n.backlog;
   if (activeFilters("hold")) n.hold = viewList("hold", holdEntries()).length + " of " + n.hold;
   if (soVerdicts.size) n.signoff = signoffItems().filter((it) => soVerdicts.has(verdictOf(it))).length + " of " + n.signoff;
-  document.getElementById("tabs").innerHTML = TABS.map(
+  document.getElementById("tabs").innerHTML = TABS.filter(([k]) => shown(k)).map(
     ([k, label]) =>
       '<button class="' + (k === tab ? "on" : "") + '" data-tab="' + k + '"' + tip(TAB_HELP[k]) + ">" + label + (k in n ? " (" + n[k] + ")" : "") + "</button>",
   ).join("");
@@ -823,6 +834,10 @@ function taskLine(t, who, extra) {
     '<span class="tag">' + esc(t.priority || "-") + "</span>" + tag + esc(m ? m[3] : t.title) +
     ' <span class="small">' + idCopy(t.id) + esc(extra || "") + "</span></div>"
   );
+}
+// A link to a tab when the page shows it, else the plain text.
+function goLink(k, href, text) {
+  return shown(k) ? '<a href="' + href + '" data-go="' + k + '">' + esc(text) + "</a>" : esc(text);
 }
 function section(title, key, lines, empty) {
   return (
@@ -862,8 +877,10 @@ function renderStatus() {
   if (t && t.error) h += ' · <span class="warn">' + esc(t.error) + "</span>";
   const c = s.lastClassify;
   h += "<br><span" + tip("classify") + ">Curator wake: " + (c ? clock(c.at) + " · " + (c.error ? '<span class="warn">' + esc(c.error) + "</span>" : c.found.length + " to classify") : "not yet") + "</span>";
-  h += q("runs") + "</div>" + helpBox(["runs", "classify"], "runs");
-  h += '<div class="small"' + tip("signoff") + '>Sign-off: <a href="/signoff/" data-go="signoff">' + plural(signoffCount(), "task") + '</a> · Push: <a href="/push/" data-go="push">' + plural(pushTasks().length, "task") + "</a> " + q("signoff") + "</div>" + helpBox(["signoff", "tabPush"], "signoff");
+  const nt = s.lastNewTasks;
+  h += "<br><span" + tip("newTasks") + ">New-task wake-up: " + (nt ? clock(nt.at) + " · " + (nt.error ? '<span class="warn">' + esc(nt.error) + "</span>" : nt.reported.length ? "reported " + linkIds(nt.reported.join(", ")) : "nothing new") : "not yet") + "</span>";
+  h += q("runs") + "</div>" + helpBox(["runs", "classify", "newTasks"], "runs");
+  h += '<div class="small"' + tip("signoff") + ">Sign-off: " + goLink("signoff", "/signoff/", plural(signoffCount(), "task")) + " · Push: " + goLink("push", "/push/", plural(pushTasks().length, "task")) + " " + q("signoff") + "</div>" + helpBox(["signoff", "tabPush"], "signoff");
   if (s.error) return h + '<div class="err">Board unreadable: ' + esc(s.error) + "</div>";
   const b = s.board;
   h += renderStates(b);
@@ -872,7 +889,7 @@ function renderStatus() {
   h += section("Ready queue (" + b.ready.length + (b.belowFloor ? ", " + belowText(b.belowFloor) : "") + ")", "ready", b.ready.map((x) => taskLine(x, "", b.returnTo && b.returnTo[x.id] ? " · back to " + b.returnTo[x.id] : "")), "Nothing is ready.");
   h += section("Merging (" + b.merging.length + ")", "merging", b.merging.map((x) => taskLine(x)), "Nothing is merging.");
   const st = b.states;
-  h += '<div class="small" style="margin-top:6px"' + tip("tabHold") + '>On hold: <a href="/" data-go="hold">' + plural(st.hold.count, "task") + "</a> " + q("tabHold") + "</div>" + helpBox(["tabHold"], "tabHold");
+  h += '<div class="small" style="margin-top:6px"' + tip("tabHold") + '>On hold: ' + goLink("hold", "/", plural(st.hold.count, "task")) + " " + q("tabHold") + "</div>" + helpBox(["tabHold"], "tabHold");
   h += section("Done (" + st.done.count + ") · last " + st.done.tasks.length, "recentDone", st.done.tasks.map(briefLine), "Nothing is done yet.");
   h += section("Obsolete (" + st.obsolete.count + ") · last " + st.obsolete.tasks.length, "recentObsolete", st.obsolete.tasks.map(briefLine), "Nothing is obsolete.");
   return h;
@@ -1897,7 +1914,7 @@ document.addEventListener("click", async (e) => {
   const st = e.target.closest("[data-state]");
   if (st) {
     e.preventDefault();
-    if (st.dataset.state === "hold") return go("hold");
+    if (st.dataset.state === "hold" && shown("hold")) return go("hold");
     pickedState = pickedState === st.dataset.state ? null : st.dataset.state;
     render();
     const list = document.querySelector(".picked-list");
@@ -2144,7 +2161,7 @@ document.addEventListener("input", (e) => {
 readLocation();
 // Open on Triage while cards wait for Nil, else on the status.
 load().then(() => {
-  if (tab === "status" && triageCount() > 0) {
+  if (tab === "status" && shown("open") && triageCount() > 0) {
     tab = "open";
     render();
   }
