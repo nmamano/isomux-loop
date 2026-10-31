@@ -329,11 +329,12 @@ async function runNewTasks(): Promise<void> {
   try {
     lastNewTasks = await newTasks.run(office, at);
   } catch (err) {
-    lastNewTasks = { at, reported: [], error: String(err instanceof Error ? err.message : err) };
+    lastNewTasks = { at, reported: [], changed: [], error: String(err instanceof Error ? err.message : err) };
   } finally {
     newTasksBusy = false;
   }
   if (lastNewTasks.reported.length) console.log(`new tasks reported: ${lastNewTasks.reported.join(", ")}`);
+  if (lastNewTasks.changed.length) console.log(`changed tasks reported: ${lastNewTasks.changed.join(", ")}`);
   if (lastNewTasks.seeded !== undefined) console.log(`new tasks: first run took ${lastNewTasks.seeded} open untagged tasks as reported`);
   if (lastNewTasks.error) console.error(`new tasks: ${lastNewTasks.error}`);
 }

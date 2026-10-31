@@ -102,7 +102,7 @@ const HELP = {
   runs: "Dispatch gives free workers the next ready task every 2 minutes. The tick nudges idle workers once an hour.",
   classify: "Every 10 minutes, also while paused, the app wakes the curator to recommend Backlog tasks that have no recommendation. It also withdraws undecided cards whose task closed meanwhile.",
   working: "Workers that hold a task now.",
-  newTasks: "Every minute the app tells Isomux Curator about each new open P0-P3 task with no tag, once.",
+  newTasks: "Every minute the app tells Isomux Curator about each new open P0-P3 task with no tag and no assignee, once, and about each such task that stops waiting, waits again or is edited.",
   free: "Loop workers without a task. They get the next ready task at the next dispatch.",
   ready: "Tasks the loop can take now, in the order it takes them. A task with a design packet goes back to the worker that wrote it, once that worker is free.",
   merging: "Approved work that Isomux Main merges after CI.",
@@ -878,7 +878,7 @@ function renderStatus() {
   const c = s.lastClassify;
   h += "<br><span" + tip("classify") + ">Curator wake: " + (c ? clock(c.at) + " · " + (c.error ? '<span class="warn">' + esc(c.error) + "</span>" : c.found.length + " to classify") : "not yet") + "</span>";
   const nt = s.lastNewTasks;
-  h += "<br><span" + tip("newTasks") + ">New-task wake-up: " + (nt ? clock(nt.at) + " · " + (nt.error ? '<span class="warn">' + esc(nt.error) + "</span>" : nt.reported.length ? "reported " + linkIds(nt.reported.join(", ")) : "nothing new") : "not yet") + "</span>";
+  h += "<br><span" + tip("newTasks") + ">New-task wake-up: " + (nt ? clock(nt.at) + " · " + (nt.error ? '<span class="warn">' + esc(nt.error) + "</span>" : nt.reported.length || (nt.changed || []).length ? [nt.reported.length ? "new " + linkIds(nt.reported.join(", ")) : "", (nt.changed || []).length ? "changed " + linkIds(nt.changed.join(", ")) : ""].filter(Boolean).join(" · ") : "nothing new") : "not yet") + "</span>";
   h += q("runs") + "</div>" + helpBox(["runs", "classify", "newTasks"], "runs");
   h += '<div class="small"' + tip("signoff") + ">Sign-off: " + goLink("signoff", "/signoff/", plural(signoffCount(), "task")) + " · Push: " + goLink("push", "/push/", plural(pushTasks().length, "task")) + " " + q("signoff") + "</div>" + helpBox(["signoff", "tabPush"], "signoff");
   if (s.error) return h + '<div class="err">Board unreadable: ' + esc(s.error) + "</div>";
