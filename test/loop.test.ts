@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ageLine, dispatch, dueIn, freeWorkers, holdings, parseTag, proposalRefusal, readyQueue, staleCards, status, tick, unclassified, unrecommended, wakeText, withdrawLine } from "../src/loop";
+import { ageLine, dispatch, dueIn, freeWorkers, holdings, parseTag, proposalRefusal, pushToWake, readyQueue, staleCards, status, tick, unclassified, unrecommended, wakeText, withdrawLine } from "../src/loop";
 import type { Agent, Office, PatchResult, Task } from "../src/office";
 import type { Author } from "../src/returns";
 
@@ -296,6 +296,34 @@ describe("tick", () => {
     expect(messages.map((x) => x.to)).toEqual(["id-Isomux Worker 1", "id-Isomux Main"]);
     expect(messages[0].text.startsWith(`/isomux-loop-worker tick ${t1.id}:`)).toBe(true);
     expect(messages[1].text).toBe("/isomux-main tick: 1 tasks wait to merge.");
+  });
+
+  test("wakes Isomux Main once per signed-off push point that is not on origin/main", () => {
+    const none = () => false;
+    expect(pushToWake({ ok: true, sha: "aaa" }, null, none)).toBe("aaa");
+    expect(pushToWake({ ok: true, sha: "aaa" }, "aaa", none)).toBeNull();
+    expect(pushToWake({ ok: true, sha: "bbb" }, "aaa", none)).toBe("bbb");
+    expect(pushToWake({ ok: false, sha: "bbb" }, "aaa", none)).toBeNull();
+    expect(pushToWake({ ok: true, sha: null }, null, none)).toBeNull();
+    expect(pushToWake({ ok: true, sha: "bbb" }, "aaa", (sha) => sha === "bbb")).toBeNull();
+  });
+
+  test("the push wake reaches Isomux Main also when it is busy, with the merge count when it is idle", async () => {
+    const m = task({ title: "[go | merging] three", status: "in_progress" });
+    const busy = stubOffice([m], [agent("Isomux Main", true)]);
+    const res = await tick(busy.office, 2, "abc123");
+    expect([res.push, res.main]).toEqual(["abc123", null]);
+    expect(busy.messages.map((x) => x.to)).toEqual(["id-Isomux Main"]);
+    expect(busy.messages[0].text).toContain("abc123");
+    const idle = stubOffice([m], [agent("Isomux Main")]);
+    const both = await tick(idle.office, 2, "abc123");
+    expect([both.push, both.main]).toEqual(["abc123", 1]);
+    expect(idle.messages).toHaveLength(1);
+    expect(idle.messages[0].text).toContain("abc123");
+    expect(idle.messages[0].text).toContain("1 tasks wait to merge");
+    const absent = await tick(stubOffice([m], []).office, 2, "abc123");
+    expect(absent.push).toBeNull();
+    expect(absent.errors).toHaveLength(1);
   });
 
   test("skips Isomux Main when it is busy or absent", async () => {

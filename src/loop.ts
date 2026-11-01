@@ -166,7 +166,24 @@ export function dueIn(lastAt: number | null, now: number, everyMs: number): numb
   return lastAt === null ? 0 : Math.max(0, lastAt + everyMs - now);
 }
 
-export type TickResult = { nudged: { worker: string; taskId: string }[]; main: number | null; errors: string[] };
+// push: the push point the tick woke Isomux Main for, or null.
+export type TickResult = { nudged: { worker: string; taskId: string }[]; main: number | null; push?: string | null; errors: string[] };
+
+// The push point the tick wakes Isomux Main for (Isomux PM, 2026-11-01): Main
+// pushes signed-off push points on its own at the tick (Nil, 2026-10-31), so
+// the app wakes it when push.ok holds at a sha that is not on origin/main.
+// Once per sha: woken is the last sha the tick woke Main for.
+export function pushToWake(check: { ok: boolean; sha: string | null }, woken: string | null, onOrigin: (sha: string) => boolean): string | null {
+  if (!check.ok || !check.sha || check.sha === woken || onOrigin(check.sha)) return null;
+  return check.sha;
+}
+
+export function pushWakeText(sha: string): string {
+  return (
+    `/isomux-main tick: push point ${sha} is signed off and not on origin/main (GET /api/signoff push.ok). ` +
+    "Push it as your skill's push step says; if merged server changes wait for a restart, push after it."
+  );
+}
 
 export function workerTickText(taskId: string): string {
   return (
@@ -178,8 +195,10 @@ export function workerTickText(taskId: string): string {
 // Workers 1..n get the nudge for any task they hold. A worker above n (after
 // Nil lowered n) keeps it only while it holds a loop-tagged task, so it can
 // finish; batch work outside the loop is untagged and gets no nudge.
-export async function tick(office: Office, n: number): Promise<TickResult> {
-  const out: TickResult = { nudged: [], main: null, errors: [] };
+// push: a push point to wake Isomux Main for (pushToWake). Main gets it even
+// when busy, as a queued message, so the wake is not lost.
+export async function tick(office: Office, n: number, push: string | null = null): Promise<TickResult> {
+  const out: TickResult = { nudged: [], main: null, push: null, errors: [] };
   const [tasks, agents] = await Promise.all([office.tasks(), office.agents()]);
   for (const w of workers(agents)) {
     const inLoop = WORKER_NAMES.indexOf(w.name) < n;
@@ -191,10 +210,14 @@ export async function tick(office: Office, n: number): Promise<TickResult> {
   }
   const merging = withState(tasks, "merging").length;
   const main = agents.find((a) => a.name === MAIN_NAME);
-  if (merging > 0 && main && !main.inFlightTurn) {
-    if (await office.message(`/isomux-main tick: ${merging} tasks wait to merge.`, main.id)) out.main = merging;
-    else out.errors.push("tick message to Isomux Main failed");
-  }
+  const toMerge = merging > 0 && main && !main.inFlightTurn;
+  if (main && (toMerge || push)) {
+    const text = [toMerge ? `/isomux-main tick: ${merging} tasks wait to merge.` : "", push ? pushWakeText(push) : ""].filter(Boolean).join("\n");
+    if (await office.message(text, main.id)) {
+      if (toMerge) out.main = merging;
+      out.push = push;
+    } else out.errors.push("tick message to Isomux Main failed");
+  } else if (push) out.errors.push("Isomux Main is not in the office: no push wake");
   return out;
 }
 

@@ -1,7 +1,7 @@
 import { ANNOUNCE_UNTAGGED, NEW_TASKS_MS, CLASSIFY_MS, MAIN_REPO, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, SCOUT_NAME, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
 import { ClosedTimes } from "./closed-times";
 import { type ImageDir } from "./images";
-import { dispatch, dueIn, offBoard, parseTag, proposalRefusal, staleCards, status, tick, unclassified, unrecommended, wakeText, type DispatchResult, type Status, type TickResult, withdrawLine } from "./loop";
+import { dispatch, dueIn, offBoard, parseTag, proposalRefusal, pushToWake, staleCards, status, tick, unclassified, unrecommended, wakeText, type DispatchResult, type Status, type TickResult, withdrawLine } from "./loop";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readJson, writeJson } from "./json-file";
@@ -42,6 +42,10 @@ function resolveSha(sha: string): string | null {
   return r.exitCode === 0 && /^[0-9a-f]{40,64}$/.test(out) ? out : null;
 }
 const signoff = new SignoffStore(dataDir, Date.now, resolveSha);
+// Whether origin/main in the main checkout has the commit (as of Main's last fetch).
+function onOrigin(sha: string): boolean {
+  return Bun.spawnSync(["git", "-C", MAIN_REPO, "merge-base", "--is-ancestor", sha, "refs/remotes/origin/main"]).exitCode === 0;
+}
 // Packets posted before the app kept authors get theirs from the task history,
 // once; a closed task's record leaves at the next board read.
 if (returnsNew)
@@ -132,6 +136,8 @@ GET  /api/status                  pause state, last dispatch and tick, ready que
                                   board.states.triage and .decided are the open and the decided cards (the Triage and Decided tabs)
 POST /api/pause | /api/resume     pause stops dispatch and the tick; the first tick after a resume (within a minute) catches what stopped
                                   meanwhile. The tick is due an hour after the last one, also across app restarts (timers.json).
+                                  The tick also wakes Isomux Main, once per sha, when push.ok holds at a push point that is
+                                  not on origin/main (lastTick.result.push names it).
 POST /api/settings                {"workers": 1-6, "minPriority": "P0"-"P3" | null}, either or both (also on the status page).
                                   workers: the loop dispatches to Workers 1..N. Lowering N takes no task away; a worker above N
                                   keeps its tick while it holds a loop task. minPriority: dispatch takes only ready tasks at that
@@ -206,7 +212,10 @@ let lastDispatch: Run<DispatchResult> | null = null;
 // The last tick is kept in the data dir: an interval timer starts over at
 // every restart, so with frequent restarts the hourly tick never fired.
 const timersFile = join(dataDir, "timers.json");
-let lastTick: Run<TickResult> | null = readJson<{ lastTick: Run<TickResult> | null }>(timersFile, { lastTick: null }).lastTick;
+const timers = readJson<{ lastTick: Run<TickResult> | null; pushWoken?: string | null }>(timersFile, { lastTick: null });
+let lastTick: Run<TickResult> | null = timers.lastTick;
+// The last push point the tick woke Isomux Main for (pushToWake).
+let pushWoken: string | null = timers.pushWoken ?? null;
 let busy = false;
 
 async function exclusive<T>(fn: () => Promise<T>): Promise<Run<T> | null> {
@@ -239,10 +248,14 @@ async function runDispatch(): Promise<Run<DispatchResult> | null> {
 
 async function runTick(): Promise<Run<TickResult> | null> {
   if (pause.paused) return null;
-  const run = await exclusive(() => tick(office, pause.workers));
+  const run = await exclusive(async () => {
+    const push = pushToWake(signoff.pushCheck(await closedOnBoard(true)), pushWoken, onOrigin);
+    return tick(office, pause.workers, push);
+  });
   if (run) {
     lastTick = run;
-    writeJson(timersFile, { lastTick });
+    if (run.result?.push) pushWoken = run.result.push;
+    writeJson(timersFile, { lastTick, pushWoken });
   }
   return run;
 }
