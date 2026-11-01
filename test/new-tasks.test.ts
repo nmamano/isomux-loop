@@ -39,14 +39,15 @@ async function reportedOnce(tasks: Task[]) {
 }
 
 describe("new-task wake-up", () => {
-  test("a task waits when open in the room, unassigned, P0-P3 and untagged", () => {
+  test("a task waits when open in the room, unassigned, P0-P3 or no priority, and untagged", () => {
     expect(waits(task())).toBe(true);
+    expect(waits(task({ priority: null }))).toBe(true);
+    expect(waits(task({ priority: undefined }))).toBe(true);
     for (const over of [
       { title: "[go | ready] tagged" },
       { title: "[design | nil] tagged" },
       { assignee: "Isomux Worker 1" },
       { priority: "P4" },
-      { priority: null },
       { status: "in_progress" },
       { status: "done" },
       { roomId: "other" },

@@ -13,14 +13,16 @@ import { parseTag } from "./loop";
 import type { Office, Task } from "./office";
 
 // A task waits for triage when it is open in the room, nobody holds it, it
-// has P0-P3 and its title has no [class | state] tag. A tagged, assigned,
-// closed or P4 task does not wait (Isomux Curator, 2026-10-31).
+// has P0-P3 or no priority, and its title has no [class | state] tag. A
+// tagged, assigned, closed or P4 task does not wait (Isomux Curator,
+// 2026-10-31). Agents file tasks with no priority, since only Nil's triage
+// sets one (Isomux PM, 2026-11-01).
 export function waits(t: Task): boolean {
   return (
     (t.roomId === undefined || t.roomId === ROOM_ID) &&
     t.status === "open" &&
     !t.assignee &&
-    LOOP_PRIORITIES.includes(t.priority ?? "") &&
+    (t.priority == null || LOOP_PRIORITIES.includes(t.priority)) &&
     parseTag(t.title) === null
   );
 }
