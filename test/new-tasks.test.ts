@@ -192,3 +192,41 @@ describe("new-task wake-up", () => {
     expect(o.messages).toEqual([newTasksText([fresh]), `/isomux-curator Changed tasks: ${waiting.id} edited | Still waiting`]);
   });
 });
+
+describe("new-task wake-up with batchAsks", () => {
+  test("hold keeps news and changes for the next run without hold", async () => {
+    const old = task({ title: "Old" });
+    const tasks = [old];
+    const { s, st } = await reportedOnce(tasks);
+    const fresh = task({ title: "Fresh" });
+    tasks.push(fresh);
+    old.assignee = "Isomux Worker 1";
+    expect(await s.run(st.office, 1, true)).toEqual({ at: 1, reported: [], changed: [], held: 2 });
+    expect(await s.run(st.office, 2, true)).toMatchObject({ held: 2 });
+    expect(st.messages).toEqual([]);
+    expect(await s.run(st.office, 3)).toEqual({ at: 3, reported: [fresh.id], changed: [old.id] });
+    expect(st.messages).toHaveLength(1);
+    expect(await s.run(st.office, 4, true)).toEqual({ at: 4, reported: [], changed: [] });
+  });
+
+  test("a new P0 task sends everything at once, also under hold", async () => {
+    const old = task({ title: "Old" });
+    const tasks = [old];
+    const { s, st } = await reportedOnce(tasks);
+    old.title = "Old, edited";
+    const urgent = task({ title: "Urgent", priority: "P0" });
+    tasks.push(urgent);
+    expect(await s.run(st.office, 1, true)).toEqual({ at: 1, reported: [urgent.id], changed: [old.id] });
+    expect(st.messages).toHaveLength(1);
+  });
+
+  test("an edit to P0 of a reported task is not a new P0 task: it stays held", async () => {
+    const old = task({ title: "Old" });
+    const tasks = [old];
+    const { s, st } = await reportedOnce(tasks);
+    old.priority = "P0";
+    old.title = "Old, edited";
+    expect(await s.run(st.office, 1, true)).toMatchObject({ held: 1 });
+    expect(st.messages).toEqual([]);
+  });
+});

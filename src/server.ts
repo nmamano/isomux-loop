@@ -10,6 +10,7 @@ import { page } from "./page";
 import { PacketStore, packetState } from "./packets";
 import { NewTasks, type NewTasksRun } from "./new-tasks";
 import { PauseFlag } from "./pause";
+import { ScoutQueue, scoutText } from "./scout-queue";
 import { type Author, packetAuthor, Returns } from "./returns";
 import { sendDueReverts, SignoffStore, signoffState, undoDecision, withAudience } from "./signoff";
 import { belowFloor, classify, holdTask, stateViews, type Card, type HoldTask, type StateKey, type StateView } from "./states";
@@ -137,8 +138,12 @@ GET  /api/status                  pause state, last dispatch and tick, ready que
 POST /api/pause | /api/resume     pause stops dispatch and the tick; the first tick after a resume (within a minute) catches what stopped
                                   meanwhile. The tick is due an hour after the last one, also across app restarts (timers.json).
                                   The tick also wakes Isomux Main, once per sha, when push.ok holds at a push point that is
-                                  not on origin/main (lastTick.result.push names it).
-POST /api/settings                {"workers": 1-6, "minPriority": "P0"-"P3" | null}, either or both (also on the status page).
+                                  not on origin/main (lastTick.result.push names it). With batchAsks (the default), the tick
+                                  also sends what waits for the Sign-off Scout (one message, lastTick.result.scout) and for
+                                  the Curator (the new-task wake, which holds them between ticks unless a new task is P0).
+POST /api/settings                {"workers": 1-6, "minPriority": "P0"-"P3" | null, "batchAsks": true | false}, any of them (the first two also on the status page).
+                                  batchAsks (Nil, 2026-11-01; default true): the Scout and Curator wakes wait for the hourly
+                                  tick, so new asks reach Nil's Inbox about once an hour; false sends what waits at once.
                                   workers: the loop dispatches to Workers 1..N. Lowering N takes no task away; a worker above N
                                   keeps its tick while it holds a loop task. minPriority: dispatch takes only ready tasks at that
                                   priority or higher ("P1": P0 and P1); null (the default) takes every priority. GET /api/status
@@ -250,7 +255,14 @@ async function runTick(): Promise<Run<TickResult> | null> {
   if (pause.paused) return null;
   const run = await exclusive(async () => {
     const push = pushToWake(signoff.pushCheck(await closedOnBoard(true)), pushWoken, onOrigin);
-    return tick(office, pause.workers, push);
+    const out = await tick(office, pause.workers, push);
+    // The held asks go out together at the tick (batchAsks).
+    out.scout = await flushScout().catch((err) => {
+      out.errors.push(String(err instanceof Error ? err.message : err));
+      return [];
+    });
+    await runNewTasks(false, true);
+    return out;
   });
   if (run) {
     lastTick = run;
@@ -340,12 +352,15 @@ setInterval(() => void runClassify(), CLASSIFY_MS);
 const newTasks = new NewTasks(dataDir);
 let lastNewTasks: NewTasksRun | null = null;
 let newTasksBusy = false;
-async function runNewTasks(): Promise<void> {
+// hold: batchAsks holds news and changes for the tick. wait: the tick's
+// run waits for a minute run in flight instead of skipping.
+async function runNewTasks(hold = pause.batchAsks, wait = false): Promise<void> {
+  while (wait && newTasksBusy) await Bun.sleep(200);
   if (newTasksBusy) return;
   newTasksBusy = true;
   const at = Date.now();
   try {
-    lastNewTasks = await newTasks.run(office, at);
+    lastNewTasks = await newTasks.run(office, at, hold);
   } catch (err) {
     lastNewTasks = { at, reported: [], changed: [], error: String(err instanceof Error ? err.message : err) };
   } finally {
@@ -358,6 +373,15 @@ async function runNewTasks(): Promise<void> {
 }
 setTimeout(() => void runNewTasks(), 5_000);
 setInterval(() => void runNewTasks(), NEW_TASKS_MS);
+
+// Merges whose sign-off items the Scout has not heard about (batchAsks).
+const scoutQueue = new ScoutQueue(dataDir);
+function flushScout(): Promise<string[]> {
+  return scoutQueue.flush((id) => {
+    const i = signoff.get(id);
+    return Boolean(i) && signoffState(i!) === "waiting";
+  }, toScout);
+}
 
 setInterval(() => void runDispatch(), DISPATCH_MS);
 
@@ -478,7 +502,7 @@ async function loopStatus(): Promise<Record<string, unknown>> {
     error = String(err instanceof Error ? err.message : err);
   }
   const signoffWaiting = signoff.visible().filter((i) => signoffState(i) === "waiting").length;
-  return { paused: pause.paused, pausedSince: pause.since, workers: pause.workers, minPriority: pause.minPriority, lastDispatch, lastTick, lastClassify, lastNewTasks, board, error, signoffWaiting };
+  return { paused: pause.paused, pausedSince: pause.since, workers: pause.workers, minPriority: pause.minPriority, batchAsks: pause.batchAsks, lastDispatch, lastTick, lastClassify, lastNewTasks, board, error, signoffWaiting };
 }
 
 // --- backlog -------------------------------------------------------------------
@@ -545,15 +569,17 @@ async function body(req: Request): Promise<Record<string, unknown>> {
   }
 }
 
-// The Scout is optional: no Scout in the office, or a failed message, only logs.
+// A message to the Scout; false when it is not in the office or the message failed.
+async function toScout(text: string): Promise<boolean> {
+  const scout = (await office.agents()).find((a) => a.name === SCOUT_NAME);
+  return Boolean(scout) && (await office.message(text, scout!.id));
+}
+
+// Without batchAsks, at once. The Scout is optional: no Scout in the office,
+// or a failed message, only logs.
 async function tellScout(taskId: string): Promise<void> {
   try {
-    const scout = (await office.agents()).find((a) => a.name === SCOUT_NAME);
-    if (!scout) return;
-    const text =
-      `/isomux-signoff-scout ${taskId}: its merge is on the loop app's Sign-off tab. ` +
-      `Read it (GET 127.0.0.1:21025/api/signoff) and post your verdict: POST /api/signoff/${taskId}/scout.`;
-    if (!(await office.message(text, scout.id))) console.error(`message to ${SCOUT_NAME} about ${taskId} failed`);
+    if (!(await toScout(scoutText([taskId])))) console.error(`message to ${SCOUT_NAME} about ${taskId} failed`);
   } catch (err) {
     console.error(`message to ${SCOUT_NAME} about ${taskId} failed: ${err}`);
   }
@@ -606,10 +632,17 @@ async function route(req: Request): Promise<Response> {
   }
   if (m === "POST" && path === "/api/settings") {
     const b = await body(req);
-    if (b.workers === undefined && b.minPriority === undefined) throw new ValidationError("give workers, minPriority or both");
+    if (b.workers === undefined && b.minPriority === undefined && b.batchAsks === undefined)
+      throw new ValidationError("give workers, minPriority, batchAsks or more of them");
+    const wasBatching = pause.batchAsks;
     pause.update(b);
     statusCache = null;
-    return json({ workers: pause.workers, minPriority: pause.minPriority });
+    // Batching turned off: what it held goes out now.
+    if (wasBatching && !pause.batchAsks) {
+      void flushScout().catch((err) => console.error(`scout flush: ${err}`));
+      void runNewTasks(false, true);
+    }
+    return json({ workers: pause.workers, minPriority: pause.minPriority, batchAsks: pause.batchAsks });
   }
   if (m === "POST" && path === "/api/dispatch") {
     if (pause.paused) return json({ error: "paused" }, 409);
@@ -711,7 +744,10 @@ async function route(req: Request): Promise<Response> {
       case "merged": {
         const out = signoff.merged(taskId, await body(req));
         // The item is on the Sign-off tab now: the Scout reads it.
-        if (out.signoff && signoffState(signoff.get(taskId)!) === "waiting") void tellScout(taskId);
+        if (out.signoff && signoffState(signoff.get(taskId)!) === "waiting") {
+          if (pause.batchAsks) scoutQueue.add(taskId);
+          else void tellScout(taskId);
+        }
         return json(out);
       }
       case "scout":

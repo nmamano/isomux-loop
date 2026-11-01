@@ -167,7 +167,8 @@ export function dueIn(lastAt: number | null, now: number, everyMs: number): numb
 }
 
 // push: the push point the tick woke Isomux Main for, or null.
-export type TickResult = { nudged: { worker: string; taskId: string }[]; main: number | null; push?: string | null; errors: string[] };
+// scout: the sign-off items the tick told the Scout about (batchAsks).
+export type TickResult = { nudged: { worker: string; taskId: string }[]; main: number | null; push?: string | null; scout?: string[]; errors: string[] };
 
 // The push point the tick wakes Isomux Main for (Isomux PM, 2026-11-01): Main
 // pushes signed-off push points on its own at the tick (Nil, 2026-10-31), so

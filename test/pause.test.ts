@@ -51,3 +51,18 @@ describe("pause", () => {
     expect([new PauseFlag(dir).paused, new PauseFlag(dir).since]).toEqual([false, null]);
   });
 });
+
+describe("batchAsks setting", () => {
+  test("defaults to on, takes only a boolean, keeps the other settings, and survives a reload", () => {
+    const dir = tempDir();
+    const p = new PauseFlag(dir);
+    expect(p.batchAsks).toBe(true);
+    p.update({ workers: 3, batchAsks: false });
+    expect([new PauseFlag(dir).batchAsks, new PauseFlag(dir).workers]).toEqual([false, 3]);
+    for (const bad of ["false", 0, null, {}]) expect(() => p.update({ batchAsks: bad })).toThrow(ValidationError);
+    p.update({ minPriority: "P1" });
+    expect(new PauseFlag(dir).batchAsks).toBe(false);
+    p.update({ batchAsks: true });
+    expect(new PauseFlag(dir).batchAsks).toBe(true);
+  });
+});
