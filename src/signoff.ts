@@ -96,8 +96,10 @@ type State = {
   // of one sha takes everything reported up to it (Nil, 2026-10-19).
   // none: Main said the merge has nothing to sign off; signed: its approved
   // item left at a push go. Without either, a merge waits for its merged item
-  // (Isomux PM, 2026-11-01: fail closed).
-  unpushed?: Record<string, { commit: string; at: number; seq: number; none?: true; signed?: true }>;
+  // (Isomux PM, 2026-11-01: fail closed). first: the task's earliest merge
+  // not pushed and not cleared, when it has more than one; one item covers
+  // them all, so it holds the push back from there (Isomux PM, 2026-11-01).
+  unpushed?: Record<string, { commit: string; at: number; seq: number; first?: number; none?: true; signed?: true }>;
   shas?: { commit: string; seq: number }[];
   seq?: number;
   // A rejected merge and its revert (Nil, 2026-10-20): a push point between
@@ -209,7 +211,13 @@ export class SignoffStore {
 
   private record(taskId: string | null, commit: string, at: number): void {
     const seq = (this.state.seq = (this.state.seq ?? 0) + 1);
-    if (taskId) this.state.unpushed![taskId] = { commit, at, seq };
+    if (taskId) {
+      // An earlier merge of the task that is not pushed stays held with this
+      // one, unless Main marked it "none" or its approved item left at a push go.
+      const u = this.state.unpushed![taskId];
+      const first = u && !u.none && !u.signed ? (u.first ?? u.seq) : undefined;
+      this.state.unpushed![taskId] = { commit, at, seq, ...(first !== undefined ? { first } : {}) };
+    }
     this.state.shas!.push({ commit, seq });
   }
 
@@ -320,7 +328,7 @@ export class SignoffStore {
     // main and goes back to ready.
     const i = this.state.items[taskId];
     const removed = Boolean(i && signoffState(i) === "rejected");
-    const from = removed ? this.itemSeq(i!) : null;
+    const from = removed ? this.holdSeq(i!) : null;
     this.record(null, commit, this.now());
     if (from !== null) (this.state.spans ??= []).push({ from, to: this.state.seq! });
     delete this.state.unpushed![taskId];
@@ -568,6 +576,12 @@ export class SignoffStore {
     const s = (this.state.shas ?? []).find((x) => i.merged && sameSha(x.commit, i.merged.commit));
     return s ? s.seq : 0;
   }
+  // Where an item holds the push back: its merge, or its task's earliest
+  // merge not pushed when that is earlier (one item for several merges).
+  private holdSeq(i: SignoffItem): number {
+    const first = this.state.unpushed?.[i.taskId]?.first;
+    return first === undefined ? this.itemSeq(i) : Math.min(first, this.itemSeq(i));
+  }
   private shaSeq(commit: string | undefined): number | undefined {
     if (!commit) return undefined;
     return [...(this.state.shas ?? [])].reverse().find((x) => sameSha(x.commit, commit))?.seq;
@@ -585,8 +599,8 @@ export class SignoffStore {
       .filter((i) => ["waiting", "rejected"].includes(signoffState(i)) || editsOpen(i))
       .map((i): PushCheck["blockers"][number] =>
         editsOpen(i)
-          ? { taskId: i.taskId, state: "edits" as const, seq: this.itemSeq(i), edits: i.decision!.edits }
-          : { taskId: i.taskId, state: signoffState(i) as "waiting" | "rejected", seq: this.itemSeq(i) },
+          ? { taskId: i.taskId, state: "edits" as const, seq: this.holdSeq(i), edits: i.decision!.edits }
+          : { taskId: i.taskId, state: signoffState(i) as "waiting" | "rejected", seq: this.holdSeq(i) },
       )
       // Fail closed (Isomux PM, 2026-11-01): a merge counts as signed off only
       // through its merged item, or Main's "signoff":"none". A merge reported
@@ -594,7 +608,7 @@ export class SignoffStore {
       .concat(
         Object.entries(this.state.unpushed ?? {})
           .filter(([id, u]) => !u.none && !u.signed && !this.state.items[id]?.merged)
-          .map(([id, u]) => ({ taskId: id, state: "noitem" as const, seq: u.seq, itemPosted: Boolean(this.state.items[id]) })),
+          .map(([id, u]) => ({ taskId: id, state: "noitem" as const, seq: u.first ?? u.seq, itemPosted: Boolean(this.state.items[id]) })),
       )
       .sort((a, b) => a.seq - b.seq);
     const limit = blockers.length ? blockers[0].seq : Infinity;
@@ -666,7 +680,7 @@ export class SignoffStore {
       if (u.seq <= hit.seq) {
         delete this.state.unpushed![id];
         out.push(id);
-      }
+      } else if (u.first !== undefined && u.first <= hit.seq) delete u.first;
     this.state.shas = this.state.shas!.filter((x) => x.seq > hit.seq);
     this.state.spans = (this.state.spans ?? []).filter((sp) => sp.to > hit.seq);
     this.save();

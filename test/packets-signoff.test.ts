@@ -253,6 +253,31 @@ describe("sign-off", () => {
     expect(s.pushCheck()).toMatchObject({ ok: true, sha: "ccccccc3", tasks: ["before", "t1", "after"], blockers: [] });
   });
 
+  test("fail closed: one item for two merges of a task holds the push back from the first merge until approved", () => {
+    const s = new SignoffStore(tempDir());
+    s.merged("before", { commit: "aaaaaaa1", signoff: "none" });
+    s.put(item);
+    s.merged("t1", { commit: "bbbbbbb2" });
+    // The worker posts one item for both merges, and Main reports the second.
+    s.put({ ...item, title: "Docs line, both merges" });
+    s.merged("t1", { commit: "ccccccc3" });
+    expect(s.pushCheck()).toMatchObject({ ok: true, sha: "aaaaaaa1", tasks: ["before"], blockers: [{ taskId: "t1", state: "waiting", seq: 2 }] });
+    s.approve("t1");
+    expect(s.pushCheck()).toMatchObject({ ok: true, sha: "ccccccc3", approved: ["t1"] });
+  });
+
+  test("fail closed: the first merge of a task is held also with no item yet, and not when it was marked none", () => {
+    const s = new SignoffStore(tempDir());
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.merged("t1", { commit: "bbbbbbb2" });
+    expect(s.pushCheck()).toMatchObject({ sha: null, blockers: [{ taskId: "t1", state: "noitem", seq: 1 }] });
+    const none = new SignoffStore(tempDir());
+    none.merged("t1", { commit: "aaaaaaa1", signoff: "none" });
+    none.put(item);
+    none.merged("t1", { commit: "bbbbbbb2" });
+    expect(none.pushCheck()).toMatchObject({ sha: "aaaaaaa1", blockers: [{ taskId: "t1", state: "waiting", seq: 2 }] });
+  });
+
   test("fail closed: a merge with no item clears only with signoff none, also on a re-report of the same commit", () => {
     const s = new SignoffStore(tempDir());
     s.merged("quarantine-1", { commit: "aaaaaaa1" });
