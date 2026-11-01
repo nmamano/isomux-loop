@@ -199,7 +199,7 @@ describe("sign-off", () => {
     const s = new SignoffStore(tempDir());
     s.put(item);
     expect(s.visible()).toEqual([]);
-    expect(s.merged("other1", { commit: "aaaaaaa1" })).toEqual({ signoff: false });
+    expect(s.merged("other1", { commit: "aaaaaaa1", signoff: "none" })).toEqual({ signoff: false });
     expect(s.merged("t1", { commit: "bbbbbbb2" })).toEqual({ signoff: true });
     expect(s.visible().map((i) => i.taskId)).toEqual(["t1"]);
     expect(s.meta().lastSha!.commit).toBe("bbbbbbb2");
@@ -211,7 +211,7 @@ describe("sign-off", () => {
     const s = new SignoffStore(tempDir(), () => t++);
     s.put(item);
     s.merged("t1", { commit: "aaaaaaa1" });
-    s.merged("plain", { commit: "bbbbbbb2" });
+    s.merged("plain", { commit: "bbbbbbb2", signoff: "none" });
     // The worker posts the item again after the report: it is unmerged until Main reports again.
     s.put(item);
     expect(s.visible()).toEqual([]);
@@ -236,11 +236,53 @@ describe("sign-off", () => {
     expect([s.get("t1")!.merged!.commit, s.meta().lastSha!.commit]).toEqual([full, full]);
   });
 
+  test("fail closed: a merge reported before its item blocks the push until the item merges and is approved", () => {
+    const s = new SignoffStore(tempDir());
+    s.merged("before", { commit: "aaaaaaa1", signoff: "none" });
+    // Main reports the merge first (23339bea, 2026-11-01): no item yet, so it is not "nothing to sign off".
+    s.merged("t1", { commit: "bbbbbbb2" });
+    s.merged("after", { commit: "ccccccc3", signoff: "none" });
+    expect(s.pushCheck()).toMatchObject({ ok: true, sha: "aaaaaaa1", tasks: ["before"] });
+    expect(s.pushCheck().blockers).toEqual([{ taskId: "t1", state: "noitem", seq: 2, itemPosted: false }]);
+    // The worker posts the item: still blocked until Main reports the merge again.
+    s.put(item);
+    expect(s.pushCheck()).toMatchObject({ sha: "aaaaaaa1", blockers: [{ taskId: "t1", state: "noitem", itemPosted: true }] });
+    s.merged("t1", { commit: "bbbbbbb2" });
+    expect(s.pushCheck()).toMatchObject({ sha: "aaaaaaa1", blockers: [{ taskId: "t1", state: "waiting", seq: 2 }] });
+    s.approve("t1");
+    expect(s.pushCheck()).toMatchObject({ ok: true, sha: "ccccccc3", tasks: ["before", "t1", "after"], blockers: [] });
+  });
+
+  test("fail closed: a merge with no item clears only with signoff none, also on a re-report of the same commit", () => {
+    const s = new SignoffStore(tempDir());
+    s.merged("quarantine-1", { commit: "aaaaaaa1" });
+    expect(s.pushCheck()).toMatchObject({ ok: false, sha: null, blockers: [{ taskId: "quarantine-1", state: "noitem" }] });
+    expect(s.pushCheck().reason).toContain("quarantine-1");
+    expect(() => s.merged("quarantine-1", { commit: "aaaaaaa1", signoff: "maybe" })).toThrow(ValidationError);
+    s.merged("quarantine-1", { commit: "aaaaaaa1", signoff: "none" });
+    expect(s.pushCheck()).toMatchObject({ ok: true, sha: "aaaaaaa1", blockers: [] });
+    // The re-report kept its place: no new sha was recorded.
+    expect(s.unpushedList().map((u) => u.seq)).toEqual([1]);
+    s.merged("quarantine-1", { commit: "aaaaaaa1", signoff: "item" });
+    expect(s.pushCheck().ok).toBe(false);
+  });
+
+  test("an approved item that left at a push go still counts as signed off until the push", () => {
+    const s = new SignoffStore(tempDir());
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.approve("t1");
+    s.recordPushGo("aaaaaaa1");
+    expect(s.get("t1")).toBeUndefined();
+    s.merged("later", { commit: "bbbbbbb2", signoff: "none" });
+    expect(s.pushCheck()).toMatchObject({ sha: "bbbbbbb2", blockers: [] });
+  });
+
   test("push point: everything up to the first item that waits; later approvals wait for the next push", () => {
     const s = new SignoffStore(tempDir());
     for (const id of ["t1", "t2", "t4"]) s.put({ ...item, taskId: id });
     s.merged("t1", { commit: "aaaaaaa1" });
-    s.merged("plain", { commit: "bbbbbbb2" });
+    s.merged("plain", { commit: "bbbbbbb2", signoff: "none" });
     s.merged("t2", { commit: "ccccccc3" });
     s.merged("t4", { commit: "ddddddd4" });
     // t1 waits: nothing before it, so nothing to push.
@@ -264,7 +306,7 @@ describe("sign-off", () => {
   test("push point: an item approved with changes holds it back until its Sign-off changes task merges or closes", () => {
     const s = new SignoffStore(tempDir());
     for (const id of ["t1", "t2"]) s.put({ ...item, taskId: id });
-    s.merged("before", { commit: "aaaaaaa1" });
+    s.merged("before", { commit: "aaaaaaa1", signoff: "none" });
     s.merged("t1", { commit: "bbbbbbb2" });
     s.merged("t2", { commit: "ccccccc3" });
     s.approve("t1", "fix1");
@@ -276,7 +318,7 @@ describe("sign-off", () => {
       { taskId: "t2", state: "edits", seq: 3, edits: "fix2" },
     ]);
     // fix1 merges (Main reports it): t1 and fix1 may go, t2 still waits for fix2.
-    s.merged("fix1", { commit: "ddddddd4" });
+    s.merged("fix1", { commit: "ddddddd4", signoff: "none" });
     expect(s.pushCheck().sha).toBe("bbbbbbb2");
     // fix2 closed on the board (done or obsolete) without a merge: nothing holds back.
     expect(s.pushCheck((id) => id === "fix2")).toMatchObject({ ok: true, sha: "ddddddd4", blockers: [] });
@@ -298,16 +340,16 @@ describe("sign-off", () => {
   test("push point: a rejected merge holds it back until its revert, and no point between them is used", () => {
     const s = new SignoffStore(tempDir());
     s.put(item);
-    s.merged("before", { commit: "aaaaaaa1" });
+    s.merged("before", { commit: "aaaaaaa1", signoff: "none" });
     s.merged("t1", { commit: "bbbbbbb2" });
-    s.merged("after", { commit: "ccccccc3" });
+    s.merged("after", { commit: "ccccccc3", signoff: "none" });
     s.recordReject("t1", "wrong tone");
     expect(s.pushCheck()).toMatchObject({ ok: true, sha: "aaaaaaa1" });
     expect(() => s.put(item)).toThrow(ValidationError);
     s.reverted("t1", { commit: "ddddddd4" });
     // After the revert: up to the revert, never to "after" alone (it holds t1 without its revert).
     expect(s.pushCheck()).toMatchObject({ ok: true, sha: "ddddddd4", tasks: ["before", "after"] });
-    s.merged("later", { commit: "eeeeeee5" });
+    s.merged("later", { commit: "eeeeeee5", signoff: "none" });
     expect(s.pushCheck().sha).toBe("eeeeeee5");
     s.pushed({ commit: "aaaaaaa1" });
     expect(s.pushCheck()).toMatchObject({ sha: "eeeeeee5", tasks: ["after", "later"] });
@@ -316,12 +358,12 @@ describe("sign-off", () => {
   test("commit counts: distinct reported shas up to the push point and since the last push", () => {
     const s = new SignoffStore(tempDir());
     s.put({ ...item, taskId: "w" });
-    s.merged("a", { commit: "aaaaaaa1" });
+    s.merged("a", { commit: "aaaaaaa1", signoff: "none" });
     // A task with no code is reported with the main sha of the time.
-    s.merged("copy", { commit: "aaaaaaa1" });
-    s.merged("b", { commit: "bbbbbbb2" });
+    s.merged("copy", { commit: "aaaaaaa1", signoff: "none" });
+    s.merged("b", { commit: "bbbbbbb2", signoff: "none" });
     s.merged("w", { commit: "ccccccc3" });
-    s.merged("c", { commit: "ddddddd4" });
+    s.merged("c", { commit: "ddddddd4", signoff: "none" });
     expect(s.pushCheck()).toMatchObject({ sha: "bbbbbbb2", tasks: ["a", "copy", "b"], commits: 2, unpushedCommits: 4 });
     s.pushed({ commit: "aaaaaaa1" });
     expect(s.pushCheck()).toMatchObject({ commits: 1, unpushedCommits: 3 });
@@ -331,7 +373,7 @@ describe("sign-off", () => {
     const s = new SignoffStore(tempDir());
     s.put(item);
     s.put({ ...item, taskId: "w" });
-    s.merged("before", { commit: "aaaaaaa1" });
+    s.merged("before", { commit: "aaaaaaa1", signoff: "none" });
     s.merged("t1", { commit: "bbbbbbb2" });
     s.merged("w", { commit: "ccccccc3" });
     s.recordReject("t1", "wrong tone");
@@ -345,13 +387,13 @@ describe("sign-off", () => {
     const s = new SignoffStore(dir);
     s.put(item);
     s.merged("t1", { commit: "aaaaaaa1" });
-    s.merged("plain", { commit: "bbbbbbb2" });
+    s.merged("plain", { commit: "bbbbbbb2", signoff: "none" });
     s.approve("t1");
     s.recordPushGo("bbbbbbb2");
     // The push go alone pushes nothing: Main reports the push.
     expect([...s.unpushedIds()].sort()).toEqual(["plain", "t1"]);
-    s.merged("later", { commit: "ccccccc3" });
-    s.merged("gone", { commit: "ddddddd4" });
+    s.merged("later", { commit: "ccccccc3", signoff: "none" });
+    s.merged("gone", { commit: "ddddddd4", signoff: "none" });
     s.reverted("gone", { commit: "eeeeeee5" });
     expect(() => s.pushed({ commit: "fffffff6" })).toThrow(ValidationError);
     expect(s.pushed({ commit: "bbbbbbb2" }).pushed.sort()).toEqual(["plain", "t1"]);
@@ -379,11 +421,11 @@ describe("sign-off", () => {
 
   test("the unpushed list is in merge order; a merge the last push go included is marked sent", () => {
     const s = new SignoffStore(tempDir());
-    s.merged("a", { commit: "aaaaaaa1" });
-    s.merged("b", { commit: "bbbbbbb2" });
+    s.merged("a", { commit: "aaaaaaa1", signoff: "none" });
+    s.merged("b", { commit: "bbbbbbb2", signoff: "none" });
     expect(s.unpushedList().map((u) => [u.taskId, u.sent])).toEqual([["a", false], ["b", false]]);
     s.recordPushGo("aaaaaaa1");
-    s.merged("c", { commit: "ccccccc3" });
+    s.merged("c", { commit: "ccccccc3", signoff: "none" });
     expect(s.unpushedList().map((u) => [u.taskId, u.sent])).toEqual([["a", true], ["b", false], ["c", false]]);
     s.pushed({ commit: "aaaaaaa1" });
     expect(s.unpushedList().map((u) => u.taskId)).toEqual(["b", "c"]);

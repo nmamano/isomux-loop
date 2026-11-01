@@ -160,6 +160,11 @@ POST /api/signoff/:taskId/merged  Isomux Main after EVERY merge, item or not: {"
                                   current main sha when it closes the task, and the item shows then.
                                   The sha must resolve in main's repository (else 400; reverted too). A re-report of the
                                   task's unpushed commit (its item was posted after the report) keeps its push order.
+                                  Fail closed: a merge with no merged sign-off item holds the push point back (blocker
+                                  "noitem") until its item comes and you report the merge again, or you report it with
+                                  {"commit","signoff":"none"}: nothing to sign off (no copy or visible change, a quarantine
+                                  commit, an ad-hoc branch with nothing for Nil). A re-report of the same commit with
+                                  "signoff":"none" clears a merge you reported without it, and keeps its push order.
 POST /api/signoff/:taskId/scout   Isomux Sign-off Scout: {"verdict":"stamp|look|pushback","reason":"one line (max 300)",
                                   "suggestions":{"copy":{"<entry index>":"comment"},"images":{"<image index>":"comment"}}}
                                   (suggestions optional; a before/after pair has one field, so either image's index

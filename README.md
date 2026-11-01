@@ -2,7 +2,7 @@
 
 A continuous loop for one repo, built on the ideas in my post [The end of agents](https://nilmamano.com/blog/end-of-agents). It dispatched board tasks to worker agents and brought me the decisions: triage, sign-off and push.
 
-The decision pages have since moved into [Isomux](https://github.com/nmamano/isomux) itself, as asks in the Isomux Inbox. That part of this app is obsolete. What remains: dispatch and the hourly tick, the sign-off and push record that the agents report to, and a wake-up that tells the curator about new and changed tasks.
+The decision pages have since moved into [Isomux](https://github.com/nmamano/isomux) itself, as asks in the Isomux Inbox. That part of this app is obsolete. What remains: dispatch and the hourly tick, the sign-off and push record that the agents report to, and a wake-up that tells the curator about new and changed tasks. A merge counts as signed off only through its approved sign-off item, or when Isomux Main reports it with `"signoff":"none"` (nothing to sign off); otherwise it holds the push back.
 
 ## What it did
 
