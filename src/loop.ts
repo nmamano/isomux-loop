@@ -203,7 +203,11 @@ export async function tick(office: Office, n: number, push: string | null = null
   const [tasks, agents] = await Promise.all([office.tasks(), office.agents()]);
   for (const w of workers(agents)) {
     const inLoop = WORKER_NAMES.indexOf(w.name) < n;
-    const held = heldBy(tasks, w).filter((t) => inLoop || DISPATCH_CLASSES.includes(parseTag(t.title)?.class ?? ""));
+    // A task in state nil waits only on Nil's ask: a tick there costs a turn
+    // that only finds the ask still open (board task e76eb0c9, 2026-11-03).
+    const held = heldBy(tasks, w).filter(
+      (t) => (inLoop || DISPATCH_CLASSES.includes(parseTag(t.title)?.class ?? "")) && parseTag(t.title)?.state !== "nil",
+    );
     if (held.length === 0 || w.inFlightTurn) continue;
     if (await office.message(workerTickText(held[0].id), w.id))
       out.nudged.push({ worker: w.name, taskId: held[0].id });

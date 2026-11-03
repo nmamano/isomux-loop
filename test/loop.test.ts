@@ -326,6 +326,16 @@ describe("tick", () => {
     expect(absent.errors).toHaveLength(1);
   });
 
+  test("skips a task that waits on Nil (state nil), and nudges the worker's other task", async () => {
+    const waitsOnNil = task({ title: "[go | nil] waits", status: "in_progress", assignee: "Isomux Worker 1" });
+    const designNil = task({ title: "[design | nil] waits", status: "in_progress", assignee: "Isomux Worker 2" });
+    const other = task({ title: "[go | ready] other", status: "in_progress", assignee: "Isomux Worker 2" });
+    const { office, messages } = stubOffice([waitsOnNil, designNil, other], [agent("Isomux Worker 1"), agent("Isomux Worker 2")]);
+    const res = await tick(office, 2);
+    expect(res.nudged).toEqual([{ worker: "Isomux Worker 2", taskId: other.id }]);
+    expect(messages.map((m) => m.to)).toEqual(["id-Isomux Worker 2"]);
+  });
+
   test("skips Isomux Main when it is busy or absent", async () => {
     const m = task({ title: "[go | merging] three", status: "in_progress" });
     for (const agents of [[agent("Isomux Main", true)], []]) {
