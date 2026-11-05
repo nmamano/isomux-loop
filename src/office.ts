@@ -47,6 +47,11 @@ export interface Office {
   patchTask(id: string, body: Record<string, unknown>): Promise<PatchResult>;
   // Without a target the message goes to the app's configured target.
   message(text: string, targetAgentId?: string): Promise<boolean>;
+  // Clears the agent's conversation (POST /api/agents/:id/new-conversation;
+  // the app has the reach of its privileged owner, Isomux Curator). The
+  // server clears even an agent in a turn, so the caller checks it is idle.
+  // status: the HTTP status, 0 when the request failed.
+  newConversation(agentId: string): Promise<{ ok: boolean; status: number }>;
 }
 
 export function httpOffice(token: string, base = OFFICE): Office {
@@ -122,6 +127,19 @@ export function httpOffice(token: string, base = OFFICE): Office {
       } catch (err) {
         console.error(`message_failed ${String(err)}`);
         return false;
+      }
+    },
+    async newConversation(agentId) {
+      try {
+        const res = await fetch(`${base}/api/agents/${encodeURIComponent(agentId)}/new-conversation`, {
+          method: "POST",
+          headers: { ...auth, "Content-Type": "application/json" },
+          body: "{}",
+        });
+        return { ok: res.ok, status: res.status };
+      } catch (err) {
+        console.error(`new_conversation_failed ${String(err)}`);
+        return { ok: false, status: 0 };
       }
     },
   };

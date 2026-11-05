@@ -80,6 +80,8 @@ export type DispatchResult = {
   conflicts: string[];
   // Ready tasks the server refused because their holder is a killed agent.
   killed: string[];
+  // Free workers left out because they were in a turn: a clear would cut it.
+  inTurn: string[];
   errors: string[];
 };
 
@@ -105,6 +107,10 @@ export function liveAuthor(author: Author | undefined, agents: Agent[]): Agent |
   return agents.find((a) => (author.agentId ? a.id === author.agentId : a.name === author.name));
 }
 
+// Each worker starts its task in a fresh conversation: dispatch clears it
+// first, and leaves out a worker in a turn or one whose clear failed, so no
+// task lands on top of earlier work (Isomux PM, 2026-11-05). The next
+// dispatch tries it again.
 // returnTo: who wrote the task's design packet. Such a task goes back to its
 // author, also a worker above n, and waits while the author holds another
 // task; only a gone author lets another worker take it (task 8307e0fb).
@@ -115,11 +121,27 @@ export async function dispatch(
   floor: string | null = null,
   returnTo: (taskId: string) => Author | undefined = () => undefined,
 ): Promise<DispatchResult> {
-  const out: DispatchResult = { assigned: [], conflicts: [], killed: [], errors: [] };
+  const out: DispatchResult = { assigned: [], conflicts: [], killed: [], inTurn: [], errors: [] };
   const [tasks, agents] = await Promise.all([office.tasks(), office.agents()]);
   const queue = readyQueue(tasks, floor);
   const author = new Map(queue.map((t) => [t.id, liveAuthor(returnTo(t.id), agents)]));
   const busy = new Set(workers(agents).filter((w) => heldBy(tasks, w).length > 0).map((w) => w.id));
+
+  // Clears the worker's conversation once per dispatch; true when it is clear.
+  const cleared = new Map<string, boolean>();
+  async function clear(worker: Agent): Promise<boolean> {
+    const done = cleared.get(worker.id);
+    if (done !== undefined) return done;
+    let ok = false;
+    if (worker.inFlightTurn || worker.pendingPrompt) out.inTurn.push(worker.name);
+    else {
+      const res = await office.newConversation(worker.id);
+      ok = res.ok;
+      if (!ok) out.errors.push(`new conversation for ${worker.name} answered ${res.status}; it gets no task until one succeeds`);
+    }
+    cleared.set(worker.id, ok);
+    return ok;
+  }
 
   // One claim; true when the worker got the task.
   async function claim(worker: Agent, task: Task): Promise<boolean> {
@@ -149,12 +171,14 @@ export async function dispatch(
   // A free author takes its own task first, before any new one.
   for (const task of queue) {
     const w = author.get(task.id);
-    if (w && !busy.has(w.id)) await claim(w, task);
+    if (w && !busy.has(w.id) && (await clear(w))) await claim(w, task);
   }
   // The rest go in queue order; a task whose author lives waits for it.
   const rest = queue.filter((t) => !author.get(t.id));
   for (const worker of freeWorkers(agents, tasks, n)) {
     if (busy.has(worker.id)) continue;
+    if (rest.length === 0) break;
+    if (!(await clear(worker))) continue;
     while (rest.length > 0) if (await claim(worker, rest.shift()!)) break;
   }
   return out;

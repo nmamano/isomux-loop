@@ -18,6 +18,9 @@ function agent(name: string, busy = false): Agent {
 function stubOffice(tasks: Task[], agents: Agent[], conflict: string[] = [], edits: Record<string, number> = {}, brokenHistory = "", killed: string[] = []) {
   const messages: { text: string; to?: string }[] = [];
   const patches: { id: string; body: Record<string, unknown> }[] = [];
+  // Every clear, claim and message in order; clearStatus makes a clear fail.
+  const calls: string[] = [];
+  const clearStatus: Record<string, number> = {};
   const office: Office = {
     tasks: async () => tasks.map((t) => ({ ...t })),
     allTasks: async () => tasks.map((t) => ({ ...t })),
@@ -34,6 +37,7 @@ function stubOffice(tasks: Task[], agents: Agent[], conflict: string[] = [], edi
     agents: async () => agents,
     async patchTask(id, body): Promise<PatchResult> {
       patches.push({ id, body });
+      calls.push(`claim ${id} ${String(body.assignee)}`);
       if (conflict.includes(id)) return { ok: false, status: 409 };
       if (killed.includes(id)) return { ok: false, status: 409, killed: true };
       const t = tasks.find((x) => x.id === id)!;
@@ -43,10 +47,16 @@ function stubOffice(tasks: Task[], agents: Agent[], conflict: string[] = [], edi
     },
     async message(text, to) {
       messages.push({ text, to });
+      calls.push(`message ${to}`);
       return true;
     },
+    async newConversation(id) {
+      calls.push(`clear ${id}`);
+      const status = clearStatus[id] ?? 204;
+      return { ok: status === 204, status };
+    },
   };
-  return { office, messages, patches };
+  return { office, messages, patches, calls, clearStatus };
 }
 
 describe("tags", () => {
@@ -161,6 +171,60 @@ describe("dispatch", () => {
     const { office, messages } = stubOffice([a, held], agents);
     expect((await dispatch(office, 2)).assigned).toEqual([]);
     expect(messages).toEqual([]);
+  });
+
+  test("each worker's conversation is cleared once, before its claim and its message; with no ready task, nobody is cleared", async () => {
+    const a = task({ title: "[go | ready] A", priority: "P1" });
+    const b = task({ title: "[go | ready] B", priority: "P2" });
+    const c = task({ title: "[go | ready] C", priority: "P3" });
+    const { office, calls } = stubOffice([a, b, c], [agent("Isomux Worker 1"), agent("Isomux Worker 2")], [a.id]);
+    await dispatch(office, 2, NOW);
+    // Worker 1 loses A to a 409 and takes B without a second clear.
+    expect(calls).toEqual([
+      "clear id-Isomux Worker 1",
+      `claim ${a.id} Isomux Worker 1`,
+      `claim ${b.id} Isomux Worker 1`,
+      "message id-Isomux Worker 1",
+      "clear id-Isomux Worker 2",
+      `claim ${c.id} Isomux Worker 2`,
+      "message id-Isomux Worker 2",
+    ]);
+    const idle = stubOffice([task({ title: "[design | nil] D" })], [agent("Isomux Worker 1")]);
+    await dispatch(idle.office, 2, NOW);
+    expect(idle.calls).toEqual([]);
+  });
+
+  test("a free worker in a turn or on a pending prompt is not cleared and gets no task; the next free worker takes it", async () => {
+    const a = task({ title: "[go | ready] A", priority: "P1" });
+    const prompted = { ...agent("Isomux Worker 2"), pendingPrompt: "permission" };
+    const { office, calls } = stubOffice([a], [agent("Isomux Worker 1", true), prompted, agent("Isomux Worker 3")]);
+    const res = await dispatch(office, 3, NOW);
+    expect(res.inTurn).toEqual(["Isomux Worker 1", "Isomux Worker 2"]);
+    expect(calls).toEqual(["clear id-Isomux Worker 3", `claim ${a.id} Isomux Worker 3`, "message id-Isomux Worker 3"]);
+  });
+
+  test("a failed clear leaves the worker without a task, reports the status, and the next worker takes it", async () => {
+    const a = task({ title: "[go | ready] A", priority: "P1" });
+    const { office, calls, clearStatus } = stubOffice([a], [agent("Isomux Worker 1"), agent("Isomux Worker 2")]);
+    clearStatus["id-Isomux Worker 1"] = 403;
+    const res = await dispatch(office, 2, NOW);
+    expect(res.errors.length).toBe(1);
+    expect(res.errors[0]).toContain("Isomux Worker 1");
+    expect(res.errors[0]).toContain("403");
+    expect(res.assigned).toEqual([{ worker: "Isomux Worker 2", taskId: a.id, messaged: true }]);
+    expect(calls).toEqual(["clear id-Isomux Worker 1", "clear id-Isomux Worker 2", `claim ${a.id} Isomux Worker 2`, "message id-Isomux Worker 2"]);
+  });
+
+  test("a task back to its author: the author is cleared first; an author in a turn keeps it waiting", async () => {
+    const own = task({ title: "[go | ready] own", priority: "P1" });
+    const back = (id: string) => (id === own.id ? { name: "Isomux Worker 1" } : undefined);
+    const free = stubOffice([own], [agent("Isomux Worker 1"), agent("Isomux Worker 2")]);
+    await dispatch(free.office, 2, NOW, null, back);
+    expect(free.calls).toEqual(["clear id-Isomux Worker 1", `claim ${own.id} Isomux Worker 1`, "message id-Isomux Worker 1"]);
+    const again = task({ title: "[go | ready] own", priority: "P1" });
+    const turn = stubOffice([again], [agent("Isomux Worker 1", true), agent("Isomux Worker 2")]);
+    const res = await dispatch(turn.office, 2, NOW, null, (id) => (id === again.id ? { name: "Isomux Worker 1" } : undefined));
+    expect([res.inTurn, turn.calls]).toEqual([["Isomux Worker 1"], []]);
   });
 
   test("a 409 skips the task and the worker takes the next one", async () => {
