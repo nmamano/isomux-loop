@@ -53,8 +53,8 @@ export interface Office {
   // status: the HTTP status, 0 when the request failed.
   newConversation(agentId: string): Promise<{ ok: boolean; status: number }>;
   // The agent's provider usage windows (GET /api/agents/:id/subscription);
-  // agents on one account share them. Needs isomux task 888b7b61 (apps may
-  // read usage); until then the office answers 403 and this throws.
+  // agents on one account share them. The app token reaches it with its
+  // owner's reach (read live 2026-11-06).
   subscription?(agentId: string): Promise<UsageReading>;
 }
 
