@@ -1,4 +1,4 @@
-import { ANNOUNCE_UNTAGGED, NEW_TASKS_MS, CLASSIFY_MS, MAIN_REPO, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, SCOUT_NAME, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS } from "./config";
+import { ANNOUNCE_UNTAGGED, NEW_TASKS_MS, CLASSIFY_MS, MAIN_REPO, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, SCOUT_NAME, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS, USAGE_MS } from "./config";
 import { ClosedTimes } from "./closed-times";
 import { type ImageDir } from "./images";
 import { dispatch, dueIn, offBoard, parseTag, proposalRefusal, pushToWake, staleCards, status, tick, unclassified, unrecommended, wakeText, type DispatchResult, type Status, type TickResult, withdrawLine } from "./loop";
@@ -11,6 +11,7 @@ import { PacketStore, packetState } from "./packets";
 import { NewTasks, type NewTasksRun } from "./new-tasks";
 import { PauseFlag } from "./pause";
 import { ScoutQueue, scoutText } from "./scout-queue";
+import { fiveHour, UsageGuard, type GuardRun } from "./usage-guard";
 import { type Author, packetAuthor, Returns } from "./returns";
 import { sendDueReverts, SignoffStore, signoffState, undoDecision, withAudience } from "./signoff";
 import { belowFloor, classify, holdTask, stateViews, type Card, type HoldTask, type StateKey, type StateView } from "./states";
@@ -148,6 +149,10 @@ POST /api/settings                {"workers": 1-6, "minPriority": "P0"-"P3" | nu
                                   keeps its tick while it holds a loop task. minPriority: dispatch takes only ready tasks at that
                                   priority or higher ("P1": P0 and P1); null (the default) takes every priority. GET /api/status
                                   gives both; board.belowFloor and board.states.ready.belowFloor count the ready tasks the floor holds back.
+                                  The 5-hour guard (Nil, 2026-11-06) sets workers too: every 5 minutes it reads the 5-hour usage
+                                  window; at 75% with more than an hour left it lowers workers to 2, at 90% to 1, and after the
+                                  reset it puts back the count it saved. A count set by hand meanwhile wins. GET /api/status
+                                  usage: last reading, lowered (saved, to, until), log of its changes.
 POST /api/dispatch | /api/tick    run one now (both refuse while paused)
 Smart dispatch (Nil, 2026-11-06): a task names the code areas it changes in one description line,
                                   "Areas: server/agent-manager, ui/chat" (comma-separated; two areas overlap when equal or one is a
@@ -391,6 +396,31 @@ function flushScout(): Promise<string[]> {
 
 setInterval(() => void runDispatch(), DISPATCH_MS);
 
+// The 5-hour guard (usage-guard.ts), also while paused: a reset puts back the
+// count it saved. It reads Isomux Main's windows; agents on one account
+// share them.
+const usageGuard = new UsageGuard(dataDir);
+let lastUsage: GuardRun | null = null;
+async function runUsageGuard(): Promise<void> {
+  const at = Date.now();
+  try {
+    const main = (await office.agents()).find((a) => a.name === MAIN_NAME);
+    if (!main) throw new Error(`${MAIN_NAME} is not in the office`);
+    const w = fiveHour(await office.subscription!(main.id));
+    const step = usageGuard.step(w, pause.workers, at);
+    if (step) {
+      pause.update({ workers: step.set });
+      statusCache = null;
+      console.log(`usage guard: workers ${step.set} (${step.why})`);
+    }
+    lastUsage = { at, ...(w ? { usedPercent: w.usedPercent, resetsAtMs: w.resetsAtMs } : { error: "no 5-hour window in the reading" }), ...(step ? { set: step.set } : {}) };
+  } catch (err) {
+    lastUsage = { at, error: String(err instanceof Error ? err.message : err) };
+  }
+}
+setTimeout(() => void runUsageGuard(), 15_000);
+setInterval(() => void runUsageGuard(), USAGE_MS);
+
 // Held revert requests go to Main when due (a rejection's undo window).
 let revertsBusy = false;
 setInterval(async () => {
@@ -508,7 +538,7 @@ async function loopStatus(): Promise<Record<string, unknown>> {
     error = String(err instanceof Error ? err.message : err);
   }
   const signoffWaiting = signoff.visible().filter((i) => signoffState(i) === "waiting").length;
-  return { paused: pause.paused, pausedSince: pause.since, workers: pause.workers, minPriority: pause.minPriority, batchAsks: pause.batchAsks, lastDispatch, lastTick, lastClassify, lastNewTasks, board, error, signoffWaiting };
+  return { paused: pause.paused, pausedSince: pause.since, workers: pause.workers, minPriority: pause.minPriority, batchAsks: pause.batchAsks, usage: { last: lastUsage, lowered: usageGuard.lowered, log: usageGuard.log.slice(-10) }, lastDispatch, lastTick, lastClassify, lastNewTasks, board, error, signoffWaiting };
 }
 
 // --- backlog -------------------------------------------------------------------

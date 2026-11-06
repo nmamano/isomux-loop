@@ -52,7 +52,15 @@ export interface Office {
   // server clears even an agent in a turn, so the caller checks it is idle.
   // status: the HTTP status, 0 when the request failed.
   newConversation(agentId: string): Promise<{ ok: boolean; status: number }>;
+  // The agent's provider usage windows (GET /api/agents/:id/subscription);
+  // agents on one account share them. Needs isomux task 888b7b61 (apps may
+  // read usage); until then the office answers 403 and this throws.
+  subscription?(agentId: string): Promise<UsageReading>;
 }
+
+export type UsageReading =
+  | { available: true; windows: { label: string; usedPercent: number; resetsAtMs: number | null }[] }
+  | { available: false; reason?: string };
 
 export function httpOffice(token: string, base = OFFICE): Office {
   const auth = { Authorization: `Bearer ${token}` };
@@ -129,6 +137,7 @@ export function httpOffice(token: string, base = OFFICE): Office {
         return false;
       }
     },
+    subscription: (agentId) => getJson<UsageReading>(`/api/agents/${encodeURIComponent(agentId)}/subscription`),
     async newConversation(agentId) {
       try {
         const res = await fetch(`${base}/api/agents/${encodeURIComponent(agentId)}/new-conversation`, {

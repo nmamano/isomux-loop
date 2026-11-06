@@ -857,10 +857,19 @@ function renderStatus() {
     (s.paused && s.pausedSince ? '<div class="small">since ' + clock(s.pausedSince) + "</div>" : "") +
     '</div><span><button class="btn ghost" data-pause="' + (s.paused ? "resume" : "pause") + '"' + tip(s.paused ? "resume" : "pause") + ">" +
     (s.paused ? "Resume" : "Pause") + "</button> " + q("pause") + "</span></div>" + helpBox(["pause", "resume"], "pause");
+  // The 5-hour guard: the last reading, and its changes (newest first).
+  function usageLine(u) {
+    if (!u) return "";
+    const l = u.last;
+    let out = "<br>5-hour window: " + (!l ? "not read yet" : l.error ? '<span class="warn">' + esc(l.error) + "</span>" : l.usedPercent + "% used" + (l.resetsAtMs ? ", resets " + clock(l.resetsAtMs) : ""));
+    if (u.lowered) out += " · lowered from " + u.lowered.saved + " until the reset";
+    for (const e of (u.log || []).slice(-3).reverse()) out += "<br>" + clock(e.at) + ": workers " + e.from + " to " + e.to + ", " + esc(e.why);
+    return out;
+  }
   h += '<div class="row"><span class="label"' + tip("pairs") + ">Worker/reviewer pairs " + q("pairs") + "</span>" +
     helpBox(["pairs"], "pairs") +
     [1, 2, 3, 4, 5, 6].map((n) => '<button class="chip' + (n === s.workers ? " on" : "") + '" data-workers="' + n + '"' + tip("pairs") + ">" + n + "</button>").join("") +
-    '<div class="small">The loop dispatches to Workers 1 to ' + s.workers + ". Lowering it takes no task away.</div></div>";
+    '<div class="small">The loop dispatches to Workers 1 to ' + s.workers + ". Lowering it takes no task away." + usageLine(s.usage) + "</div></div>";
   h += '<div class="row"><span class="label"' + tip("floor") + ">Priorities " + q("floor") + "</span>" +
     helpBox(["floor"], "floor") +
     [[null, "All"], ["P0", "P0"], ["P1", "P0-P1"], ["P2", "P0-P2"]]

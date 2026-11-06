@@ -17,6 +17,8 @@ export const MAIN_REPO = "/home/nil/nil/isomux";
 export const SCOUT_NAME = "Isomux Sign-off Scout";
 
 export const DISPATCH_MS = 2 * 60_000;
+// The 5-hour guard reads the usage window this often (usage-guard.ts).
+export const USAGE_MS = 5 * 60_000;
 export const TICK_MS = 60 * 60_000;
 // Nil decides in bursts; the curator hears once he has paused this long.
 export const TRIAGE_QUIET_MS = 3 * 60_000;
