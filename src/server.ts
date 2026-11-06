@@ -149,6 +149,11 @@ POST /api/settings                {"workers": 1-6, "minPriority": "P0"-"P3" | nu
                                   priority or higher ("P1": P0 and P1); null (the default) takes every priority. GET /api/status
                                   gives both; board.belowFloor and board.states.ready.belowFloor count the ready tasks the floor holds back.
 POST /api/dispatch | /api/tick    run one now (both refuse while paused)
+Smart dispatch (Nil, 2026-11-06): a task names the code areas it changes in one description line,
+                                  "Areas: server/agent-manager, ui/chat" (comma-separated; two areas overlap when equal or one is a
+                                  folder of the other). Dispatch does not start a ready task whose areas overlap a task in progress
+                                  or merging: it sets the task to [<class> | waits for <id>], and back to ready when no such task is
+                                  left. A task with no Areas line overlaps nothing. GET /api/status board.areaWaits lists them.
 POST /api/classify                run the curator wake now: every 10 minutes, also while paused, open P0-P3 tasks with no tag
                                   and no card go to the curator to propose, and backlog (P4, no card) tasks with no
                                   recommendation and not kept go to it to recommend, in one message (a task is announced

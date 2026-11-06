@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ageLine, dispatch, dueIn, freeWorkers, holdings, parseTag, proposalRefusal, pushToWake, readyQueue, staleCards, status, tick, unclassified, unrecommended, wakeText, withdrawLine } from "../src/loop";
+import { ageLine, areasOf, areasOverlap, dispatch, dueIn, freeWorkers, holdings, parseTag, proposalRefusal, pushToWake, readyQueue, staleCards, status, tick, unclassified, unrecommended, wakeText, withdrawLine } from "../src/loop";
 import type { Agent, Office, PatchResult, Task } from "../src/office";
 import type { Author } from "../src/returns";
 
@@ -37,6 +37,13 @@ function stubOffice(tasks: Task[], agents: Agent[], conflict: string[] = [], edi
     agents: async () => agents,
     async patchTask(id, body): Promise<PatchResult> {
       patches.push({ id, body });
+      if (body.title !== undefined) {
+        calls.push(`retitle ${id}`);
+        const t = tasks.find((x) => x.id === id)!;
+        if (conflict.includes(id) || body.version !== t.version) return { ok: false, status: 409 };
+        Object.assign(t, { title: body.title, version: t.version + "+" });
+        return { ok: true, task: t };
+      }
       calls.push(`claim ${id} ${String(body.assignee)}`);
       if (conflict.includes(id)) return { ok: false, status: 409 };
       if (killed.includes(id)) return { ok: false, status: 409, killed: true };
@@ -344,6 +351,74 @@ describe("worker count", () => {
     const res = await tick(office, 1);
     expect(res.nudged.map((x) => x.worker)).toEqual(["Isomux Worker 1", "Isomux Worker 2"]);
     expect(messages.some((m) => m.to === "id-Isomux Worker 3")).toBe(false);
+  });
+});
+
+describe("smart dispatch", () => {
+  const areas = (a: string) => `Some text.\nAreas: ${a}\n`;
+
+  test("areas: one description line, comma-separated; equal or folder-of overlaps", () => {
+    expect(areasOf(task({ title: "x", description: "Why.\n  areas: Server/Agent-Manager/, ./ui/chat\nMore." }))).toEqual(["server/agent-manager", "ui/chat"]);
+    expect(areasOf(task({ title: "x", description: "No areas named." }))).toEqual([]);
+    expect(areasOverlap(["server"], ["server/agent-manager.ts"])).toBe(true);
+    expect(areasOverlap(["server/agent-manager"], ["server/agent-manager"])).toBe(true);
+    expect(areasOverlap(["server/agent"], ["server/agent-manager"])).toBe(false);
+    expect(areasOverlap(["ui/chat"], ["server/chat"])).toBe(false);
+  });
+
+  test("a ready task that overlaps a task in progress waits, with the reason in its tag; an unrelated one starts", async () => {
+    const running = task({ title: "[go | ready] refactor A", status: "in_progress", assignee: "Isomux Worker 1", description: areas("server/agent-manager") });
+    const merging = task({ title: "[go | merging] B", status: "in_progress", description: areas("ui/chat") });
+    const same = task({ title: "[go | ready] refactor C", priority: "P0", description: areas("server/agent-manager/queue.ts") });
+    const chat = task({ title: "[design | ready] D", description: areas("ui") });
+    const free = task({ title: "[go | ready] E", description: areas("server/tasks") });
+    const { office } = stubOffice([running, merging, same, chat, free], [agent("Isomux Worker 1"), agent("Isomux Worker 2"), agent("Isomux Worker 3")]);
+    const res = await dispatch(office, 3);
+    expect(res.assigned.map((a) => a.taskId)).toEqual([free.id]);
+    expect(res.waits).toEqual([
+      { taskId: same.id, blocker: running.id },
+      { taskId: chat.id, blocker: merging.id },
+    ]);
+    expect(same.title).toBe(`[go | waits for ${running.id}] refactor C`);
+    expect(chat.title).toBe(`[design | waits for ${merging.id}] D`);
+    expect(same.status).toBe("open");
+  });
+
+  test("two ready tasks that overlap: the first starts, the other stays ready and waits from the next run", async () => {
+    const one = task({ title: "[go | ready] one", description: areas("server") });
+    const two = task({ title: "[go | ready] two", description: areas("server/x") });
+    const tasks = [one, two];
+    const { office } = stubOffice(tasks, [agent("Isomux Worker 1"), agent("Isomux Worker 2")]);
+    expect((await dispatch(office, 2)).assigned.map((a) => a.taskId)).toEqual([one.id]);
+    expect(two.title).toBe("[go | ready] two");
+    expect((await dispatch(office, 2)).waits).toEqual([{ taskId: two.id, blocker: one.id }]);
+  });
+
+  test("a waiting task goes back to ready when its blocker leaves, or names the new one", async () => {
+    const a = task({ title: "[go | ready] A", status: "in_progress", assignee: "Isomux Worker 1", description: areas("server") });
+    const w = task({ title: `[go | waits for ${a.id}] W`, description: areas("server/x") });
+    const tasks = [a, w];
+    const { office } = stubOffice(tasks, [agent("Isomux Worker 1"), agent("Isomux Worker 2")]);
+    // Still running: nothing changes.
+    const still = await dispatch(office, 2);
+    expect([still.waits, still.readied, still.assigned]).toEqual([[], [], []]);
+    // A merged; another overlapping task runs now: W names it.
+    a.status = "done";
+    const b = task({ title: "[go | ready] B", status: "in_progress", assignee: "Isomux Worker 1", description: areas("server/x/y.ts") });
+    tasks.push(b);
+    expect((await dispatch(office, 2)).waits).toEqual([{ taskId: w.id, blocker: b.id }]);
+    // B done too: W is ready again, and the next run gives it out.
+    b.status = "done";
+    expect((await dispatch(office, 2)).readied).toEqual([w.id]);
+    expect(w.title).toBe("[go | ready] W");
+    expect((await dispatch(office, 2)).assigned.map((x) => x.taskId)).toEqual([w.id]);
+  });
+
+  test("a task without an Areas line neither waits nor holds another back", async () => {
+    const running = task({ title: "[go | ready] A", status: "in_progress", assignee: "Isomux Worker 1" });
+    const r = task({ title: "[go | ready] R", description: areas("server") });
+    const { office } = stubOffice([running, r], [agent("Isomux Worker 1"), agent("Isomux Worker 2")]);
+    expect((await dispatch(office, 2)).assigned.map((a) => a.taskId)).toEqual([r.id]);
   });
 });
 

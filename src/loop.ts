@@ -40,6 +40,56 @@ export function readyQueue(tasks: Task[], floor: string | null = null): Task[] {
     .sort((a, b) => (a.priority ?? "").localeCompare(b.priority ?? "") || a.createdAt - b.createdAt);
 }
 
+// Smart dispatch (Nil, 2026-11-06, board task 168fe215): two tasks that
+// change the same code area do not run at once. A task names its areas in
+// one description line, "Areas: server/agent-manager, ui/chat" (paths or
+// short names, comma-separated); the Curator writes it at triage, a worker
+// may correct it. Two areas overlap when they are equal or one is a folder
+// of the other. A task with no Areas line overlaps nothing.
+export function areasOf(t: Task): string[] {
+  const m = (t.description ?? "").match(/^[ \t]*areas:[ \t]*(.*)$/im);
+  if (!m) return [];
+  return m[1]
+    .split(",")
+    .map((a) => a.trim().toLowerCase().replace(/^\.\//, "").replace(/\/+$/, ""))
+    .filter(Boolean);
+}
+
+export function areasOverlap(a: string[], b: string[]): boolean {
+  return a.some((x) => b.some((y) => x === y || x.startsWith(y + "/") || y.startsWith(x + "/")));
+}
+
+// The tasks a new task must not overlap: held (in progress) or merging.
+function active(tasks: Task[]): Task[] {
+  return tasks.filter((t) => inRoom(t) && (t.status === "in_progress" || parseTag(t.title)?.state === "merging"));
+}
+
+// The first of others that shares an area with t, or undefined.
+export function blockerOf(t: Task, others: Task[]): Task | undefined {
+  const mine = areasOf(t);
+  if (!mine.length) return undefined;
+  return others.find((x) => x.id !== t.id && areasOverlap(mine, areasOf(x)));
+}
+
+// The state dispatch gives a ready task that waits for an overlapping task,
+// and takes back to ready when that task is no longer in progress.
+const WAITS = /^waits for (\S+)$/;
+export const waitsState = (id: string) => `waits for ${id}`;
+
+export function retag(title: string, state: string): string {
+  const t = parseTag(title)!;
+  return `[${t.class} | ${state}] ${t.rest}`;
+}
+
+// Open loop tasks that dispatch set to wait, with the blocker they name.
+export function areaWaits(tasks: Task[]): { task: Task; blocker: string }[] {
+  return tasks.flatMap((t) => {
+    const tag = parseTag(t.title);
+    const m = tag && DISPATCH_CLASSES.includes(tag.class) ? tag.state.match(WAITS) : null;
+    return m && inRoom(t) && t.status === "open" && !t.assignee ? [{ task: t, blocker: m[1] }] : [];
+  });
+}
+
 export type Holding = { worker: Agent; task: Task };
 
 // Workers 1..n that exist; all of them when n is omitted.
@@ -82,6 +132,10 @@ export type DispatchResult = {
   killed: string[];
   // Free workers left out because they were in a turn: a clear would cut it.
   inTurn: string[];
+  // Ready tasks set to wait for an overlapping task, and waiting tasks set
+  // back to ready (smart dispatch).
+  waits?: { taskId: string; blocker: string }[];
+  readied?: string[];
   errors: string[];
 };
 
@@ -121,9 +175,35 @@ export async function dispatch(
   floor: string | null = null,
   returnTo: (taskId: string) => Author | undefined = () => undefined,
 ): Promise<DispatchResult> {
-  const out: DispatchResult = { assigned: [], conflicts: [], killed: [], inTurn: [], errors: [] };
+  const out: DispatchResult = { assigned: [], conflicts: [], killed: [], inTurn: [], waits: [], readied: [], errors: [] };
   const [tasks, agents] = await Promise.all([office.tasks(), office.agents()]);
-  const queue = readyQueue(tasks, floor);
+  const running = active(tasks);
+
+  // Smart dispatch: the state part of the tag says why a task waits, and
+  // follows the board. A 409 means someone changed the task: the next run
+  // reads it again.
+  async function setState(t: Task, state: string): Promise<boolean> {
+    const res = await office.patchTask(t.id, { version: t.version, title: retag(t.title, state) });
+    if (!res.ok && res.status !== 409) out.errors.push(`PATCH ${t.id} (state ${state}) answered ${res.status}`);
+    return res.ok;
+  }
+  for (const { task, blocker } of areaWaits(tasks)) {
+    const b = blockerOf(task, running);
+    if (!b) {
+      if (await setState(task, "ready")) out.readied!.push(task.id);
+    } else if (b.id !== blocker && (await setState(task, waitsState(b.id)))) out.waits!.push({ taskId: task.id, blocker: b.id });
+  }
+  const parked = new Set<string>();
+  for (const t of readyQueue(tasks)) {
+    const b = blockerOf(t, running);
+    if (!b) continue;
+    parked.add(t.id);
+    if (await setState(t, waitsState(b.id))) out.waits!.push({ taskId: t.id, blocker: b.id });
+  }
+  const queue = readyQueue(tasks, floor).filter((t) => !parked.has(t.id));
+  // Tasks this run gave out: a later task that overlaps one stays ready, and
+  // the next run sets it to wait.
+  const given: Task[] = [];
   const author = new Map(queue.map((t) => [t.id, liveAuthor(returnTo(t.id), agents)]));
   const busy = new Set(workers(agents).filter((w) => heldBy(tasks, w).length > 0).map((w) => w.id));
 
@@ -159,6 +239,7 @@ export async function dispatch(
       return false;
     }
     busy.add(worker.id);
+    given.push(task);
     // An unreadable history leaves the edit out, not the dispatch.
     const edited = await office.lastEdited(task.id).catch(() => undefined);
     const text = `/isomux-loop-worker ${task.id}\n${task.title}\n${ageLine(task.createdAt, edited, now)}`;
@@ -171,7 +252,7 @@ export async function dispatch(
   // A free author takes its own task first, before any new one.
   for (const task of queue) {
     const w = author.get(task.id);
-    if (w && !busy.has(w.id) && (await clear(w))) await claim(w, task);
+    if (w && !busy.has(w.id) && !blockerOf(task, given) && (await clear(w))) await claim(w, task);
   }
   // The rest go in queue order; a task whose author lives waits for it.
   const rest = queue.filter((t) => !author.get(t.id));
@@ -179,7 +260,10 @@ export async function dispatch(
     if (busy.has(worker.id)) continue;
     if (rest.length === 0) break;
     if (!(await clear(worker))) continue;
-    while (rest.length > 0) if (await claim(worker, rest.shift()!)) break;
+    while (rest.length > 0) {
+      const t = rest.shift()!;
+      if (!blockerOf(t, given) && (await claim(worker, t))) break;
+    }
   }
   return out;
 }
@@ -260,6 +344,9 @@ export type Status = {
   holding: { worker: string; task: Task }[];
   freeWorkers: string[];
   merging: Task[];
+  // Tasks that wait for an overlapping task (smart dispatch): id, the
+  // blocker, and the task's areas.
+  areaWaits: { id: string; blocker: string; areas: string[] }[];
 };
 
 export function status(
@@ -281,6 +368,7 @@ export function status(
     holding: holdings(agents, tasks).map((h) => ({ worker: h.worker.name, task: h.task })),
     freeWorkers: freeWorkers(agents, tasks, n).map((w) => w.name),
     merging: withState(tasks, "merging"),
+    areaWaits: areaWaits(tasks).map(({ task, blocker }) => ({ id: task.id, blocker, areas: areasOf(task) })),
   };
 }
 
