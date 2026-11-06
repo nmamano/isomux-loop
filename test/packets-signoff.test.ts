@@ -253,6 +253,19 @@ describe("sign-off", () => {
     expect(s.pushCheck()).toMatchObject({ ok: true, sha: "ccccccc3", tasks: ["before", "t1", "after"], blockers: [] });
   });
 
+  test("a new item for a task keeps its images unless told to clear them", () => {
+    const dir = tempDir();
+    const s = new SignoffStore(dir);
+    s.put(item);
+    const file = join(dir, "images", "signoff", "t1", s.addImage("t1", PNG, "slice 1").file);
+    const again = s.put({ ...item, title: "Parts 1-4" });
+    expect([again.title, again.images.map((i) => i.caption), existsSync(file)]).toEqual(["Parts 1-4", ["slice 1"], true]);
+    expect(new SignoffStore(dir).get("t1")!.images.map((i) => i.caption)).toEqual(["slice 1"]);
+    expect(s.addImage("t1", PNG, "slice 2").file).not.toBe(again.images[0].file);
+    const cleared = s.put({ ...item, clearImages: true });
+    expect([cleared.images.length, existsSync(file)]).toEqual([0, false]);
+  });
+
   test("fail closed: one item for two merges of a task holds the push back from the first merge until approved", () => {
     const s = new SignoffStore(tempDir());
     s.merged("before", { commit: "aaaaaaa1", signoff: "none" });

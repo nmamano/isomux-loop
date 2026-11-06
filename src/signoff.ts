@@ -231,7 +231,9 @@ export class SignoffStore {
   }
 
   // A new post replaces the task's item, unless Nil rejected it and Main has
-  // not reverted it yet: that revert must happen first.
+  // not reverted it yet: that revert must happen first. It keeps the old
+  // item's images unless the body says "clearImages": true (as packets do;
+  // board task a3a7f8b0: a worker cannot read an image back to post it again).
   put(raw: unknown): SignoffItem {
     const r = (raw ?? {}) as Record<string, unknown>;
     const taskId = checkTaskId(text(r.taskId, "taskId", 64));
@@ -255,13 +257,13 @@ export class SignoffStore {
           ...(x.audience ? { audience: x.audience as Audience } : {}),
         });
       }),
-      images: [],
+      images: r.clearImages === true ? [] : (old?.images ?? []),
       postedAt: this.now(),
       merged: null,
       decision: null,
       reverted: null,
     };
-    this.images.clear(taskId);
+    if (r.clearImages === true || !old) this.images.clear(taskId);
     this.state.items[taskId] = item;
     this.save();
     return item;
