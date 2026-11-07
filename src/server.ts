@@ -211,7 +211,8 @@ GET  /api/signoff                 merged items, the merges not pushed yet (unpus
                                   the rejected merge and its revert is used. The push go names push.sha, never main's tip.
 Nil's buttons on the Sign-off tab: approve (optional {"note"}; with a note or comments on any entry it also files a P0
 "[go | ready] Sign-off changes: <title>" task with them, and the item holds the push point back, as a blocker with
-state "edits", until that task's merge is reported or the task is closed);
+state "edits", until that task's merge is reported or the task is closed; a new item for the task, a re-merge or an
+undo keeps that hold, so the next approval waits for it too);
 reject (a note, plus any comments; the app messages Main "/isomux-main revert ..." a minute later, and the item's
 "revertIn" counts down to it); undo (an approval until the push go, a rejection until Main gets the revert request;
 an unstarted Sign-off changes task the approval filed is closed as obsolete, a started one stays and "edits" says

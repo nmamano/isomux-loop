@@ -1630,11 +1630,16 @@ function pushBanner(goes) {
     helpBox(["push", "pushPoint", "sha"], "push") + '<div class="err" data-err="push"></div>'
   );
 }
+// The Sign-off changes task an approved item waits for: its own, or one an
+// earlier decision on the task filed (holds).
+function editsOf(it) {
+  return (it.decision && it.decision.edits) || (it.holds && it.holds[0]) || null;
+}
 function pushCard({ t, u, it }, waitsFor) {
   const approved = it && it.state === "approved";
   const status = approved
-    ? it.decision.edits
-      ? '<span class="ok"' + tip("editsFiled") + ">Approved, changes filed: task " + idLink(it.decision.edits) + "</span>"
+    ? editsOf(it)
+      ? '<span class="ok"' + tip("editsFiled") + ">Approved, changes filed: task " + idLink(editsOf(it)) + "</span>"
       : '<span class="ok"' + tip("approvedSign") + ">Approved</span>"
     : u && u.sent ? "<span" + tip("sentPush") + ">Push sent, waiting for Isomux Main</span>"
     : "<span" + tip("nothingToSign") + ">Nothing to sign off</span>";
@@ -1680,8 +1685,8 @@ function renderSignoff() {
     const waiting = it.state === "waiting";
     const stateText =
       it.state === "approved"
-        ? it.decision.edits
-          ? '<span class="ok"' + tip("editsFiled") + ">Approved, changes filed: task " + idLink(it.decision.edits) + "</span>"
+        ? editsOf(it)
+          ? '<span class="ok"' + tip("editsFiled") + ">Approved, changes filed: task " + idLink(editsOf(it)) + "</span>"
           : '<span class="ok"' + tip("approvedSign") + ">Approved</span>"
       : it.state === "rejected" && revertDeadlines[it.taskId]
         ? '<span class="warn"' + tip("rejectHeld") + ">Rejected, Isomux Main gets the revert in " + countdown(revertDeadlines[it.taskId]) + ": " + esc(it.decision.note) +
@@ -2016,7 +2021,7 @@ document.addEventListener("click", async (e) => {
       clearTimeout(commentTimers[id]);
       if (soComments[id]) await api("/api/signoff/" + encodeURIComponent(id) + "/comments", { method: "POST", body: soComments[id] });
       const it = await api("/api/signoff/" + encodeURIComponent(id) + "/approve", { method: "POST", body: { note: rejectNotes[id].trim() } });
-      edits = it && it.decision && it.decision.edits;
+      edits = it && editsOf(it);
       clearDraft(id);
     }, () =>
       edits

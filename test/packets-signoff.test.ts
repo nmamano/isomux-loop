@@ -362,6 +362,30 @@ describe("sign-off", () => {
     expect(s.pushCheck((id) => id === "fix2")).toMatchObject({ ok: true, sha: "ddddddd4", blockers: [] });
   });
 
+  // Board task e9ec0fc8 (2026-11-07): a re-merge, its new item and a new
+  // approval dropped the open hold, and the push point moved past the merge.
+  test("an open Sign-off changes task keeps holding the push after a new item, a re-merge, an undo and a new approval", () => {
+    const s = new SignoffStore(tempDir());
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.approve("t1", "fix1");
+    s.merged("t1", { commit: "bbbbbbb2" });
+    s.put(item);
+    s.merged("t1", { commit: "bbbbbbb2" });
+    s.approve("t1");
+    expect(s.pushCheck()).toMatchObject({ ok: false, sha: null, blockers: [{ taskId: "t1", state: "edits", edits: "fix1" }] });
+    // A second changes task, and an undo of its approval: both still hold.
+    s.undo("t1");
+    s.approve("t1", "fix2");
+    s.undo("t1");
+    s.approve("t1");
+    expect(s.pushCheck((id) => id === "fix1").blockers).toEqual([{ taskId: "t1", state: "edits", seq: 1, edits: "fix2" }]);
+    expect(s.pushCheck((id) => id === "fix2").blockers).toEqual([{ taskId: "t1", state: "edits", seq: 1, edits: "fix1" }]);
+    // fix1 merges, and fix2 is closed on the board: nothing holds back.
+    s.merged("fix1", { commit: "ccccccc3", signoff: "none" });
+    expect(s.pushCheck((id) => id === "fix2")).toMatchObject({ ok: true, sha: "ccccccc3", blockers: [] });
+  });
+
   test("a changes task filed by hand: only for an approved item without one; then the push waits for it", () => {
     const s = new SignoffStore(tempDir());
     s.put(item);
