@@ -355,9 +355,9 @@ describe("sign-off", () => {
       { taskId: "t1", state: "edits", seq: 2, edits: "fix1" },
       { taskId: "t2", state: "edits", seq: 3, edits: "fix2" },
     ]);
-    // fix1 merges (Main reports it): t1 and fix1 may go, t2 still waits for fix2.
+    // fix1 merges after t2, which still waits for fix2: t1 cannot go without fix1.
     s.merged("fix1", { commit: "ddddddd4", signoff: "none" });
-    expect(s.pushCheck().sha).toBe("bbbbbbb2");
+    expect(s.pushCheck().sha).toBe("aaaaaaa1");
     // fix2 closed on the board (done or obsolete) without a merge: nothing holds back.
     expect(s.pushCheck((id) => id === "fix2")).toMatchObject({ ok: true, sha: "ddddddd4", blockers: [] });
   });
@@ -384,6 +384,23 @@ describe("sign-off", () => {
     // fix1 merges, and fix2 is closed on the board: nothing holds back.
     s.merged("fix1", { commit: "ccccccc3", signoff: "none" });
     expect(s.pushCheck((id) => id === "fix2")).toMatchObject({ ok: true, sha: "ccccccc3", blockers: [] });
+  });
+
+  // The live case of board task e9ec0fc8: the changes task merged and waits
+  // for Nil, and the push point took the approved merge without it.
+  test("push point: an approved item goes out only with its merged Sign-off changes task", () => {
+    const s = new SignoffStore(tempDir());
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.approve("t1", "fix1");
+    s.put({ ...item, taskId: "fix1" });
+    s.merged("fix1", { commit: "bbbbbbb2" });
+    expect(s.pushCheck()).toMatchObject({ ok: false, sha: null });
+    expect(s.pushCheck().blockers.map((b) => [b.taskId, b.state])).toEqual([["t1", "edits"], ["fix1", "waiting"]]);
+    // The board closes fix1 at its merge: that does not let t1 go alone.
+    expect(s.pushCheck(() => true).sha).toBeNull();
+    s.approve("fix1");
+    expect(s.pushCheck()).toMatchObject({ ok: true, sha: "bbbbbbb2", approved: ["t1", "fix1"] });
   });
 
   test("a changes task filed by hand: only for an approved item without one; then the push waits for it", () => {

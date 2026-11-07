@@ -57,9 +57,9 @@ export type SignoffItem = {
   } | null;
   reverted: { commit: string; at: number } | null;
   scout?: Scout;
-  // Sign-off changes tasks of an earlier decision on this task, not merged
-  // yet: a new post or an undo keeps them, so the next approval still waits
-  // for them (board task e9ec0fc8: fail closed).
+  // Sign-off changes tasks of earlier decisions on this task: a new post or
+  // an undo keeps them, so the next approval still waits for them (board
+  // task e9ec0fc8: fail closed).
   holds?: string[];
 };
 export type SignoffState = "unmerged" | "waiting" | "approved" | "rejected";
@@ -322,13 +322,7 @@ export class SignoffStore {
     // A re-merge (after a red CI, say) moves the item to the new commit.
     if (i && signoffState(i) !== "rejected") i.merged = { commit, at, seq: this.state.seq };
     // This merge may be the Sign-off changes task an approval waits for.
-    for (const x of Object.values(this.state.items)) {
-      if (x.decision?.edits === taskId && !x.decision.editsMerged) x.decision.editsMerged = at;
-      if (x.holds?.includes(taskId)) {
-        x.holds = x.holds.filter((h) => h !== taskId);
-        if (!x.holds.length) delete x.holds;
-      }
-    }
+    for (const x of Object.values(this.state.items)) if (x.decision?.edits === taskId && !x.decision.editsMerged) x.decision.editsMerged = at;
     this.save();
     return { signoff: Boolean(i) };
   }
@@ -607,14 +601,9 @@ export class SignoffStore {
   // closed: whether the board says a task is done or obsolete (or gone); the
   // caller reads the board. Unknown (no reader) counts as open: the safe side.
   pushCheck(closed: (taskId: string) => boolean = () => false): PushCheck {
-    const openEdits = (i: SignoffItem) => (signoffState(i) === "approved" ? (holdsOf(i).holds ?? []).filter((id) => !closed(id)) : []);
     const blockers: PushCheck["blockers"] = this.visible()
-      .filter((i) => ["waiting", "rejected"].includes(signoffState(i)) || openEdits(i).length)
-      .map((i): PushCheck["blockers"][number] =>
-        openEdits(i).length
-          ? { taskId: i.taskId, state: "edits" as const, seq: this.holdSeq(i), edits: openEdits(i)[0] }
-          : { taskId: i.taskId, state: signoffState(i) as "waiting" | "rejected", seq: this.holdSeq(i) },
-      )
+      .filter((i) => ["waiting", "rejected"].includes(signoffState(i)))
+      .map((i): PushCheck["blockers"][number] => ({ taskId: i.taskId, state: signoffState(i) as "waiting" | "rejected", seq: this.holdSeq(i) }))
       // Fail closed (Isomux PM, 2026-11-01): a merge counts as signed off only
       // through its merged item, or Main's "signoff":"none". A merge reported
       // before its item was posted must not read as nothing to sign off.
@@ -624,7 +613,27 @@ export class SignoffStore {
           .map(([id, u]) => ({ taskId: id, state: "noitem" as const, seq: u.first ?? u.seq, itemPosted: Boolean(this.state.items[id]) })),
       )
       .sort((a, b) => a.seq - b.seq);
-    const limit = blockers.length ? blockers[0].seq : Infinity;
+    // An approved item goes out only with its Sign-off changes tasks (Nil,
+    // 2026-10-21; board task e9ec0fc8): one not merged holds it back until the
+    // board closes it, a merged one until the push point takes that merge.
+    // Each new hold can lower the point, so repeat until none is added.
+    const lowest = () => (blockers.length ? Math.min(...blockers.map((b) => b.seq)) : Infinity);
+    for (let added = true; added; ) {
+      added = false;
+      for (const i of this.visible()) {
+        if (signoffState(i) !== "approved" || blockers.some((b) => b.taskId === i.taskId)) continue;
+        const edits = (holdsOf(i).holds ?? []).find((id) => {
+          const u = this.state.unpushed?.[id];
+          return u ? lowest() <= u.seq : !closed(id);
+        });
+        if (edits) {
+          blockers.push({ taskId: i.taskId, state: "edits", seq: this.holdSeq(i), edits });
+          added = true;
+        }
+      }
+    }
+    blockers.sort((a, b) => a.seq - b.seq);
+    const limit = lowest();
     const spans = this.state.spans ?? [];
     const best = (this.state.shas ?? [])
       .filter((x) => x.seq < limit && !spans.some((sp) => sp.from <= x.seq && x.seq < sp.to))
@@ -644,7 +653,9 @@ export class SignoffStore {
         ? b.state === "rejected"
           ? `rejected ${b.taskId} waits for its revert`
           : b.state === "edits"
-            ? `${b.taskId} waits for its Sign-off changes task ${b.edits} to merge`
+            ? this.state.unpushed?.[b.edits!]
+              ? `${b.taskId} goes out only with its Sign-off changes task ${b.edits}, which cannot go out yet`
+              : `${b.taskId} waits for its Sign-off changes task ${b.edits} to merge`
             : b.state === "noitem"
               ? b.itemPosted
                 ? `${b.taskId}'s sign-off item came after its merge report: Isomux Main reports the merge again`
@@ -705,12 +716,12 @@ export class SignoffStore {
   }
 }
 
-// The Sign-off changes tasks an item waits for and Main has not reported
-// merged: its decision's, then those an earlier decision left (holds).
+// The Sign-off changes tasks an item goes out with: its decision's, then
+// those earlier decisions left (holds).
 function holdsOf(i: SignoffItem | undefined): { holds?: string[] } {
   if (!i) return {};
   const d = i.decision;
-  const ids = [...(d?.approved && d.edits && !d.editsMerged ? [d.edits] : []), ...(i.holds ?? [])];
+  const ids = [...(d?.approved && d.edits ? [d.edits] : []), ...(i.holds ?? [])];
   const out = ids.filter((id, k) => ids.indexOf(id) === k);
   return out.length ? { holds: out } : {};
 }
