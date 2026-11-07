@@ -616,12 +616,13 @@ export class SignoffStore {
     // An approved item goes out only with its Sign-off changes tasks (Nil,
     // 2026-10-21; board task e9ec0fc8): one not merged holds it back until the
     // board closes it, a merged one until the push point takes that merge.
-    // Each new hold can lower the point, so repeat until none is added.
+    // Each new hold can lower the point, so repeat until none is added. An
+    // item Main pushed already has nothing left to hold.
     const lowest = () => (blockers.length ? Math.min(...blockers.map((b) => b.seq)) : Infinity);
     for (let added = true; added; ) {
       added = false;
       for (const i of this.visible()) {
-        if (signoffState(i) !== "approved" || blockers.some((b) => b.taskId === i.taskId)) continue;
+        if (signoffState(i) !== "approved" || !this.state.unpushed?.[i.taskId] || blockers.some((b) => b.taskId === i.taskId)) continue;
         const edits = (holdsOf(i).holds ?? []).find((id) => {
           const u = this.state.unpushed?.[id];
           return u ? lowest() <= u.seq : !closed(id);

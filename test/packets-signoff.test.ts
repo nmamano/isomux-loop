@@ -403,6 +403,16 @@ describe("sign-off", () => {
     expect(s.pushCheck()).toMatchObject({ ok: true, sha: "bbbbbbb2", approved: ["t1", "fix1"] });
   });
 
+  test("push point: an approved item Main pushed already holds nothing back", () => {
+    const s = new SignoffStore(tempDir());
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.approve("t1", "fix1");
+    s.pushed({ commit: "aaaaaaa1" });
+    s.merged("t2", { commit: "bbbbbbb2", signoff: "none" });
+    expect(s.pushCheck()).toMatchObject({ ok: true, sha: "bbbbbbb2", blockers: [] });
+  });
+
   test("a changes task filed by hand: only for an approved item without one; then the push waits for it", () => {
     const s = new SignoffStore(tempDir());
     s.put(item);
