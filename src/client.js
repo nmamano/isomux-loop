@@ -1713,7 +1713,7 @@ function renderSignoff() {
       const tag = '<span class="aud ' + (agent ? "agent" : "member") + '"' + tip(agent ? "audAgent" : "audMember") + ">" +
         (agent ? "for agents" : "for members") + (c.guessed ? " · guessed" : "") + "</span>";
       const cols = '<div class="cols"><div><h2' + tip("old") + '>Old</h2><div class="copytext">' + (c.old ? o : '<span class="small">New copy</span>') +
-        '</div></div><div><h2' + tip("new") + '>New</h2><div class="copytext">' + nw + "</div></div></div>" + (waiting ? commentBox(it, "copy", n) : "");
+        '</div></div><div><h2' + tip("new") + '>New</h2><div class="copytext">' + (c.new ? nw : '<span class="small">Removed</span>') + "</div></div></div>" + (waiting ? commentBox(it, "copy", n) : "");
       h += agent && !(waiting && suggestionsOf(it, "copy", n))
         ? '<div class="entry agent">' + details("aud:" + it.taskId + ":" + n, "audAgent", tag + " " + esc(c.where), cols) + "</div>"
         : '<div class="entry' + (agent ? " agent sug-open" : "") + '"><div class="where"' + tip("where") + ">" + tag + " " + esc(c.where) + "</div>" + cols + "</div>";

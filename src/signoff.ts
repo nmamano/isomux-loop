@@ -254,10 +254,15 @@ export class SignoffStore {
         const x = (c ?? {}) as Record<string, unknown>;
         if (x.audience !== undefined && x.audience !== "member" && x.audience !== "agent")
           throw new ValidationError(`copy[${n}].audience must be member or agent`);
-        return withAudience({
+        // old "" is new copy, new "" a deleted line (board task 4d7b04d3).
+        const entry = {
           where: text(x.where, `copy[${n}].where`, 500),
           old: text(x.old, `copy[${n}].old`, 100_000, false),
-          new: text(x.new, `copy[${n}].new`, 100_000),
+          new: text(x.new, `copy[${n}].new`, 100_000, false),
+        };
+        if (!entry.old && !entry.new) throw new ValidationError(`copy[${n}]: old and new cannot both be empty`);
+        return withAudience({
+          ...entry,
           ...(x.audience ? { audience: x.audience as Audience } : {}),
         });
       }),
@@ -390,7 +395,7 @@ export class SignoffStore {
     i.copy.forEach((e, n) => {
       const note = c.copy[String(n)];
       if (!note) return;
-      lines.push(withCurrent ? `- ${e.where}\n  Current text: ${e.new}\n  Nil's comment: ${note}` : `${e.where}: ${note}`);
+      lines.push(withCurrent ? `- ${e.where}\n  Current text: ${e.new || "(removed)"}\n  Nil's comment: ${note}` : `${e.where}: ${note}`);
     });
     i.images.forEach((im, n) => {
       const note = c.images[String(n)];

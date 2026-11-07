@@ -508,6 +508,15 @@ describe("sign-off", () => {
     expect(withAudience({ where: "server/system-prompt.ts", old: "", new: "x" })).toMatchObject({ audience: "agent", guessed: true });
   });
 
+  // Board task 4d7b04d3: a deleted line had no form, so a worker posted "(removed)".
+  test("a copy entry takes new \"\" for a deleted line, old \"\" for new copy, not both empty", () => {
+    const s = new SignoffStore(tempDir());
+    const it = s.put({ ...item, copy: [{ where: "docs/features.md", old: "gone", new: "" }, { where: "docs/features.md", old: "", new: "added" }] });
+    expect(it.copy.map((c) => [c.old, c.new])).toEqual([["gone", ""], ["", "added"]]);
+    expect(() => s.put({ ...item, copy: [{ where: "x", old: "", new: "" }] })).toThrow(ValidationError);
+    expect(() => s.put({ ...item, copy: [{ where: "x" }] })).toThrow(ValidationError);
+  });
+
   test("the unpushed list is in merge order; a merge the last push go included is marked sent", () => {
     const s = new SignoffStore(tempDir());
     s.merged("a", { commit: "aaaaaaa1", signoff: "none" });

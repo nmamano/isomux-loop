@@ -172,7 +172,7 @@ POST /api/signoff                 worker at hand-off: {"taskId","title","summary
                                   or "agent" (what agents read: system prompt, agent reference, skills, API errors agents
                                   act on, logs). Without it the app guesses from where (system-prompt, agent-reference,
                                   skills -> agent; else member) and marks the entry guessed. Agent entries show secondary.
-                                  (old "" for new copy). Replaces the task's item unless Nil rejected it and the revert is not reported,
+                                  (old "" for new copy, new "" for a deleted line). Replaces the task's item unless Nil rejected it and the revert is not reported,
                                   and keeps its images; add "clearImages":true to drop them.
 POST /api/signoff/:taskId/images  raw PNG/JPEG/WebP bytes, ?caption=..., as for packets. For a before/after pair add
                                   ?pair=<short name>&side=before|after (one image per side); a pair shows side by side.
