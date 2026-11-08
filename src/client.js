@@ -103,7 +103,7 @@ const HELP = {
   classify: "Every 10 minutes, also while paused, the app wakes the curator to recommend Backlog tasks that have no recommendation. It also withdraws undecided cards whose task closed meanwhile.",
   working: "Workers that hold a task now.",
   newTasks: "Every minute the app tells Isomux Curator about each new open P0-P3 task with no tag and no assignee, once, and about each such task that stops waiting, waits again or is edited.",
-  free: "Loop workers without a task. They get the next ready task at the next dispatch.",
+  free: "Loop workers without a task and without an open ask for Nil. They get the next ready task at the next dispatch. A worker that waits on Nil gets no new task until he answers.",
   ready: "Tasks the loop can take now, in the order it takes them. A task with a design packet goes back to the worker that wrote it, once that worker is free.",
   merging: "Approved work that Isomux Main merges after CI.",
   signoff: "Sign-off: merged work with copy or a visible change whose item on the Sign-off tab waits for your approve or reject, or for its revert.",
@@ -894,7 +894,8 @@ function renderStatus() {
   const b = s.board;
   h += renderStates(b);
   h += section("Working", "working", b.holding.map((x) => taskLine(x.task, x.worker)), "No worker holds a task.");
-  h += '<div class="small" style="margin-top:6px"' + tip("free") + ">Free: " + (b.freeWorkers.length ? esc(b.freeWorkers.join(", ")) : "none") + " " + q("free") + "</div>" + helpBox(["free"], "free");
+  h += '<div class="small" style="margin-top:6px"' + tip("free") + ">Free: " + (b.freeWorkers.length ? esc(b.freeWorkers.join(", ")) : "none") +
+    (b.waitsOnNil || []).map((x) => " · " + esc(x.worker) + " waits on Nil: ask " + esc(x.ask)).join("") + " " + q("free") + "</div>" + helpBox(["free"], "free");
   h += section("Ready queue (" + b.ready.length + (b.belowFloor ? ", " + belowText(b.belowFloor) : "") + ")", "ready", b.ready.map((x) => taskLine(x, "", b.returnTo && b.returnTo[x.id] ? " · back to " + b.returnTo[x.id] : "")), "Nothing is ready.");
   h += section("Merging (" + b.merging.length + ")", "merging", b.merging.map((x) => taskLine(x)), "Nothing is merging.");
   const st = b.states;

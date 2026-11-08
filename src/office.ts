@@ -56,6 +56,10 @@ export interface Office {
   // agents on one account share them. The app token reaches it with its
   // owner's reach (read live 2026-11-06).
   subscription?(agentId: string): Promise<UsageReading>;
+  // The agent's open asks, oldest first, with the members each is for. The
+  // app reads the agent's ask log (log:read, from its owner) and confirms
+  // each ask the log shows open, since an older ask can lack its events.
+  openAsks?(agentId: string): Promise<{ id: string; members: string[] }[]>;
 }
 
 export type UsageReading =
@@ -69,7 +73,32 @@ export function httpOffice(token: string, base = OFFICE): Office {
     if (!res.ok) throw new Error(`GET ${path.split("?")[0]} answered ${res.status}`);
     return (await res.json()) as T;
   }
+  // A closed ask stays closed: it is not read again.
+  const closedAsks = new Set<string>();
   return {
+    async openAsks(agentId) {
+      type Event = { askId: string; kind: string; at: number };
+      const created: string[] = [];
+      const ended = new Set<string>();
+      let before: number | null = null;
+      for (let page = 0; page < 20; page++) {
+        const q: string = `/api/agents/${encodeURIComponent(agentId)}/asks/events?limit=200${before === null ? "" : `&before=${before}`}`;
+        const r = await getJson<{ events: Event[]; nextBefore: number | null }>(q);
+        for (const e of r.events) {
+          if (e.kind === "closed") ended.add(e.askId);
+          else if (e.kind === "created" && !ended.has(e.askId) && !closedAsks.has(e.askId)) created.push(e.askId);
+        }
+        if (r.nextBefore === null || r.nextBefore === undefined) break;
+        before = r.nextBefore;
+      }
+      const out: { id: string; members: string[]; createdAt: number }[] = [];
+      for (const id of created) {
+        const a = await getJson<{ id: string; members?: string[]; member?: string; closed?: unknown; createdAt: number }>(`/api/asks/${encodeURIComponent(id)}`);
+        if (a.closed) closedAsks.add(id);
+        else out.push({ id, members: a.members ?? (a.member ? [a.member] : []), createdAt: a.createdAt });
+      }
+      return out.sort((a, b) => a.createdAt - b.createdAt).map(({ id, members }) => ({ id, members }));
+    },
     tasks: () => getJson<Task[]>(`/api/tasks?roomId=${ROOM_ID}`),
     task: (id) => getJson<Task>(`/api/tasks/${encodeURIComponent(id)}`),
     async createTask(body) {

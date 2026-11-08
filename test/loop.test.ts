@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ageLine, areasOf, areasOverlap, dispatch, dueIn, freeWorkers, holdings, parseTag, proposalRefusal, pushToWake, readyQueue, staleCards, status, tick, unclassified, unrecommended, wakeText, withdrawLine } from "../src/loop";
+import { ageLine, areasOf, areasOverlap, dispatch, dueIn, freeWorkers, holdings, nilAsks, parseTag, proposalRefusal, pushToWake, readyQueue, staleCards, status, tick, unclassified, unrecommended, wakeText, withdrawLine } from "../src/loop";
 import type { Agent, Office, PatchResult, Task } from "../src/office";
 import type { Author } from "../src/returns";
 
@@ -272,6 +272,35 @@ describe("dispatch", () => {
     expect(messages).toEqual([]);
   });
 
+  // Board task 1158cd7e (Nil, 2026-11-08): Worker 1 waited on Nil for one of
+  // his tasks and still got the next one, so both ran through one agent.
+  test("a worker with an open ask for Nil gets no new task; the next free worker in order takes it", async () => {
+    const a = task({ title: "[go | ready] A", priority: "P1" });
+    const b = task({ title: "[go | ready] B", priority: "P2" });
+    const w = [1, 2, 3].map((k) => agent(`Isomux Worker ${k}`));
+    const { office, calls } = stubOffice([a, b], w);
+    const asks: Record<string, { id: string; members: string[] }[]> = {
+      [w[0].id]: [{ id: "ask1", members: ["Nil"] }],
+      [w[1].id]: [{ id: "ask2", members: ["Someone Else"] }],
+    };
+    office.openAsks = async (id) => asks[id] ?? [];
+    const res = await dispatch(office, 3, NOW);
+    expect(res.assigned.map((x) => [x.worker, x.taskId])).toEqual([["Isomux Worker 2", a.id], ["Isomux Worker 3", b.id]]);
+    expect(calls.some((c) => c.includes(w[0].id))).toBe(false);
+    // Once Nil answers, the worker is free again.
+    expect(freeWorkers(w, [], 3, await nilAsks(office, w, 3)).map((x) => x.name)).toEqual(["Isomux Worker 2", "Isomux Worker 3"]);
+    asks[w[0].id] = [];
+    expect(freeWorkers(w, [], 3, await nilAsks(office, w, 3)).map((x) => x.name)).toEqual(w.map((x) => x.name));
+  });
+
+  test("an unreadable ask log is reported, and the worker counts as free", async () => {
+    const w1 = agent("Isomux Worker 1");
+    const errors: string[] = [];
+    const waits = await nilAsks({ openAsks: async () => { throw new Error("GET answered 500"); } }, [w1], 2, errors);
+    expect([waits.size, errors.length]).toEqual([0, 1]);
+    expect(errors[0]).toContain("Isomux Worker 1");
+  });
+
   test("a merging task (in progress, no assignee) does not hold its worker", () => {
     const merging = task({ title: "[go | merging] M", status: "in_progress" });
     expect(freeWorkers([agent("Isomux Worker 1")], [merging], 2).map((a) => a.name)).toEqual(["Isomux Worker 1"]);
@@ -496,6 +525,13 @@ describe("status", () => {
     expect(s.holding.map((x) => [x.worker, x.task.id])).toEqual([["Isomux Worker 1", h.id]]);
     expect(s.freeWorkers).toEqual(["Isomux Worker 2"]);
     expect(s.merging.map((t) => t.id)).toEqual([m.id]);
+  });
+
+  test("a worker without a task that waits on Nil is not free, and says which ask; a holder is not listed twice", () => {
+    const h = task({ title: "[go | ready] h", status: "in_progress", assignee: "Isomux Worker 1" });
+    const w = [1, 2, 3].map((k) => agent(`Isomux Worker ${k}`));
+    const s = status(w, [h], 3, null, () => undefined, new Map([[w[0].id, "ask0"], [w[1].id, "ask1"]]));
+    expect([s.freeWorkers, s.waitsOnNil]).toEqual([["Isomux Worker 3"], [{ worker: "Isomux Worker 2", ask: "ask1" }]]);
   });
 });
 

@@ -1,7 +1,7 @@
 import { ANNOUNCE_UNTAGGED, NEW_TASKS_MS, CLASSIFY_MS, MAIN_REPO, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, SCOUT_NAME, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS, USAGE_MS } from "./config";
 import { ClosedTimes } from "./closed-times";
 import { type ImageDir } from "./images";
-import { dispatch, dueIn, offBoard, parseTag, proposalRefusal, pushToWake, staleCards, status, tick, unclassified, unrecommended, wakeText, type DispatchResult, type Status, type TickResult, withdrawLine } from "./loop";
+import { dispatch, dueIn, nilAsks, offBoard, parseTag, proposalRefusal, pushToWake, staleCards, status, tick, unclassified, unrecommended, wakeText, type DispatchResult, type Status, type TickResult, withdrawLine } from "./loop";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readJson, writeJson } from "./json-file";
@@ -524,7 +524,7 @@ async function loopStatus(): Promise<Record<string, unknown>> {
       statusCache = {
         at: Date.now(),
         value: {
-          ...status(agents, live, pause.workers, pause.minPriority, (id) => returns.get(id)),
+          ...status(agents, live, pause.workers, pause.minPriority, (id) => returns.get(id), await nilAsks(office, agents, pause.workers)),
           states,
           closedPending: closed.missing(all).length,
         },

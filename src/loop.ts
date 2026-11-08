@@ -1,7 +1,7 @@
 // Dispatch and tick. The board is the loop's only state: every run reads it
 // fresh and keeps nothing between runs.
 
-import { LOOP_PRIORITIES, MAIN_NAME, ROOM_ID, WORKER_NAMES } from "./config";
+import { DECIDER, LOOP_PRIORITIES, MAIN_NAME, ROOM_ID, WORKER_NAMES } from "./config";
 import type { Agent, Office, Task } from "./office";
 import type { Author } from "./returns";
 
@@ -116,9 +116,29 @@ export function holdings(agents: Agent[], tasks: Task[]): Holding[] {
   return workers(agents).flatMap((w) => heldBy(tasks, w).map((task) => ({ worker: w, task })));
 }
 
-// Only Workers 1..n take new tasks.
-export function freeWorkers(agents: Agent[], tasks: Task[], n: number): Agent[] {
-  return workers(agents, n).filter((w) => heldBy(tasks, w).length === 0);
+// Only Workers 1..n take new tasks, and only those with no task in progress
+// and no open ask for Nil (Nil, 2026-11-08, board task 1158cd7e: a worker
+// that waits on him for one task must not take another of his tasks).
+// waits: worker id -> its oldest open ask for Nil.
+export function freeWorkers(agents: Agent[], tasks: Task[], n: number, waits: Map<string, string> = new Map()): Agent[] {
+  return workers(agents, n).filter((w) => heldBy(tasks, w).length === 0 && !waits.has(w.id));
+}
+
+// Each of Workers 1..n with an open ask for Nil, by id, with that ask's id.
+// An unreadable ask log leaves the worker out and names it in errors: the
+// worker then counts as free, as before this rule.
+export async function nilAsks(office: Pick<Office, "openAsks">, agents: Agent[], n: number, errors: string[] = []): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!office.openAsks) return out;
+  for (const w of workers(agents, n)) {
+    try {
+      const ask = (await office.openAsks(w.id)).find((a) => a.members.includes(DECIDER));
+      if (ask) out.set(w.id, ask.id);
+    } catch (err) {
+      errors.push(`open asks of ${w.name} unreadable (${err instanceof Error ? err.message : String(err)}); it counts as free`);
+    }
+  }
+  return out;
 }
 
 export function withState(tasks: Task[], state: string): Task[] {
@@ -256,7 +276,8 @@ export async function dispatch(
   }
   // The rest go in queue order; a task whose author lives waits for it.
   const rest = queue.filter((t) => !author.get(t.id));
-  for (const worker of freeWorkers(agents, tasks, n)) {
+  const waits = rest.length ? await nilAsks(office, agents, n, out.errors) : new Map<string, string>();
+  for (const worker of freeWorkers(agents, tasks, n, waits)) {
     if (busy.has(worker.id)) continue;
     if (rest.length === 0) break;
     if (!(await clear(worker))) continue;
@@ -343,6 +364,8 @@ export type Status = {
   belowFloor: number;
   holding: { worker: string; task: Task }[];
   freeWorkers: string[];
+  // Workers without a task that wait on Nil: they take no new task.
+  waitsOnNil: { worker: string; ask: string }[];
   merging: Task[];
   // Tasks that wait for an overlapping task (smart dispatch): id, the
   // blocker, and the task's areas.
@@ -355,6 +378,7 @@ export function status(
   n: number,
   floor: string | null = null,
   returnTo: (taskId: string) => Author | undefined = () => undefined,
+  waits: Map<string, string> = new Map(),
 ): Status {
   const ready = readyQueue(tasks, floor);
   const back = ready.flatMap((t) => {
@@ -366,7 +390,8 @@ export function status(
     returnTo: Object.fromEntries(back),
     belowFloor: readyQueue(tasks).length - ready.length,
     holding: holdings(agents, tasks).map((h) => ({ worker: h.worker.name, task: h.task })),
-    freeWorkers: freeWorkers(agents, tasks, n).map((w) => w.name),
+    freeWorkers: freeWorkers(agents, tasks, n, waits).map((w) => w.name),
+    waitsOnNil: workers(agents, n).flatMap((w) => (waits.has(w.id) && heldBy(tasks, w).length === 0 ? [{ worker: w.name, ask: waits.get(w.id)! }] : [])),
     merging: withState(tasks, "merging"),
     areaWaits: areaWaits(tasks).map(({ task, blocker }) => ({ id: task.id, blocker, areas: areasOf(task) })),
   };
