@@ -173,7 +173,8 @@ POST /api/signoff                 worker at hand-off: {"taskId","title","summary
                                   act on, logs). Without it the app guesses from where (system-prompt, agent-reference,
                                   skills -> agent; else member) and marks the entry guessed. Agent entries show secondary.
                                   (old "" for new copy, new "" for a deleted line). Replaces the task's item unless Nil rejected it and the revert is not reported,
-                                  and keeps its images; add "clearImages":true to drop them.
+                                  and keeps its images and its merge; add "clearImages":true to drop the images. The new
+                                  item waits for Nil again, also after a merge report (one item for a task merged in parts).
 POST /api/signoff/:taskId/images  raw PNG/JPEG/WebP bytes, ?caption=..., as for packets. For a before/after pair add
                                   ?pair=<short name>&side=before|after (one image per side); a pair shows side by side.
 POST /api/signoff/:taskId/merged  Isomux Main after EVERY merge, item or not: {"commit"}. The sha is what a push go names.

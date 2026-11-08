@@ -238,6 +238,9 @@ export class SignoffStore {
   // not reverted it yet: that revert must happen first. It keeps the old
   // item's images unless the body says "clearImages": true (as packets do;
   // board task a3a7f8b0: a worker cannot read an image back to post it again).
+  // It keeps the merged mark too (board task cf2d87d1: a task merged in parts
+  // posts one item for all of them after the last merge report); the new item
+  // waits for Nil again.
   put(raw: unknown): SignoffItem {
     const r = (raw ?? {}) as Record<string, unknown>;
     const taskId = checkTaskId(text(r.taskId, "taskId", 64));
@@ -268,7 +271,7 @@ export class SignoffStore {
       }),
       images: r.clearImages === true ? [] : (old?.images ?? []),
       postedAt: this.now(),
-      merged: null,
+      merged: old?.merged ?? null,
       decision: null,
       reverted: null,
       ...holdsOf(old),

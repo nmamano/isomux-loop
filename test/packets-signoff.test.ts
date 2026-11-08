@@ -212,9 +212,10 @@ describe("sign-off", () => {
     s.put(item);
     s.merged("t1", { commit: "aaaaaaa1" });
     s.merged("plain", { commit: "bbbbbbb2", signoff: "none" });
-    // The worker posts the item again after the report: it is unmerged until Main reports again.
+    // The worker posts the item again after the report: it keeps the merge
+    // (board task cf2d87d1), and a report again changes nothing.
     s.put(item);
-    expect(s.visible()).toEqual([]);
+    expect(s.visible().map((i) => i.taskId)).toEqual(["t1"]);
     s.merged("t1", { commit: "aaaaaaa1" });
     expect(s.visible().map((i) => i.taskId)).toEqual(["t1"]);
     expect(s.unpushedList().map((u) => [u.taskId, u.seq])).toEqual([["t1", 1], ["plain", 2]]);
@@ -506,6 +507,20 @@ describe("sign-off", () => {
       .toEqual(["member", "agent", "agent", "member", "member", "member"]);
     // An entry stored before audiences existed is guessed when read.
     expect(withAudience({ where: "server/system-prompt.ts", old: "", new: "x" })).toMatchObject({ audience: "agent", guessed: true });
+  });
+
+  // Board task cf2d87d1: one item for a task merged in parts, posted after
+  // the last merge report, was hidden until Main reported the merge again.
+  test("a new post after the merge report keeps the merge: the item shows, waits for Nil, and holds the push", () => {
+    const s = new SignoffStore(tempDir());
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.approve("t1");
+    s.put({ ...item, title: "All parts" });
+    expect(s.visible().map((i) => [i.title, signoffState(i), i.merged?.commit])).toEqual([["All parts", "waiting", "aaaaaaa1"]]);
+    expect(s.pushCheck().blockers).toEqual([{ taskId: "t1", state: "waiting", seq: 1 }]);
+    s.approve("t1");
+    expect(s.pushCheck()).toMatchObject({ ok: true, sha: "aaaaaaa1" });
   });
 
   // Board task 4d7b04d3: a deleted line had no form, so a worker posted "(removed)".
