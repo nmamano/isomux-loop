@@ -508,7 +508,7 @@ function withdrawStale(all: Task[]): string[] {
 
 // --- status ------------------------------------------------------------------
 
-type Board = Status & { states: Record<StateKey, StateView>; closedPending: number };
+type Board = Status & { states: Record<StateKey, StateView>; closedPending: number; askErrors: string[] };
 let statusCache: { at: number; value: Board } | null = null;
 
 async function loopStatus(): Promise<Record<string, unknown>> {
@@ -519,13 +519,16 @@ async function loopStatus(): Promise<Record<string, unknown>> {
       const [agents, all] = await Promise.all([office.agents(), boardTasks()]);
       // The dispatch view sees what dispatch sees: the board's default listing.
       const live = all.filter((t) => (t.status === "open" || t.status === "in_progress") && t.priority !== "P4");
+      const askErrors: string[] = [];
+      const waits = await nilAsks(office, agents, pause.workers, askErrors);
       const states = stateViews(all, cards(), (t) => closed.get(t), signoffIds(), signoff.unpushedIds(), new Set(agents.map((a) => a.id)));
       states.ready.belowFloor = belowFloor(states.ready, pause.minPriority);
       statusCache = {
         at: Date.now(),
         value: {
-          ...status(agents, live, pause.workers, pause.minPriority, (id) => returns.get(id), await nilAsks(office, agents, pause.workers)),
+          ...status(agents, live, pause.workers, pause.minPriority, (id) => returns.get(id), waits),
           states,
+          askErrors,
           closedPending: closed.missing(all).length,
         },
       };

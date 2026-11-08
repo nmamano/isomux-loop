@@ -895,7 +895,8 @@ function renderStatus() {
   h += renderStates(b);
   h += section("Working", "working", b.holding.map((x) => taskLine(x.task, x.worker)), "No worker holds a task.");
   h += '<div class="small" style="margin-top:6px"' + tip("free") + ">Free: " + (b.freeWorkers.length ? esc(b.freeWorkers.join(", ")) : "none") +
-    (b.waitsOnNil || []).map((x) => " · " + esc(x.worker) + " waits on Nil: ask " + esc(x.ask)).join("") + " " + q("free") + "</div>" + helpBox(["free"], "free");
+    (b.waitsOnNil || []).map((x) => " · " + esc(x.worker) + " waits on Nil: ask " + esc(x.ask)).join("") +
+    (b.askErrors || []).map((e) => ' · <span class="warn">' + esc(e) + "</span>").join("") + " " + q("free") + "</div>" + helpBox(["free"], "free");
   h += section("Ready queue (" + b.ready.length + (b.belowFloor ? ", " + belowText(b.belowFloor) : "") + ")", "ready", b.ready.map((x) => taskLine(x, "", b.returnTo && b.returnTo[x.id] ? " · back to " + b.returnTo[x.id] : "")), "Nothing is ready.");
   h += section("Merging (" + b.merging.length + ")", "merging", b.merging.map((x) => taskLine(x)), "Nothing is merging.");
   const st = b.states;
