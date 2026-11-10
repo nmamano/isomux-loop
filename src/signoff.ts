@@ -143,10 +143,10 @@ export type PushCheck = {
 };
 
 // A merge goes out alone only when every path it changes is the site's:
-// site/, a file only the site demo uses (board task 4a99bf16), or the README
-// and docs/, which ship with the site and need no restart or release (board
-// task a542d465).
-const SITE_PATHS = [/^site\//, /^ui\/demo[-.][^/]*$/, /^scripts\/build-demo\.ts$/, /^README\.md$/, /^docs\//];
+// site/, a file only the site demo uses (board task 4a99bf16), or the README,
+// docs/ and internal-docs/, which need no restart or release (board task
+// a542d465: a landing merge also changed internal-docs/documentation.md).
+const SITE_PATHS = [/^site\//, /^ui\/demo[-.][^/]*$/, /^scripts\/build-demo\.ts$/, /^README\.md$/, /^docs\//, /^internal-docs\//];
 export function siteOnly(paths: string[] | null): boolean {
   return Boolean(paths && paths.length > 0 && paths.every((p) => SITE_PATHS.some((r) => r.test(p))));
 }

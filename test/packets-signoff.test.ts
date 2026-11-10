@@ -514,8 +514,8 @@ describe("sign-off", () => {
   test("site-only: every changed path is the site's or the demo's", () => {
     expect(siteOnly(["site/index.html", "site/media/a.mp4", "ui/demo-server.ts", "ui/demo.html", "scripts/build-demo.ts"])).toBe(true);
     // Board task a542d465: landing merges also change the README and docs/.
-    expect(siteOnly(["site/index.html", "README.md", "docs/features.md"])).toBe(true);
-    for (const paths of [["site/index.html", "ui/app.tsx"], ["shared/storage-labels.ts"], ["ui/demo/x.ts"], ["website/x"], ["internal-docs/x.md"], ["server/README.md"], [], null])
+    expect(siteOnly(["site/index.html", "README.md", "docs/features.md", "internal-docs/documentation.md"])).toBe(true);
+    for (const paths of [["site/index.html", "ui/app.tsx"], ["shared/storage-labels.ts"], ["ui/demo/x.ts"], ["website/x"], ["server/README.md"], ["server/agent-reference/asks.md"], [], null])
       expect(siteOnly(paths)).toBe(false);
   });
 
