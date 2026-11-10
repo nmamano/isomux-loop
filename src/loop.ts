@@ -112,6 +112,26 @@ function heldBy(tasks: Task[], worker: Agent): Task[] {
     .sort((a, b) => (a.priority ?? "").localeCompare(b.priority ?? "") || a.createdAt - b.createdAt);
 }
 
+// A task a worker holds outside the loop's claim (board task 1612d805: the
+// pitch video, tagged [go | with Isomux Worker 1] with no assignee, sat 6
+// hours while dispatch gave that worker two other tasks): an open or
+// in-progress task tagged "with <worker>", or an open task assigned to it.
+// It keeps the worker busy for dispatch; the tick leaves it alone.
+function heldOutside(tasks: Task[], worker: Agent): Task[] {
+  const loop = new Set(heldBy(tasks, worker).map((t) => t.id));
+  const tag = `with ${worker.name}`.toLowerCase();
+  return tasks.filter(
+    (t) =>
+      inRoom(t) &&
+      !loop.has(t.id) &&
+      (t.status === "open" || t.status === "in_progress") &&
+      (parseTag(t.title)?.state.toLowerCase() === tag || (t.status === "open" && holds(t, worker))),
+  );
+}
+function busyWith(tasks: Task[], worker: Agent): boolean {
+  return heldBy(tasks, worker).length > 0 || heldOutside(tasks, worker).length > 0;
+}
+
 export function holdings(agents: Agent[], tasks: Task[]): Holding[] {
   return workers(agents).flatMap((w) => heldBy(tasks, w).map((task) => ({ worker: w, task })));
 }
@@ -121,7 +141,7 @@ export function holdings(agents: Agent[], tasks: Task[]): Holding[] {
 // that waits on him for one task must not take another of his tasks).
 // waits: worker id -> its oldest open ask for Nil.
 export function freeWorkers(agents: Agent[], tasks: Task[], n: number, waits: Map<string, string> = new Map()): Agent[] {
-  return workers(agents, n).filter((w) => heldBy(tasks, w).length === 0 && !waits.has(w.id));
+  return workers(agents, n).filter((w) => !busyWith(tasks, w) && !waits.has(w.id));
 }
 
 // Each of Workers 1..n with an open ask for Nil, by id, with that ask's id.
@@ -225,7 +245,7 @@ export async function dispatch(
   // the next run sets it to wait.
   const given: Task[] = [];
   const author = new Map(queue.map((t) => [t.id, liveAuthor(returnTo(t.id), agents)]));
-  const busy = new Set(workers(agents).filter((w) => heldBy(tasks, w).length > 0).map((w) => w.id));
+  const busy = new Set(workers(agents).filter((w) => busyWith(tasks, w)).map((w) => w.id));
 
   // Clears the worker's conversation once per dispatch; true when it is clear.
   const cleared = new Map<string, boolean>();
@@ -366,6 +386,8 @@ export type Status = {
   freeWorkers: string[];
   // Workers without a task that wait on Nil: they take no new task.
   waitsOnNil: { worker: string; ask: string }[];
+  // Tasks workers hold outside the loop's claim: they take no new task.
+  heldOutside: { worker: string; task: string }[];
   merging: Task[];
   // Tasks that wait for an overlapping task (smart dispatch): id, the
   // blocker, and the task's areas.
@@ -391,7 +413,8 @@ export function status(
     belowFloor: readyQueue(tasks).length - ready.length,
     holding: holdings(agents, tasks).map((h) => ({ worker: h.worker.name, task: h.task })),
     freeWorkers: freeWorkers(agents, tasks, n, waits).map((w) => w.name),
-    waitsOnNil: workers(agents, n).flatMap((w) => (waits.has(w.id) && heldBy(tasks, w).length === 0 ? [{ worker: w.name, ask: waits.get(w.id)! }] : [])),
+    waitsOnNil: workers(agents, n).flatMap((w) => (waits.has(w.id) && !busyWith(tasks, w) ? [{ worker: w.name, ask: waits.get(w.id)! }] : [])),
+    heldOutside: workers(agents).flatMap((w) => heldOutside(tasks, w).map((t) => ({ worker: w.name, task: t.id }))),
     merging: withState(tasks, "merging"),
     areaWaits: areaWaits(tasks).map(({ task, blocker }) => ({ id: task.id, blocker, areas: areasOf(task) })),
   };

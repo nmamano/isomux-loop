@@ -293,6 +293,24 @@ describe("dispatch", () => {
     expect(freeWorkers(w, [], 3, await nilAsks(office, w, 3)).map((x) => x.name)).toEqual(w.map((x) => x.name));
   });
 
+  // Board task 1612d805 (2026-11-10): the pitch video was tagged with Worker 1
+  // and had no assignee, so dispatch gave Worker 1 two other tasks.
+  test("a task tagged with a worker, or assigned to it while open, keeps it busy; the status page names it", async () => {
+    const w = [1, 2, 3].map((k) => agent(`Isomux Worker ${k}`));
+    const video = task({ title: "[go | with Isomux Worker 1] Video" });
+    const mails = task({ title: "[design | ready] Mails", assignee: "Isomux Worker 2" });
+    const other = task({ title: "[go | with Isomux Worker 3] Old", status: "done" });
+    const a = task({ title: "[go | ready] A", priority: "P1" });
+    const { office } = stubOffice([video, mails, other, a], w);
+    const res = await dispatch(office, 3, NOW);
+    expect(res.assigned.map((x) => [x.worker, x.taskId])).toEqual([["Isomux Worker 3", a.id]]);
+    const s = status(w, [video, mails, other], 3);
+    expect([s.freeWorkers, s.heldOutside, s.holding]).toEqual([["Isomux Worker 3"], [{ worker: "Isomux Worker 1", task: video.id }, { worker: "Isomux Worker 2", task: mails.id }], []]);
+    // The tick leaves a task held outside the loop alone.
+    const t = stubOffice([video, mails], w);
+    expect((await tick(t.office, 3)).nudged).toEqual([]);
+  });
+
   test("an unreadable ask log is reported, and the worker counts as free", async () => {
     const w1 = agent("Isomux Worker 1");
     const errors: string[] = [];
@@ -337,6 +355,11 @@ describe("back to the packet's author", () => {
     expect(res.assigned.map((x) => [x.worker, x.taskId])).toEqual([["Isomux Worker 2", other.id]]);
     expect(own.assignee).toBeUndefined();
     expect(status([w(1), w(2)], [held, own], 2, null, returnTo).returnTo).toEqual({ [own.id]: "Isomux Worker 1" });
+    // A task tagged with the author outside the loop keeps it busy too (board task 1612d805).
+    const video = task({ title: "[go | with Isomux Worker 1] video" });
+    const own2 = task({ title: "[go | ready] own2", priority: "P0" });
+    const t = stubOffice([video, own2], [w(1), w(2)]);
+    expect((await dispatch(t.office, 2, NOW, null, by({ [own2.id]: { name: "Isomux Worker 1" } }))).assigned).toEqual([]);
   });
 
   test("a gone author (no live agent with its id, or not a loop worker) lets any free worker take the task", async () => {
