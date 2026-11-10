@@ -224,7 +224,8 @@ GET  /api/signoff                 merged items, the merges not pushed yet (unpus
                                   the rejected merge and its revert is used. The push go names push.sha, never main's tip.
                                   push.site: approved site-only merges past the push point (Nil, 2026-11-10: site copy does
                                   not wait for product pushes), [{taskId, commit}]. Site-only: every path the merge changes
-                                  is under site/, a ui/demo-* or ui/demo.* file, or scripts/build-demo.ts. Not listed: a task
+                                  is under site/ or docs/, README.md, a ui/demo-* or ui/demo.* file, or scripts/build-demo.ts.
+                                  Not listed: a task
                                   with more than one unpushed merge, or one with a Sign-off changes task. The tick wakes
                                   Main once for each. A later push of push.sha may be a merge of origin/main into it.
 Nil's buttons on the Sign-off tab: approve (optional {"note"}; with a note or comments on any entry it also files a P0

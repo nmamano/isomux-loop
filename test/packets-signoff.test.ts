@@ -513,7 +513,10 @@ describe("sign-off", () => {
   // need to wait for product pushes").
   test("site-only: every changed path is the site's or the demo's", () => {
     expect(siteOnly(["site/index.html", "site/media/a.mp4", "ui/demo-server.ts", "ui/demo.html", "scripts/build-demo.ts"])).toBe(true);
-    for (const paths of [["site/index.html", "ui/app.tsx"], ["shared/storage-labels.ts"], ["ui/demo/x.ts"], ["website/x"], [], null]) expect(siteOnly(paths)).toBe(false);
+    // Board task a542d465: landing merges also change the README and docs/.
+    expect(siteOnly(["site/index.html", "README.md", "docs/features.md"])).toBe(true);
+    for (const paths of [["site/index.html", "ui/app.tsx"], ["shared/storage-labels.ts"], ["ui/demo/x.ts"], ["website/x"], ["internal-docs/x.md"], ["server/README.md"], [], null])
+      expect(siteOnly(paths)).toBe(false);
   });
 
   test("push.site: an approved site-only merge behind an unsigned item goes out alone, and only it leaves", () => {
