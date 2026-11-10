@@ -103,7 +103,9 @@ type State = {
   // (Isomux PM, 2026-11-01: fail closed). first: the task's earliest merge
   // not pushed and not cleared, when it has more than one; one item covers
   // them all, so it holds the push back from there (Isomux PM, 2026-11-01).
-  unpushed?: Record<string, { commit: string; at: number; seq: number; first?: number; none?: true; signed?: true }>;
+  // site: the sha Main pushed alone for an approved site-only merge (its
+  // cherry-pick onto origin/main); the merge stays here until a push passes it.
+  unpushed?: Record<string, { commit: string; at: number; seq: number; first?: number; none?: true; signed?: true; site?: string }>;
   shas?: { commit: string; seq: number }[];
   seq?: number;
   // A rejected merge and its revert (Nil, 2026-10-20): a push point between
@@ -134,7 +136,18 @@ export type PushCheck = {
   // "noitem": a merge with no merged item and no "signoff":"none" from Main;
   // itemPosted when its item came after the merge report.
   blockers: { taskId: string; state: "waiting" | "rejected" | "edits" | "noitem"; seq: number; edits?: string; itemPosted?: boolean }[];
+  // Approved site-only merges past the push point (Nil, 2026-11-10: "copy
+  // updates on the site *don't* need to wait for product pushes"): Main
+  // pushes each alone and reports it with /pushed {"commit","site":taskId}.
+  site: { taskId: string; commit: string }[];
 };
+
+// A merge goes out alone only when every path it changes is the site's:
+// site/, or a file only the site demo uses (board task 4a99bf16).
+const SITE_PATHS = [/^site\//, /^ui\/demo[-.][^/]*$/, /^scripts\/build-demo\.ts$/];
+export function siteOnly(paths: string[] | null): boolean {
+  return Boolean(paths && paths.length > 0 && paths.every((p) => SITE_PATHS.some((r) => r.test(p))));
+}
 
 export function signoffState(i: SignoffItem): SignoffState {
   if (!i.merged) return "unmerged";
@@ -188,6 +201,8 @@ export class SignoffStore {
     dataDir: string,
     private now: () => number = Date.now,
     private resolve: (sha: string) => string | null = (sha) => sha,
+    // The paths a merge commit changes; null when unknown (not site-only).
+    private paths: (sha: string) => string[] | null = () => null,
   ) {
     this.file = join(dataDir, "signoff.json");
     this.state = readJson<State>(this.file, { items: {}, lastSha: null, lastPushGo: null });
@@ -672,7 +687,22 @@ export class SignoffStore {
               : `${b.taskId}, the oldest item, waits for your approve or reject`
         : "nothing new to push";
     else if (goSeq !== undefined && goSeq >= seq) reason = `the push go for ${best!.commit.slice(0, 8)} is sent; it waits for Isomux Main`;
-    return { ok: reason === "", reason, sha: best ? best.commit : null, seq, approved, tasks, commits, unpushedCommits: distinct(shas), blockers };
+    const site = this.visible()
+      .filter((i) => this.siteReady(i) && (seq === null || this.itemSeq(i) > seq) && !blockers.some((b) => b.taskId === i.taskId))
+      .map((i) => ({ taskId: i.taskId, commit: i.merged!.commit }));
+    return { ok: reason === "", reason, sha: best ? best.commit : null, seq, approved, tasks, commits, unpushedCommits: distinct(shas), blockers, site };
+  }
+
+  // An approved item Main may push alone: one merge not pushed, no Sign-off
+  // changes task (it must go out with it), and a site-only diff.
+  private siteReady(i: SignoffItem): boolean {
+    const u = this.state.unpushed?.[i.taskId];
+    return (
+      signoffState(i) === "approved" &&
+      Boolean(u && sameSha(u.commit, i.merged!.commit) && u.first === undefined && !u.site && !u.signed) &&
+      !holdsOf(i).holds &&
+      siteOnly(this.paths(i.merged!.commit))
+    );
   }
 
   // After Main got the message: the approved items up to the push point
@@ -693,18 +723,31 @@ export class SignoffStore {
 
   // The merges not pushed yet (the diagram's Push stage), oldest first. sent:
   // the last push go included it, so it waits for Main's push report.
-  unpushedList(): { taskId: string; commit: string; at: number; seq: number; sent: boolean }[] {
+  unpushedList(): { taskId: string; commit: string; at: number; seq: number; sent: boolean; site?: string }[] {
     const go = this.state.lastPushGo?.commit;
     const same = (a: string) => Boolean(go) && (a.startsWith(go!) || go!.startsWith(a));
     const goSeq = [...(this.state.shas ?? [])].reverse().find((x) => same(x.commit))?.seq;
     return Object.entries(this.state.unpushed ?? {})
       .sort((a, b) => a[1].seq - b[1].seq)
-      .map(([taskId, u]) => ({ taskId, commit: u.commit, at: u.at, seq: u.seq, sent: goSeq !== undefined && u.seq <= goSeq }));
+      .map(([taskId, u]) => ({ taskId, commit: u.commit, at: u.at, seq: u.seq, sent: goSeq !== undefined && u.seq <= goSeq, ...(u.site ? { site: u.site } : {}) }));
   }
 
   // Main pushed this sha: every merge and revert reported up to it is pushed.
-  pushed(raw: unknown): { pushed: string[] } {
+  // With "site": a site-only merge Main pushed alone (commit: the sha on
+  // origin): only that item leaves, and its merge stays until a push passes it.
+  pushed(raw: unknown): { pushed: string[]; site?: string } {
     const commit = commitOf(raw);
+    const siteTask = (raw as Record<string, unknown> | null)?.site;
+    if (siteTask !== undefined) {
+      const taskId = checkTaskId(String(siteTask));
+      const i = this.state.items[taskId];
+      if (!i || !this.siteReady(i)) throw new ValidationError(`${taskId} is not an approved site-only item waiting to go out alone (GET /api/signoff push.site)`);
+      Object.assign(this.state.unpushed![taskId], { site: commit, signed: true });
+      delete this.state.items[taskId];
+      this.images.clear(taskId);
+      this.save();
+      return { pushed: [], site: taskId };
+    }
     const same = (a: string) => a.startsWith(commit) || commit.startsWith(a);
     const hit = [...this.state.shas!].reverse().find((x) => same(x.commit));
     if (!hit) throw new ValidationError("no merge or revert reported this commit; push the sha of the push go");

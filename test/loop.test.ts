@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ageLine, areasOf, areasOverlap, dispatch, dueIn, freeWorkers, holdings, nilAsks, parseTag, proposalRefusal, pushToWake, readyQueue, staleCards, status, tick, unclassified, unrecommended, wakeText, withdrawLine } from "../src/loop";
+import { ageLine, areasOf, areasOverlap, dispatch, dueIn, freeWorkers, holdings, nilAsks, siteToWake, parseTag, proposalRefusal, pushToWake, readyQueue, staleCards, status, tick, unclassified, unrecommended, wakeText, withdrawLine } from "../src/loop";
 import type { Agent, Office, PatchResult, Task } from "../src/office";
 import type { Author } from "../src/returns";
 
@@ -497,6 +497,18 @@ describe("tick", () => {
     expect(pushToWake({ ok: false, sha: "bbb" }, "aaa", none)).toBeNull();
     expect(pushToWake({ ok: true, sha: null }, null, none)).toBeNull();
     expect(pushToWake({ ok: true, sha: "bbb" }, "aaa", (sha) => sha === "bbb")).toBeNull();
+  });
+
+  // Board task 4a99bf16: a signed-off site-only merge goes out alone.
+  test("the tick wakes Isomux Main once for each site-only merge in push.site", async () => {
+    const site = [{ taskId: "s1", commit: "bbbbbbb2cc" }, { taskId: "s2", commit: "ccccccc3dd" }];
+    const t = stubOffice([], [agent("Isomux Main", true)]);
+    const res = await tick(t.office, 2, null, siteToWake(site, ["s2:ccccccc3dd"]));
+    expect(res.site).toEqual(["s1:bbbbbbb2cc"]);
+    expect(t.messages.map((x) => x.to)).toEqual(["id-Isomux Main"]);
+    expect(t.messages[0].text).toContain("s1 (bbbbbbb2cc)");
+    expect(t.messages[0].text).not.toContain("s2");
+    expect(siteToWake(site, ["s1:bbbbbbb2cc", "s2:ccccccc3dd"])).toEqual([]);
   });
 
   test("the push wake reaches Isomux Main also when it is busy, with the merge count when it is idle", async () => {

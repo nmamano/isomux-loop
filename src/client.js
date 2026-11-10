@@ -103,6 +103,7 @@ const HELP = {
   classify: "Every 10 minutes, also while paused, the app wakes the curator to recommend Backlog tasks that have no recommendation. It also withdraws undecided cards whose task closed meanwhile.",
   working: "Workers that hold a task now.",
   newTasks: "Every minute the app tells Isomux Curator about each new open P0-P3 task with no tag and no assignee, once, and about each such task that stops waiting, waits again or is edited.",
+  sitePushed: "A site-only change Nil approved goes out without waiting for the product items before it. Isomux Main pushed it alone; this merge leaves the list at the next push that passes it.",
   free: "Loop workers without a task and without an open ask for Nil. They get the next ready task at the next dispatch. A worker that waits on Nil, or holds a task outside the loop (tagged with its name, or assigned to it while open), gets no new task.",
   ready: "Tasks the loop can take now, in the order it takes them. A task with a design packet goes back to the worker that wrote it, once that worker is free.",
   merging: "Approved work that Isomux Main merges after CI.",
@@ -1644,6 +1645,7 @@ function pushCard({ t, u, it }, waitsFor) {
     ? editsOf(it)
       ? '<span class="ok"' + tip("editsFiled") + ">Approved, changes filed: task " + idLink(editsOf(it)) + "</span>"
       : '<span class="ok"' + tip("approvedSign") + ">Approved</span>"
+    : u && u.site ? "<span" + tip("sitePushed") + ">Site change pushed alone as <code>" + esc(u.site.slice(0, 10)) + "</code></span>"
     : u && u.sent ? "<span" + tip("sentPush") + ">Push sent, waiting for Isomux Main</span>"
     : "<span" + tip("nothingToSign") + ">Nothing to sign off</span>";
   const wait = waitsFor ? ' <span class="warn"' + tip("waitsFor") + ">waits for " + idLink(waitsFor) + "</span>" : "";

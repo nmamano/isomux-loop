@@ -317,7 +317,8 @@ export function dueIn(lastAt: number | null, now: number, everyMs: number): numb
 
 // push: the push point the tick woke Isomux Main for, or null.
 // scout: the sign-off items the tick told the Scout about (batchAsks).
-export type TickResult = { nudged: { worker: string; taskId: string }[]; main: number | null; push?: string | null; scout?: string[]; errors: string[] };
+// site: the site-only merges the tick told Main to push alone.
+export type TickResult = { nudged: { worker: string; taskId: string }[]; main: number | null; push?: string | null; site?: string[]; scout?: string[]; errors: string[] };
 
 // The push point the tick wakes Isomux Main for (Isomux PM, 2026-11-01): Main
 // pushes signed-off push points on its own at the tick (Nil, 2026-10-31), so
@@ -335,6 +336,18 @@ export function pushWakeText(sha: string): string {
   );
 }
 
+// The site-only merges to wake Main for: each once (woken holds "task:commit").
+export function siteToWake(site: { taskId: string; commit: string }[], woken: string[]): { taskId: string; commit: string }[] {
+  return site.filter((x) => !woken.includes(`${x.taskId}:${x.commit}`));
+}
+
+export function siteWakeText(site: { taskId: string; commit: string }[]): string {
+  return (
+    `/isomux-main tick: signed-off site-only merges go out alone (GET /api/signoff push.site): ${site.map((x) => `${x.taskId} (${x.commit.slice(0, 10)})`).join(", ")}. ` +
+    'Push each as your skill\'s site step says, and report it with POST /api/signoff/pushed {"commit":"<sha you pushed>","site":"<taskId>"}.'
+  );
+}
+
 export function workerTickText(taskId: string): string {
   return (
     `/isomux-loop-worker tick ${taskId}: if your work on it stopped short of its next hand-off, continue it. ` +
@@ -347,8 +360,8 @@ export function workerTickText(taskId: string): string {
 // finish; batch work outside the loop is untagged and gets no nudge.
 // push: a push point to wake Isomux Main for (pushToWake). Main gets it even
 // when busy, as a queued message, so the wake is not lost.
-export async function tick(office: Office, n: number, push: string | null = null): Promise<TickResult> {
-  const out: TickResult = { nudged: [], main: null, push: null, errors: [] };
+export async function tick(office: Office, n: number, push: string | null = null, site: { taskId: string; commit: string }[] = []): Promise<TickResult> {
+  const out: TickResult = { nudged: [], main: null, push: null, site: [], errors: [] };
   const [tasks, agents] = await Promise.all([office.tasks(), office.agents()]);
   for (const w of workers(agents)) {
     const inLoop = WORKER_NAMES.indexOf(w.name) < n;
@@ -365,13 +378,14 @@ export async function tick(office: Office, n: number, push: string | null = null
   const merging = withState(tasks, "merging").length;
   const main = agents.find((a) => a.name === MAIN_NAME);
   const toMerge = merging > 0 && main && !main.inFlightTurn;
-  if (main && (toMerge || push)) {
-    const text = [toMerge ? `/isomux-main tick: ${merging} tasks wait to merge.` : "", push ? pushWakeText(push) : ""].filter(Boolean).join("\n");
+  if (main && (toMerge || push || site.length)) {
+    const text = [toMerge ? `/isomux-main tick: ${merging} tasks wait to merge.` : "", push ? pushWakeText(push) : "", site.length ? siteWakeText(site) : ""].filter(Boolean).join("\n");
     if (await office.message(text, main.id)) {
       if (toMerge) out.main = merging;
       out.push = push;
+      out.site = site.map((x) => `${x.taskId}:${x.commit}`);
     } else out.errors.push("tick message to Isomux Main failed");
-  } else if (push) out.errors.push("Isomux Main is not in the office: no push wake");
+  } else if (push || site.length) out.errors.push("Isomux Main is not in the office: no push wake");
   return out;
 }
 

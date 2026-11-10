@@ -5,7 +5,7 @@ import { sniff } from "../src/images";
 import { PacketStore, packetState } from "../src/packets";
 import { REVERT_HOLD_MS, REVERT_RETRY_MS } from "../src/config";
 import type { Office, PatchResult, Task } from "../src/office";
-import { guessAudience, sendDueReverts, SignoffStore, signoffState, undoDecision, withAudience } from "../src/signoff";
+import { guessAudience, sendDueReverts, siteOnly, SignoffStore, signoffState, undoDecision, withAudience } from "../src/signoff";
 import { ValidationError } from "../src/store";
 import { tempDir } from "./tmp";
 
@@ -507,6 +507,54 @@ describe("sign-off", () => {
       .toEqual(["member", "agent", "agent", "member", "member", "member"]);
     // An entry stored before audiences existed is guessed when read.
     expect(withAudience({ where: "server/system-prompt.ts", old: "", new: "x" })).toMatchObject({ audience: "agent", guessed: true });
+  });
+
+  // Board task 4a99bf16 (Nil, 2026-11-10: "copy updates on the site *don't*
+  // need to wait for product pushes").
+  test("site-only: every changed path is the site's or the demo's", () => {
+    expect(siteOnly(["site/index.html", "site/media/a.mp4", "ui/demo-server.ts", "ui/demo.html", "scripts/build-demo.ts"])).toBe(true);
+    for (const paths of [["site/index.html", "ui/app.tsx"], ["shared/storage-labels.ts"], ["ui/demo/x.ts"], ["website/x"], [], null]) expect(siteOnly(paths)).toBe(false);
+  });
+
+  test("push.site: an approved site-only merge behind an unsigned item goes out alone, and only it leaves", () => {
+    const site = ["site/index.html"];
+    const paths: Record<string, string[]> = { bbbbbbb2: site, ccccccc3: site, ddddddd4: ["site/x", "server/y.ts"], eeeeeee5: site, fffffff6: site, "1111111a": site };
+    const s = new SignoffStore(tempDir(), Date.now, (x) => x, (x) => paths[x] ?? null);
+    for (const id of ["t1", "s1", "s2", "p1", "s3"]) s.put({ ...item, taskId: id });
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.merged("s1", { commit: "bbbbbbb2" });
+    s.merged("s2", { commit: "ccccccc3" });
+    s.merged("p1", { commit: "ddddddd4" });
+    s.merged("s3", { commit: "eeeeeee5" });
+    s.merged("s3", { commit: "fffffff6" });
+    s.approve("s1");
+    s.approve("s2", "fix2");
+    s.approve("p1");
+    s.approve("s3");
+    // t1 waits for Nil: no push point. Only s1 may go alone: s2 has a changes
+    // task, p1 is not site-only, s3 has two merges not pushed.
+    expect(s.pushCheck()).toMatchObject({ ok: false, sha: null, site: [{ taskId: "s1", commit: "bbbbbbb2" }] });
+    expect(() => s.pushed({ commit: "9999999z" })).toThrow(ValidationError);
+    for (const id of ["t1", "s2", "p1", "s3"]) expect(() => s.pushed({ commit: "9999999a", site: id })).toThrow(ValidationError);
+    expect(s.pushed({ commit: "9999999a", site: "s1" })).toEqual({ pushed: [], site: "s1" });
+    // Only s1's item leaves; every merge stays until a push passes it, and s1 holds nothing back.
+    expect(s.visible().map((i) => i.taskId)).toEqual(["t1", "s2", "p1", "s3"]);
+    expect(s.unpushedList().map((u) => [u.taskId, u.site ?? null])).toEqual([["t1", null], ["s1", "9999999a"], ["s2", null], ["p1", null], ["s3", null]]);
+    expect(s.pushCheck().site).toEqual([]);
+    expect(() => s.pushed({ commit: "9999999b", site: "s1" })).toThrow(ValidationError);
+    s.approve("t1");
+    s.merged("fix2", { commit: "1111111a", signoff: "none" });
+    expect(s.pushCheck()).toMatchObject({ ok: true, sha: "1111111a", blockers: [], site: [] });
+    expect(s.pushed({ commit: "1111111a" }).pushed).toEqual(["t1", "s1", "s2", "p1", "s3", "fix2"]);
+  });
+
+  test("push.site: a site-only merge the push point takes is not listed", () => {
+    const s = new SignoffStore(tempDir(), Date.now, (x) => x, () => ["site/index.html"]);
+    for (const id of ["s1", "t1"]) s.put({ ...item, taskId: id });
+    s.merged("s1", { commit: "aaaaaaa1" });
+    s.merged("t1", { commit: "bbbbbbb2" });
+    s.approve("s1");
+    expect(s.pushCheck()).toMatchObject({ ok: true, sha: "aaaaaaa1", site: [] });
   });
 
   // Board task cf2d87d1: one item for a task merged in parts, posted after

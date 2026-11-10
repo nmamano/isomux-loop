@@ -1,7 +1,7 @@
 import { ANNOUNCE_UNTAGGED, NEW_TASKS_MS, CLASSIFY_MS, MAIN_REPO, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, SCOUT_NAME, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS, USAGE_MS } from "./config";
 import { ClosedTimes } from "./closed-times";
 import { type ImageDir } from "./images";
-import { dispatch, dueIn, nilAsks, offBoard, parseTag, proposalRefusal, pushToWake, staleCards, status, tick, unclassified, unrecommended, wakeText, type DispatchResult, type Status, type TickResult, withdrawLine } from "./loop";
+import { dispatch, dueIn, nilAsks, offBoard, parseTag, proposalRefusal, pushToWake, siteToWake, staleCards, status, tick, unclassified, unrecommended, wakeText, type DispatchResult, type Status, type TickResult, withdrawLine } from "./loop";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readJson, writeJson } from "./json-file";
@@ -43,7 +43,17 @@ function resolveSha(sha: string): string | null {
   const out = r.stdout.toString().trim();
   return r.exitCode === 0 && /^[0-9a-f]{40,64}$/.test(out) ? out : null;
 }
-const signoff = new SignoffStore(dataDir, Date.now, resolveSha);
+// The paths a merge commit changes against its first parent (a squash merge
+// or a merge of origin/main); commits do not change, so each is read once.
+const pathsCache = new Map<string, string[] | null>();
+function mergePaths(sha: string): string[] | null {
+  if (!pathsCache.has(sha)) {
+    const r = Bun.spawnSync(["git", "-C", MAIN_REPO, "diff", "--name-only", `${sha}^1`, sha]);
+    pathsCache.set(sha, r.exitCode === 0 ? r.stdout.toString().split("\n").filter(Boolean) : null);
+  }
+  return pathsCache.get(sha)!;
+}
+const signoff = new SignoffStore(dataDir, Date.now, resolveSha, mergePaths);
 // Whether origin/main in the main checkout has the commit (as of Main's last fetch).
 function onOrigin(sha: string): boolean {
   return Bun.spawnSync(["git", "-C", MAIN_REPO, "merge-base", "--is-ancestor", sha, "refs/remotes/origin/main"]).exitCode === 0;
@@ -201,7 +211,9 @@ POST /api/signoff/:taskId/edits   {"task"}: a Sign-off changes task filed by han
                                   the push point back (state "edits") as for one an approval filed.
 POST /api/signoff/:taskId/reverted  Isomux Main after a revert Nil asked for: {"commit"}. The item leaves the list.
 POST /api/signoff/pushed          Isomux Main after every push: {"commit"} (the sha it pushed). Every merge reported up to
-                                  that sha leaves the Push state; returns {"pushed":[taskIds]}.
+                                  that sha leaves the Push state; returns {"pushed":[taskIds]}. For a site-only merge pushed
+                                  alone (push.site): {"commit":"<sha pushed>","site":"<taskId>"}; only its item leaves, the
+                                  merges before it stay, and its merge leaves at the push that passes it.
 GET  /api/signoff                 merged items, the merges not pushed yet (unpushed: taskId, commit, seq, sent = in the last
                                   push go), the main sha, and push: the push point (Nil, 2026-10-20). Main is linear, so a
                                   push is "everything up to sha X": push.sha is the newest reported sha with every item
@@ -210,6 +222,11 @@ GET  /api/signoff                 merged items, the merges not pushed yet (unpus
                                   all of them since the last push, push.blockers the items that hold it back (oldest
                                   first). A rejected item holds it back until Main reports the revert, and no point between
                                   the rejected merge and its revert is used. The push go names push.sha, never main's tip.
+                                  push.site: approved site-only merges past the push point (Nil, 2026-11-10: site copy does
+                                  not wait for product pushes), [{taskId, commit}]. Site-only: every path the merge changes
+                                  is under site/, a ui/demo-* or ui/demo.* file, or scripts/build-demo.ts. Not listed: a task
+                                  with more than one unpushed merge, or one with a Sign-off changes task. The tick wakes
+                                  Main once for each. A later push of push.sha may be a merge of origin/main into it.
 Nil's buttons on the Sign-off tab: approve (optional {"note"}; with a note or comments on any entry it also files a P0
 "[go | ready] Sign-off changes: <title>" task with them, and the item holds the push point back, as a blocker with
 state "edits", until that task is closed unmerged, or merged and inside the push point, so the item goes out only with
@@ -230,10 +247,12 @@ let lastDispatch: Run<DispatchResult> | null = null;
 // The last tick is kept in the data dir: an interval timer starts over at
 // every restart, so with frequent restarts the hourly tick never fired.
 const timersFile = join(dataDir, "timers.json");
-const timers = readJson<{ lastTick: Run<TickResult> | null; pushWoken?: string | null }>(timersFile, { lastTick: null });
+const timers = readJson<{ lastTick: Run<TickResult> | null; pushWoken?: string | null; siteWoken?: string[] }>(timersFile, { lastTick: null });
 let lastTick: Run<TickResult> | null = timers.lastTick;
 // The last push point the tick woke Isomux Main for (pushToWake).
 let pushWoken: string | null = timers.pushWoken ?? null;
+// The site-only merges the tick woke Main for ("task:commit"; siteToWake).
+let siteWoken: string[] = timers.siteWoken ?? [];
 let busy = false;
 
 async function exclusive<T>(fn: () => Promise<T>): Promise<Run<T> | null> {
@@ -267,8 +286,9 @@ async function runDispatch(): Promise<Run<DispatchResult> | null> {
 async function runTick(): Promise<Run<TickResult> | null> {
   if (pause.paused) return null;
   const run = await exclusive(async () => {
-    const push = pushToWake(signoff.pushCheck(await closedOnBoard(true)), pushWoken, onOrigin);
-    const out = await tick(office, pause.workers, push);
+    const check = signoff.pushCheck(await closedOnBoard(true));
+    const push = pushToWake(check, pushWoken, onOrigin);
+    const out = await tick(office, pause.workers, push, siteToWake(check.site, siteWoken));
     // The held asks go out together at the tick (batchAsks).
     out.scout = await flushScout().catch((err) => {
       out.errors.push(String(err instanceof Error ? err.message : err));
@@ -280,7 +300,8 @@ async function runTick(): Promise<Run<TickResult> | null> {
   if (run) {
     lastTick = run;
     if (run.result?.push) pushWoken = run.result.push;
-    writeJson(timersFile, { lastTick, pushWoken });
+    if (run.result?.site?.length) siteWoken = [...siteWoken, ...run.result.site].slice(-200);
+    writeJson(timersFile, { lastTick, pushWoken, siteWoken });
   }
   return run;
 }
