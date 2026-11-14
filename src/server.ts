@@ -53,7 +53,21 @@ function mergePaths(sha: string): string[] | null {
   }
   return pathsCache.get(sha)!;
 }
-const signoff = new SignoffStore(dataDir, Date.now, resolveSha, mergePaths);
+// Whether a merge's change applies on origin/main, as Main's cherry-pick of a
+// site push needs (board task 3c299bd5): a three-way merge of the change onto
+// origin/main, in memory. Cached per origin/main sha.
+const appliesCache = new Map<string, boolean>();
+function appliesOnOrigin(sha: string): boolean {
+  const origin = Bun.spawnSync(["git", "-C", MAIN_REPO, "rev-parse", "refs/remotes/origin/main"]).stdout.toString().trim();
+  const key = `${origin}:${sha}`;
+  if (!appliesCache.has(key)) {
+    if (appliesCache.size > 500) appliesCache.clear();
+    const r = Bun.spawnSync(["git", "-C", MAIN_REPO, "merge-tree", "--write-tree", `--merge-base=${sha}^1`, "refs/remotes/origin/main", sha]);
+    appliesCache.set(key, Boolean(origin) && r.exitCode === 0);
+  }
+  return appliesCache.get(key)!;
+}
+const signoff = new SignoffStore(dataDir, Date.now, resolveSha, mergePaths, appliesOnOrigin);
 // Whether origin/main in the main checkout has the commit (as of Main's last fetch).
 function onOrigin(sha: string): boolean {
   return Bun.spawnSync(["git", "-C", MAIN_REPO, "merge-base", "--is-ancestor", sha, "refs/remotes/origin/main"]).exitCode === 0;
@@ -227,7 +241,9 @@ GET  /api/signoff                 merged items, the merges not pushed yet (unpus
                                   is under site/, docs/ or internal-docs/, README.md, a ui/demo-* or ui/demo.* file, or
                                   scripts/build-demo.ts.
                                   Not listed: a task
-                                  with more than one unpushed merge, or one with a Sign-off changes task. The tick wakes
+                                  with more than one unpushed merge, one with a Sign-off changes task, or one whose change
+                                  does not apply on origin/main (it edits a line an unpushed merge added): it goes out with
+                                  the normal push. The tick wakes
                                   Main once for each. A later push of push.sha may be a merge of origin/main into it.
 Nil's buttons on the Sign-off tab: approve (optional {"note"}; with a note or comments on any entry it also files a P0
 "[go | ready] Sign-off changes: <title>" task with them, and the item holds the push point back, as a blocker with

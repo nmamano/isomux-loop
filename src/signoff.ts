@@ -205,6 +205,9 @@ export class SignoffStore {
     private resolve: (sha: string) => string | null = (sha) => sha,
     // The paths a merge commit changes; null when unknown (not site-only).
     private paths: (sha: string) => string[] | null = () => null,
+    // Whether the merge's change applies cleanly on origin/main (Main's
+    // cherry-pick of a site push); unknown counts as no.
+    private applies: (sha: string) => boolean = () => true,
   ) {
     this.file = join(dataDir, "signoff.json");
     this.state = readJson<State>(this.file, { items: {}, lastSha: null, lastPushGo: null });
@@ -696,14 +699,18 @@ export class SignoffStore {
   }
 
   // An approved item Main may push alone: one merge not pushed, no Sign-off
-  // changes task (it must go out with it), and a site-only diff.
-  private siteReady(i: SignoffItem): boolean {
+  // changes task (it must go out with it), a site-only diff, and a change
+  // that applies on origin/main (board task 3c299bd5: a changes task that
+  // edits a line an unpushed merge added goes out with that merge).
+  // checkApply: false when only Main's report of a push it made is checked.
+  private siteReady(i: SignoffItem, checkApply = true): boolean {
     const u = this.state.unpushed?.[i.taskId];
     return (
       signoffState(i) === "approved" &&
       Boolean(u && sameSha(u.commit, i.merged!.commit) && u.first === undefined && !u.site && !u.signed) &&
       !holdsOf(i).holds &&
-      siteOnly(this.paths(i.merged!.commit))
+      siteOnly(this.paths(i.merged!.commit)) &&
+      (!checkApply || this.applies(i.merged!.commit))
     );
   }
 
@@ -743,7 +750,7 @@ export class SignoffStore {
     if (siteTask !== undefined) {
       const taskId = checkTaskId(String(siteTask));
       const i = this.state.items[taskId];
-      if (!i || !this.siteReady(i)) throw new ValidationError(`${taskId} is not an approved site-only item waiting to go out alone (GET /api/signoff push.site)`);
+      if (!i || !this.siteReady(i, false)) throw new ValidationError(`${taskId} is not an approved site-only item waiting to go out alone (GET /api/signoff push.site)`);
       Object.assign(this.state.unpushed![taskId], { site: commit, signed: true });
       delete this.state.items[taskId];
       this.images.clear(taskId);

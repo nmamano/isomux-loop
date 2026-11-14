@@ -551,6 +551,23 @@ describe("sign-off", () => {
     expect(s.pushed({ commit: "1111111a" }).pushed).toEqual(["t1", "s1", "s2", "p1", "s3", "fix2"]);
   });
 
+  // Board task 3c299bd5: a changes task edited a docs line an unpushed merge
+  // added, so Main's cherry-pick onto origin/main failed every hour.
+  test("push.site: a change that does not apply on origin/main is not listed, and goes with the normal push", () => {
+    let clean = false;
+    const s = new SignoffStore(tempDir(), Date.now, (x) => x, () => ["docs/features.md"], () => clean);
+    for (const id of ["t1", "s1"]) s.put({ ...item, taskId: id });
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.merged("s1", { commit: "bbbbbbb2" });
+    s.approve("s1");
+    expect(s.pushCheck().site).toEqual([]);
+    clean = true;
+    expect(s.pushCheck().site).toEqual([{ taskId: "s1", commit: "bbbbbbb2" }]);
+    // A push Main already made is taken even if origin/main moved since.
+    clean = false;
+    expect(s.pushed({ commit: "9999999a", site: "s1" }).site).toBe("s1");
+  });
+
   test("push.site: a site-only merge the push point takes is not listed", () => {
     const s = new SignoffStore(tempDir(), Date.now, (x) => x, () => ["site/index.html"]);
     for (const id of ["s1", "t1"]) s.put({ ...item, taskId: id });
