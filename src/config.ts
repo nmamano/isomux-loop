@@ -20,6 +20,9 @@ export const DISPATCH_MS = 2 * 60_000;
 // The 5-hour guard reads the usage window this often (usage-guard.ts).
 export const USAGE_MS = 5 * 60_000;
 export const TICK_MS = 60 * 60_000;
+// With batchAsks, the held Scout and Curator wakes go out this often (Nil,
+// 2026-11-15: "batch 10 min"; before, at the hourly tick).
+export const ASK_BATCH_MS = 10 * 60_000;
 // Nil decides in bursts; the curator hears once he has paused this long.
 export const TRIAGE_QUIET_MS = 3 * 60_000;
 // Untagged P0-P3 triage moved to Antifeed (Nil, 2026-10-28): the curator wake

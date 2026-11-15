@@ -2,9 +2,10 @@
 // dispatch and the tick: workers on a batch outside the loop must not get loop
 // messages. `workers` is N: the loop dispatches to Workers 1..N. `minPriority`
 // is the priority floor: dispatch takes only ready tasks at it or higher
-// (null: no floor). `batchAsks` (Nil, 2026-11-01): the wakes that make the
-// Scout and the Curator open asks for Nil wait for the hourly tick, so his
-// Inbox gets new asks about once an hour, together (default on).
+// (null: no floor). `batchAsks` (Nil, 2026-11-01; every 10 minutes since
+// 2026-11-15): the wakes that make the Scout and the Curator open asks for
+// Nil are held and go out together every ASK_BATCH_MS, so his Inbox gets new
+// asks in groups, not one by one (default on).
 
 import { join } from "node:path";
 import { DEFAULT_WORKERS, LOOP_PRIORITIES, MAX_WORKERS } from "./config";

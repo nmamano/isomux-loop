@@ -1,4 +1,4 @@
-import { ANNOUNCE_UNTAGGED, NEW_TASKS_MS, CLASSIFY_MS, MAIN_REPO, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, SCOUT_NAME, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS, USAGE_MS } from "./config";
+import { ANNOUNCE_UNTAGGED, ASK_BATCH_MS, NEW_TASKS_MS, CLASSIFY_MS, MAIN_REPO, CLASSIFY_REMIND_MS, DISPATCH_MS, MAIN_NAME, ROOM_ID, SCOUT_NAME, STATUS_CACHE_MS, TICK_MS, TRIAGE_QUIET_MS, USAGE_MS } from "./config";
 import { ClosedTimes } from "./closed-times";
 import { type ImageDir } from "./images";
 import { dispatch, dueIn, nilAsks, offBoard, parseTag, proposalRefusal, pushToWake, siteToWake, staleCards, status, tick, unclassified, unrecommended, wakeText, type DispatchResult, type Status, type TickResult, withdrawLine } from "./loop";
@@ -163,12 +163,14 @@ GET  /api/status                  pause state, last dispatch and tick, ready que
 POST /api/pause | /api/resume     pause stops dispatch and the tick; the first tick after a resume (within a minute) catches what stopped
                                   meanwhile. The tick is due an hour after the last one, also across app restarts (timers.json).
                                   The tick also wakes Isomux Main, once per sha, when push.ok holds at a push point that is
-                                  not on origin/main (lastTick.result.push names it). With batchAsks (the default), the tick
-                                  also sends what waits for the Sign-off Scout (one message, lastTick.result.scout) and for
-                                  the Curator (the new-task wake, which holds them between ticks unless a new task is P0).
+                                  not on origin/main (lastTick.result.push names it). With batchAsks (the default), what
+                                  waits for the Sign-off Scout (one message) and for the Curator (the new-task wake, which
+                                  holds them unless a new task is P0) goes out every 10 minutes, not at the tick
+                                  (lastAskBatch: at, scout, reported, changed).
 POST /api/settings                {"workers": 1-6, "minPriority": "P0"-"P3" | null, "batchAsks": true | false}, any of them (the first two also on the status page).
-                                  batchAsks (Nil, 2026-11-01; default true): the Scout and Curator wakes wait for the hourly
-                                  tick, so new asks reach Nil's Inbox about once an hour; false sends what waits at once.
+                                  batchAsks (Nil, 2026-11-01; default true): the Scout and Curator wakes are held and go out
+                                  together every 10 minutes (Nil, 2026-11-15), so new asks reach Nil's Inbox in groups; false
+                                  sends what waits at once.
                                   workers: the loop dispatches to Workers 1..N. Lowering N takes no task away; a worker above N
                                   keeps its tick while it holds a loop task. minPriority: dispatch takes only ready tasks at that
                                   priority or higher ("P1": P0 and P1); null (the default) takes every priority. GET /api/status
@@ -306,14 +308,7 @@ async function runTick(): Promise<Run<TickResult> | null> {
   const run = await exclusive(async () => {
     const check = signoff.pushCheck(await closedOnBoard(true));
     const push = pushToWake(check, pushWoken, onOrigin);
-    const out = await tick(office, pause.workers, push, siteToWake(check.site, siteWoken));
-    // The held asks go out together at the tick (batchAsks).
-    out.scout = await flushScout().catch((err) => {
-      out.errors.push(String(err instanceof Error ? err.message : err));
-      return [];
-    });
-    await runNewTasks(false, true);
-    return out;
+    return await tick(office, pause.workers, push, siteToWake(check.site, siteWoken));
   });
   if (run) {
     lastTick = run;
@@ -425,6 +420,25 @@ async function runNewTasks(hold = pause.batchAsks, wait = false): Promise<void> 
 }
 setTimeout(() => void runNewTasks(), 5_000);
 setInterval(() => void runNewTasks(), NEW_TASKS_MS);
+
+// The held asks go out together every ASK_BATCH_MS (batchAsks; paused: held
+// until the first batch after the resume).
+type AskBatch = { at: number; scout: string[]; reported: string[]; changed: string[]; error?: string };
+let lastAskBatch: AskBatch | null = null;
+async function runAskBatch(): Promise<void> {
+  if (pause.paused || !pause.batchAsks) return;
+  const at = Date.now();
+  const errors: string[] = [];
+  const scout = await flushScout().catch((err) => {
+    errors.push(String(err instanceof Error ? err.message : err));
+    return [] as string[];
+  });
+  await runNewTasks(false, true);
+  const nt = lastNewTasks;
+  if (nt?.error) errors.push(nt.error);
+  lastAskBatch = { at, scout, reported: nt?.reported ?? [], changed: nt?.changed ?? [], ...(errors.length ? { error: errors.join("; ") } : {}) };
+}
+setInterval(() => void runAskBatch(), ASK_BATCH_MS);
 
 // Merges whose sign-off items the Scout has not heard about (batchAsks).
 const scoutQueue = new ScoutQueue(dataDir);
@@ -582,7 +596,7 @@ async function loopStatus(): Promise<Record<string, unknown>> {
     error = String(err instanceof Error ? err.message : err);
   }
   const signoffWaiting = signoff.visible().filter((i) => signoffState(i) === "waiting").length;
-  return { paused: pause.paused, pausedSince: pause.since, workers: pause.workers, minPriority: pause.minPriority, batchAsks: pause.batchAsks, usage: { last: lastUsage, lowered: usageGuard.lowered, log: usageGuard.log.slice(-10) }, lastDispatch, lastTick, lastClassify, lastNewTasks, board, error, signoffWaiting };
+  return { paused: pause.paused, pausedSince: pause.since, workers: pause.workers, minPriority: pause.minPriority, batchAsks: pause.batchAsks, lastAskBatch, usage: { last: lastUsage, lowered: usageGuard.lowered, log: usageGuard.log.slice(-10) }, lastDispatch, lastTick, lastClassify, lastNewTasks, board, error, signoffWaiting };
 }
 
 // --- backlog -------------------------------------------------------------------

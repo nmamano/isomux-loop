@@ -69,7 +69,7 @@ export function newTasksText(news: Task[], changed: { id: string; change: Change
   return `/isomux-curator ${parts.join("\n")}`;
 }
 
-// held: news and changes that wait for the tick (batchAsks).
+// held: news and changes that wait for the next ask batch (batchAsks, every 10 minutes).
 export type NewTasksRun = { at: number; reported: string[]; changed: string[]; held?: number; seeded?: number; error?: string };
 
 export class NewTasks {
@@ -92,7 +92,7 @@ export class NewTasks {
     );
   }
 
-  // hold (batchAsks, between ticks): news and changes wait, recorded as not
+  // hold (batchAsks, between ask batches): news and changes wait, recorded as not
   // reported, for the next run without hold. A new P0 task sends them all at once.
   async run(office: Office, now = Date.now(), hold = false): Promise<NewTasksRun> {
     const tasks = await office.tasks();

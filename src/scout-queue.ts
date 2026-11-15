@@ -1,6 +1,6 @@
 // Sign-off items the Sign-off Scout has not heard about yet (batchAsks, Nil,
-// 2026-11-01): a merge with a waiting item joins the queue, and the hourly
-// tick tells the Scout about all of them in one message, so its asks reach
+// 2026-11-01): a merge with a waiting item joins the queue, and every 10
+// minutes the app tells the Scout about all of them in one message, so its asks reach
 // Nil's Inbox together. Kept on disk so a restart loses none.
 
 import { join } from "node:path";
