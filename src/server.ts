@@ -68,6 +68,26 @@ function appliesOnOrigin(sha: string): boolean {
   return appliesCache.get(key)!;
 }
 const signoff = new SignoffStore(dataDir, Date.now, resolveSha, mergePaths, appliesOnOrigin);
+// Whether origin/main has a merge's change already (board task 5e5af4b7): the
+// change applied to origin/main gives origin/main's own tree. Cached per
+// origin/main sha.
+const inOriginCache = new Map<string, boolean>();
+function changeOnOrigin(sha: string): boolean {
+  const git = (...args: string[]) => Bun.spawnSync(["git", "-C", MAIN_REPO, ...args]);
+  const origin = git("rev-parse", "refs/remotes/origin/main").stdout.toString().trim();
+  const key = `${origin}:${sha}`;
+  if (!inOriginCache.has(key)) {
+    if (inOriginCache.size > 500) inOriginCache.clear();
+    const r = git("merge-tree", "--write-tree", `--merge-base=${sha}^1`, "refs/remotes/origin/main", sha);
+    const tree = git("rev-parse", "refs/remotes/origin/main^{tree}").stdout.toString().trim();
+    inOriginCache.set(key, Boolean(origin) && r.exitCode === 0 && r.stdout.toString().split("\n")[0].trim() === tree);
+  }
+  return inOriginCache.get(key)!;
+}
+function sweepOrigin(): void {
+  const took = signoff.sweepOnOrigin(changeOnOrigin);
+  if (took.length) console.log(`already on origin/main, off the unpushed list: ${took.join(", ")}`);
+}
 // Whether origin/main in the main checkout has the commit (as of Main's last fetch).
 function onOrigin(sha: string): boolean {
   return Bun.spawnSync(["git", "-C", MAIN_REPO, "merge-base", "--is-ancestor", sha, "refs/remotes/origin/main"]).exitCode === 0;
@@ -227,7 +247,10 @@ POST /api/signoff/:taskId/edits   {"task"}: a Sign-off changes task filed by han
                                   the push point back (state "edits") as for one an approval filed.
 POST /api/signoff/:taskId/reverted  Isomux Main after a revert Nil asked for: {"commit"}. The item leaves the list.
 POST /api/signoff/pushed          Isomux Main after every push: {"commit"} (the sha it pushed). Every merge reported up to
-                                  that sha leaves the Push state; returns {"pushed":[taskIds]}. For a site-only merge pushed
+                                  that sha leaves the Push state; returns {"pushed":[taskIds]}. A merge whose change
+                                  origin/main has already (a fix cherry-picked and pushed alone) leaves the unpushed list by
+                                  itself, with no report, when it needs nothing more from Nil ("signoff":"none", or approved
+                                  with no Sign-off changes task) and is its task's only unpushed merge. For a site-only merge pushed
                                   alone (push.site): {"commit":"<sha pushed>","site":"<taskId>"}; only its item leaves, the
                                   merges before it stay, and its merge leaves at the push that passes it.
 GET  /api/signoff                 merged items, the merges not pushed yet (unpushed: taskId, commit, seq, sent = in the last
@@ -306,6 +329,7 @@ async function runDispatch(): Promise<Run<DispatchResult> | null> {
 async function runTick(): Promise<Run<TickResult> | null> {
   if (pause.paused) return null;
   const run = await exclusive(async () => {
+    sweepOrigin();
     const check = signoff.pushCheck(await closedOnBoard(true));
     const push = pushToWake(check, pushWoken, onOrigin);
     return await tick(office, pause.workers, push, siteToWake(check.site, siteWoken));
@@ -796,7 +820,8 @@ async function route(req: Request): Promise<Response> {
   }
 
   // Sign-off
-  if (m === "GET" && path === "/api/signoff")
+  if (m === "GET" && path === "/api/signoff") {
+    sweepOrigin();
     return json({
       // revertIn: ms until a held revert request goes to Main (the page counts down).
       items: signoff.visible().map((i) => {
@@ -807,6 +832,7 @@ async function route(req: Request): Promise<Response> {
       ...signoff.meta(),
       push: signoff.pushCheck(await closedOnBoard()),
     });
+  }
   if (m === "POST" && path === "/api/signoff") return json(signoff.put(await body(req)));
   if (m === "GET" && path === "/api/signoff/history")
     return json(signoff.history(Number(new URL(req.url).searchParams.get("limit") ?? 50) || 50));

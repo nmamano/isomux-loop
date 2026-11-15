@@ -772,6 +772,33 @@ export class SignoffStore {
     return { pushed: out };
   }
 
+  // Merges whose change origin/main has already, for example a P0 fix Main
+  // cherry-picked and pushed alone under another sha (board task 5e5af4b7):
+  // they leave the unpushed list, and an approved item the list. Only a merge
+  // that needs nothing more from Nil: "signoff":"none", signed off, or
+  // approved with no Sign-off changes task; a task with several unpushed
+  // merges stays. inOrigin: whether applying the merge's change to
+  // origin/main changes nothing. Returns the task ids it took.
+  sweepOnOrigin(inOrigin: (commit: string) => boolean): string[] {
+    const out: string[] = [];
+    for (const [id, u] of Object.entries(this.state.unpushed ?? {})) {
+      if (u.first !== undefined) continue;
+      const i = this.state.items[id];
+      const done = i
+        ? signoffState(i) === "approved" && sameSha(u.commit, i.merged!.commit) && !holdsOf(i).holds
+        : Boolean(u.none || u.signed);
+      if (!done || !inOrigin(u.commit)) continue;
+      delete this.state.unpushed![id];
+      if (i) {
+        delete this.state.items[id];
+        this.images.clear(id);
+      }
+      out.push(id);
+    }
+    if (out.length) this.save();
+    return out;
+  }
+
   meta(): { lastSha: State["lastSha"]; lastPushGo: State["lastPushGo"] } {
     return { lastSha: this.state.lastSha, lastPushGo: this.state.lastPushGo };
   }

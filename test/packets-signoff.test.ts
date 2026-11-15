@@ -568,6 +568,30 @@ describe("sign-off", () => {
     expect(s.pushed({ commit: "9999999a", site: "s1" }).site).toBe("s1");
   });
 
+  // Board task 5e5af4b7: Main cherry-picked a P0 fix onto origin/main and
+  // pushed it alone; the app had no way to take it off the unpushed list.
+  test("a merge whose change origin/main has already leaves the unpushed list once it needs nothing more from Nil", () => {
+    const s = new SignoffStore(tempDir());
+    for (const id of ["w1", "a1", "e1", "m1"]) s.put({ ...item, taskId: id });
+    s.merged("w1", { commit: "aaaaaaa1" });
+    s.merged("p0", { commit: "bbbbbbb2", signoff: "none" });
+    s.merged("a1", { commit: "ccccccc3" });
+    s.merged("e1", { commit: "ddddddd4" });
+    s.merged("m1", { commit: "eeeeeee5" });
+    s.merged("m1", { commit: "fffffff6" });
+    s.merged("q1", { commit: "1111111a" });
+    s.merged("p2", { commit: "2222222b", signoff: "none" });
+    s.approve("a1");
+    s.approve("e1", "fix1");
+    s.approve("m1");
+    // Every change is on origin/main except p2's.
+    const took = s.sweepOnOrigin((c) => c !== "2222222b");
+    // w1 waits for Nil, e1 for its changes task, m1 has two merges, q1 has no item and no "none".
+    expect(took).toEqual(["p0", "a1"]);
+    expect(s.unpushedList().map((u) => u.taskId)).toEqual(["w1", "e1", "m1", "q1", "p2"]);
+    expect(s.visible().map((i) => i.taskId)).toEqual(["w1", "e1", "m1"]);
+  });
+
   test("push.site: a site-only merge the push point takes is not listed", () => {
     const s = new SignoffStore(tempDir(), Date.now, (x) => x, () => ["site/index.html"]);
     for (const id of ["s1", "t1"]) s.put({ ...item, taskId: id });
