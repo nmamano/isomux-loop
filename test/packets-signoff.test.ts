@@ -615,6 +615,63 @@ describe("sign-off", () => {
     expect(s.pushCheck()).toMatchObject({ ok: true, sha: "aaaaaaa1" });
   });
 
+  // 78733adf, 2026-11-16: slice 2b's item took slice 2a's pushed merge and
+  // held every later push.
+  test("a new post after its merge was pushed does not take that merge; the cf2d87d1 case still does", () => {
+    const dir = tempDir();
+    let t = 1;
+    const s = new SignoffStore(dir, () => t++);
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.approve("t1");
+    // Main's own push: the approved item stays on the list, as live.
+    s.pushed({ commit: "aaaaaaa1" });
+    s.put({ ...item, title: "Slice 2b" });
+    s.merged("other", { commit: "bbbbbbb2", signoff: "none" });
+    expect([signoffState(s.get("t1")!), s.visible()]).toEqual(["unmerged", []]);
+    expect(s.pushCheck()).toMatchObject({ ok: true, sha: "bbbbbbb2", blockers: [] });
+    // Its own merge brings it back, and it holds the push.
+    s.merged("t1", { commit: "ccccccc3" });
+    expect(s.pushCheck().blockers).toEqual([{ taskId: "t1", state: "waiting", seq: 3 }]);
+    // A merged part not pushed yet is kept (board task cf2d87d1).
+    s.put({ ...item, title: "All parts" });
+    expect([signoffState(s.get("t1")!), s.get("t1")!.merged!.commit]).toEqual(["waiting", "ccccccc3"]);
+  });
+
+  test("an item stored with a pushed merge it took from an earlier post waits for its own merge after a restart", () => {
+    const dir = tempDir();
+    let t = 1;
+    const s = new SignoffStore(dir, () => t++);
+    s.put({ ...item, taskId: "old" });
+    s.put(item);
+    s.merged("old", { commit: "0000000f" });
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.approve("old");
+    s.approve("t1");
+    s.pushed({ commit: "aaaaaaa1" });
+    s.merged("other", { commit: "bbbbbbb2", signoff: "none" });
+    // The stored shape of the defect: a new waiting item, posted after the pushed merge it carries.
+    const file = join(dir, "signoff.json");
+    const raw = JSON.parse(readFileSync(file, "utf8"));
+    raw.items.t1 = { ...raw.items.t1, decision: null, postedAt: 99 };
+    writeFileSync(file, JSON.stringify(raw));
+    const back = new SignoffStore(dir);
+    expect([signoffState(back.get("t1")!), signoffState(back.get("old")!)]).toEqual(["unmerged", "approved"]);
+    expect(back.pushCheck()).toMatchObject({ ok: true, sha: "bbbbbbb2" });
+  });
+
+  test("a waiting item whose merge Main pushed already holds nothing back, and keeps its merge after a restart", () => {
+    const dir = tempDir();
+    const s = new SignoffStore(dir);
+    s.put(item);
+    s.merged("t1", { commit: "aaaaaaa1" });
+    s.pushed({ commit: "aaaaaaa1" });
+    s.merged("other", { commit: "bbbbbbb2", signoff: "none" });
+    expect(signoffState(s.get("t1")!)).toBe("waiting");
+    expect(s.pushCheck()).toMatchObject({ ok: true, sha: "bbbbbbb2", blockers: [] });
+    expect(signoffState(new SignoffStore(dir).get("t1")!)).toBe("waiting");
+  });
+
   // Board task 4d7b04d3: a deleted line had no form, so a worker posted "(removed)".
   test("a copy entry takes new \"\" for a deleted line, old \"\" for new copy, not both empty", () => {
     const s = new SignoffStore(tempDir());

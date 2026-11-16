@@ -213,6 +213,10 @@ export class SignoffStore {
     this.state = readJson<State>(this.file, { items: {}, lastSha: null, lastPushGo: null });
     this.images = new ImageDir(join(dataDir, "images", "signoff"));
     if (!this.state.unpushed) this.seedUnpushed();
+    // Items that took a pushed merge from an earlier post (the defect above):
+    // posted after that merge and still waiting, they wait for their own merge.
+    for (const i of Object.values(this.state.items))
+      if (signoffState(i) === "waiting" && this.pushedMerge(i) && i.postedAt > i.merged!.at) i.merged = null;
     // Keys stored before the fold below (Nil, 2026-10-23: a suggestion on a
     // pair's after image showed in no field).
     for (const i of Object.values(this.state.items)) {
@@ -291,7 +295,10 @@ export class SignoffStore {
       }),
       images: r.clearImages === true ? [] : (old?.images ?? []),
       postedAt: this.now(),
-      merged: old?.merged ?? null,
+      // Only a merge not pushed yet: a pushed one belongs to an earlier part
+      // (board task 78733adf, 2026-11-16: a slice's new item took the pushed
+      // merge of the slice before and held every push).
+      merged: old?.merged && !this.pushedMerge(old) ? old.merged : null,
       decision: null,
       reverted: null,
       ...holdsOf(old),
@@ -602,6 +609,13 @@ export class SignoffStore {
     this.save();
   }
 
+  // Whether Main pushed the item's merge already: its task has no unpushed
+  // merge with that commit (a push or a sweep took it).
+  private pushedMerge(i: SignoffItem): boolean {
+    const u = this.state.unpushed?.[i.taskId];
+    return Boolean(i.merged) && !(u && sameSha(u.commit, i.merged!.commit));
+  }
+
   // An item's merge in report order. Items from before seq existed: their
   // task's unpushed entry, else their commit in the sha list, else 0, which
   // holds every later merge back (the safe side).
@@ -630,7 +644,8 @@ export class SignoffStore {
   // caller reads the board. Unknown (no reader) counts as open: the safe side.
   pushCheck(closed: (taskId: string) => boolean = () => false): PushCheck {
     const blockers: PushCheck["blockers"] = this.visible()
-      .filter((i) => ["waiting", "rejected"].includes(signoffState(i)))
+      // A waiting item whose merge is pushed already holds nothing back.
+      .filter((i) => signoffState(i) === "rejected" || (signoffState(i) === "waiting" && !this.pushedMerge(i)))
       .map((i): PushCheck["blockers"][number] => ({ taskId: i.taskId, state: signoffState(i) as "waiting" | "rejected", seq: this.holdSeq(i) }))
       // Fail closed (Isomux PM, 2026-11-01): a merge counts as signed off only
       // through its merged item, or Main's "signoff":"none". A merge reported
