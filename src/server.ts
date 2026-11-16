@@ -224,6 +224,9 @@ POST /api/signoff                 worker at hand-off: {"taskId","title","summary
 POST /api/signoff/:taskId/images  raw PNG/JPEG/WebP bytes, ?caption=..., as for packets. For a before/after pair add
                                   ?pair=<short name>&side=before|after (one image per side); a pair shows side by side.
 POST /api/signoff/:taskId/merged  Isomux Main after EVERY merge, item or not: {"commit"}. The sha is what a push go names.
+                                  A task still open after it (merged in parts) goes back to its last worker when it is
+                                  ready again, with no fresh conversation and no message; that worker takes no other
+                                  task meanwhile (status board.betweenParts).
                                   Only merged items show, so an item waits unseen until this call. A task with no code
                                   (copy only, for example a comment draft) has nothing to merge: Main reports it with the
                                   current main sha when it closes the task, and the item shows then.
@@ -863,6 +866,14 @@ async function route(req: Request): Promise<Response> {
         return json(await imageUpload(req, signoff, taskId, true));
       case "merged": {
         const out = signoff.merged(taskId, await body(req));
+        // A task merged in parts goes back to the worker that had it (board
+        // task d0c8c4a7); a final merge closes the task, and its record leaves
+        // at the next board read.
+        void (async () => {
+          const t = await office.task(taskId).catch(() => null);
+          const author = t && t.status !== "done" && t.status !== "obsolete" && (await packetAuthor(t, office));
+          if (author) returns.set(taskId, { ...author, part: true });
+        })().catch((err) => console.error(`part record for ${taskId}: ${err}`));
         // The item is on the Sign-off tab now: the Scout reads it.
         if (out.signoff && signoffState(signoff.get(taskId)!) === "waiting") {
           if (pause.batchAsks) scoutQueue.add(taskId);

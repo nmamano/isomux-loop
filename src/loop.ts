@@ -166,7 +166,7 @@ export function withState(tasks: Task[], state: string): Task[] {
 }
 
 export type DispatchResult = {
-  assigned: { worker: string; taskId: string; messaged: boolean }[];
+  assigned: { worker: string; taskId: string; messaged: boolean; part?: true }[];
   conflicts: string[];
   // Ready tasks the server refused because their holder is a killed agent.
   killed: string[];
@@ -196,6 +196,19 @@ export function ageLine(createdAt: number, editedAt: number | null | undefined, 
 
 // The live agent a packet's author names (by id when the record has one), or
 // undefined when that author is gone.
+// Workers between the parts of a task (Author.part), by id, with the task:
+// a task still on the board whose part merged and that no worker holds now.
+export function partHolders(tasks: Task[], agents: Agent[], returnTo: (taskId: string) => Author | undefined): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const t of tasks) {
+    const a = returnTo(t.id);
+    if (!a?.part || !inRoom(t) || (t.status !== "open" && t.status !== "in_progress") || (t.status === "in_progress" && t.assignee)) continue;
+    const w = liveAuthor(a, agents);
+    if (w && !out.has(w.id)) out.set(w.id, t.id);
+  }
+  return out;
+}
+
 export function liveAuthor(author: Author | undefined, agents: Agent[]): Agent | undefined {
   if (!author || !WORKER_NAMES.includes(author.name)) return undefined;
   return agents.find((a) => (author.agentId ? a.id === author.agentId : a.name === author.name));
@@ -263,8 +276,9 @@ export async function dispatch(
     return ok;
   }
 
-  // One claim; true when the worker got the task.
-  async function claim(worker: Agent, task: Task): Promise<boolean> {
+  // One claim; true when the worker got the task. part: the worker goes on
+  // with the next part of its task, so it gets no message.
+  async function claim(worker: Agent, task: Task, part = false): Promise<boolean> {
     const res = await office.patchTask(task.id, {
       version: task.version,
       assignee: worker.name,
@@ -280,6 +294,10 @@ export async function dispatch(
     }
     busy.add(worker.id);
     given.push(task);
+    if (part) {
+      out.assigned.push({ worker: worker.name, taskId: task.id, messaged: false, part: true });
+      return true;
+    }
     // An unreadable history leaves the edit out, not the dispatch.
     const edited = await office.lastEdited(task.id).catch(() => undefined);
     const text = `/isomux-loop-worker ${task.id}\n${task.title}\n${ageLine(task.createdAt, edited, now)}`;
@@ -292,8 +310,12 @@ export async function dispatch(
   // A free author takes its own task first, before any new one.
   for (const task of queue) {
     const w = author.get(task.id);
-    if (w && !busy.has(w.id) && !blockerOf(task, given) && (await clear(w))) await claim(w, task);
+    if (!w || busy.has(w.id) || blockerOf(task, given)) continue;
+    if (returnTo(task.id)?.part) await claim(w, task, true);
+    else if (await clear(w)) await claim(w, task);
   }
+  // A worker between the parts of a task takes no other task.
+  for (const id of partHolders(tasks, agents, returnTo).keys()) busy.add(id);
   // The rest go in queue order; a task whose author lives waits for it.
   const rest = queue.filter((t) => !author.get(t.id));
   const waits = rest.length ? await nilAsks(office, agents, n, out.errors) : new Map<string, string>();
@@ -402,6 +424,8 @@ export type Status = {
   waitsOnNil: { worker: string; ask: string }[];
   // Tasks workers hold outside the loop's claim: they take no new task.
   heldOutside: { worker: string; task: string }[];
+  // Workers between the parts of a task: they get it back, and no other task.
+  betweenParts: { worker: string; task: string }[];
   merging: Task[];
   // Tasks that wait for an overlapping task (smart dispatch): id, the
   // blocker, and the task's areas.
@@ -417,6 +441,7 @@ export function status(
   waits: Map<string, string> = new Map(),
 ): Status {
   const ready = readyQueue(tasks, floor);
+  const parts = partHolders(tasks, agents, returnTo);
   const back = ready.flatMap((t) => {
     const w = liveAuthor(returnTo(t.id), agents);
     return w ? [[t.id, w.name] as const] : [];
@@ -426,7 +451,8 @@ export function status(
     returnTo: Object.fromEntries(back),
     belowFloor: readyQueue(tasks).length - ready.length,
     holding: holdings(agents, tasks).map((h) => ({ worker: h.worker.name, task: h.task })),
-    freeWorkers: freeWorkers(agents, tasks, n, waits).map((w) => w.name),
+    freeWorkers: freeWorkers(agents, tasks, n, waits).filter((w) => !parts.has(w.id)).map((w) => w.name),
+    betweenParts: workers(agents).flatMap((w) => (parts.has(w.id) ? [{ worker: w.name, task: parts.get(w.id)! }] : [])),
     waitsOnNil: workers(agents, n).flatMap((w) => (waits.has(w.id) && !busyWith(tasks, w) ? [{ worker: w.name, ask: waits.get(w.id)! }] : [])),
     heldOutside: workers(agents).flatMap((w) => heldOutside(tasks, w).map((t) => ({ worker: w.name, task: t.id }))),
     merging: withState(tasks, "merging"),

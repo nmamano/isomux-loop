@@ -345,6 +345,28 @@ describe("back to the packet's author", () => {
     expect(next.assignee).toBeUndefined();
   });
 
+  // Board task d0c8c4a7 (2026-11-16): after a part merge of 78733adf the
+  // task went to Worker 3 while Worker 1 worked on the next part.
+  test("a task between parts goes back to its worker as is; meanwhile that worker takes no other task", async () => {
+    const merging = task({ title: "[go | merging] parts", status: "in_progress" });
+    const other = task({ title: "[go | ready] other", priority: "P0" });
+    const returnTo = by({ [merging.id]: { name: "Isomux Worker 1", part: true } });
+    // The part merged; Main has not set the task ready yet: Worker 1 waits for it.
+    const first = stubOffice([merging, other], [w(1), w(2)]);
+    expect((await dispatch(first.office, 2, NOW, null, returnTo)).assigned.map((x) => [x.worker, x.taskId])).toEqual([["Isomux Worker 2", other.id]]);
+    const st = status([w(1), w(2)], [merging], 2, null, returnTo);
+    expect([st.freeWorkers, st.betweenParts]).toEqual([["Isomux Worker 2"], [{ worker: "Isomux Worker 1", task: merging.id }]]);
+    // Ready again: Worker 1 gets it, with no clear and no message.
+    const ready = task({ title: "[go | ready] parts", priority: "P3" });
+    const second = stubOffice([ready, task({ title: "[go | ready] next", priority: "P0" })], [w(1), w(2)]);
+    const res = await dispatch(second.office, 2, NOW, null, by({ [ready.id]: { name: "Isomux Worker 1", part: true } }));
+    expect(res.assigned.find((x) => x.taskId === ready.id)).toEqual({ worker: "Isomux Worker 1", taskId: ready.id, messaged: false, part: true });
+    expect(second.calls.filter((c) => c.includes("id-Isomux Worker 1"))).toEqual([]);
+    expect(ready.assignee).toBe("Isomux Worker 1");
+    // Holding it again, the worker is no longer between parts.
+    expect(status([w(1), w(2)], [ready], 2, null, by({ [ready.id]: { name: "Isomux Worker 1", part: true } })).betweenParts).toEqual([]);
+  });
+
   test("a busy author's task waits for it; no other worker takes it", async () => {
     const held = task({ title: "[go | ready] held", status: "in_progress", assignee: "Isomux Worker 1" });
     const own = task({ title: "[go | ready] own", priority: "P0" });

@@ -898,6 +898,7 @@ function renderStatus() {
   h += '<div class="small" style="margin-top:6px"' + tip("free") + ">Free: " + (b.freeWorkers.length ? esc(b.freeWorkers.join(", ")) : "none") +
     (b.waitsOnNil || []).map((x) => " · " + esc(x.worker) + " waits on Nil: ask " + esc(x.ask)).join("") +
     (b.heldOutside || []).map((x) => " · " + esc(x.worker) + " holds " + linkIds(x.task) + " outside the loop").join("") +
+    (b.betweenParts || []).map((x) => " · " + esc(x.worker) + " is between parts of " + linkIds(x.task)).join("") +
     (b.askErrors || []).map((e) => ' · <span class="warn">' + esc(e) + "</span>").join("") + " " + q("free") + "</div>" + helpBox(["free"], "free");
   h += section("Ready queue (" + b.ready.length + (b.belowFloor ? ", " + belowText(b.belowFloor) : "") + ")", "ready", b.ready.map((x) => taskLine(x, "", b.returnTo && b.returnTo[x.id] ? " · back to " + b.returnTo[x.id] : "")), "Nothing is ready.");
   h += section("Merging (" + b.merging.length + ")", "merging", b.merging.map((x) => taskLine(x)), "Nothing is merging.");

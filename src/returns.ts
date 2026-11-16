@@ -11,7 +11,10 @@ import type { Office, Task } from "./office";
 
 // agentId: the worker's id when the board had it, so a new worker with a
 // killed worker's name does not count as the author.
-export type Author = { name: string; agentId?: string };
+// part: the task merged in parts and its worker goes on with the next part
+// (board task d0c8c4a7): it gets the task back as is, with no fresh
+// conversation and no message, and takes no other task meanwhile.
+export type Author = { name: string; agentId?: string; part?: true };
 
 export class Returns {
   private file: string;
